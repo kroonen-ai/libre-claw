@@ -121,6 +121,6 @@ class CodexCLIBackend(BaseBackend):
     def check_available(self) -> bool:
         try:
             status = subprocess.run([self._codex_path, "login", "status"], capture_output=True, text=True, timeout=10)
-            return status.returncode == 0 and "Logged in" in status.stdout
+            return status.returncode == 0
         except Exception:
             return False

@@ -16,7 +16,7 @@ class BackendConfig(BaseModel):
 
     type: str = Field(default="claude_code", description="Backend type: claude_code, codex_cli, anthropic, openai, ollama")
     claude_path: str = Field(default="/opt/homebrew/bin/claude", description="Path to Claude Code CLI")
-    codex_path: str = Field(default="/opt/homebrew/bin/codex", description="Path to Codex CLI")
+    codex_path: str = Field(default="codex", description="Path to Codex CLI")
     codex_model: Optional[str] = Field(default=None, description="Codex CLI model override")
     anthropic_api_key: Optional[str] = Field(default=None, description="Anthropic API key (sk-ant-*)")
     anthropic_auth_file: Optional[str] = Field(default="~/.config/libre-claw/auth/anthropic.json", description="Path to Anthropic auth JSON")

@@ -96,7 +96,12 @@ def main():
         return
 
     # Determine workspace path first (default: repo-local .workspace)
-    default_workspace = str((Path.cwd() / ".workspace").resolve())
+    # If launched from inside .workspace, keep using that workspace (avoid nesting .workspace/.workspace)
+    cwd = Path.cwd().resolve()
+    if cwd.name == ".workspace":
+        default_workspace = str(cwd)
+    else:
+        default_workspace = str((cwd / ".workspace").resolve())
     selected_workspace = args.workspace or default_workspace
 
     # Load configuration (workspace config takes precedence over global)
