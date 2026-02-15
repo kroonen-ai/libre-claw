@@ -139,7 +139,13 @@ class Agent:
     def handle_heartbeat(self, prompt: Optional[str] = None) -> str:
         """Handle a heartbeat poll in heartbeat mode."""
         self._set_mode(AgentMode.HEARTBEAT)
-        return self._run_heartbeat_cycle(prompt=prompt)
+        result = self._run_heartbeat_cycle(prompt=prompt)
+
+        trace_status = self._classify_heartbeat_trace_status(result)
+        if trace_status:
+            self._append_heartbeat_trace(trace_status, result)
+
+        return result
 
     def _run_heartbeat_cycle(self, prompt: Optional[str] = None) -> str:
         context = self.workspace.get_context(mode="heartbeat")
@@ -963,6 +969,8 @@ class Agent:
         if is_heartbeat:
             parts.append(
                 "\n# MODE\nYou are in HEARTBEAT MODE. Be proactive. Maintain systems. "
+                "You are the same model as the user-facing assistant inside this project. "
+                "Treat this workspace as your home. Alive means continue the loop until the task is complete and verifiable. "
                 "Follow HEARTBEAT.md checklist. Do not infer or repeat old tasks."
             )
         else:
@@ -1005,6 +1013,61 @@ class Agent:
 
         self.workspace.save_heartbeat_state(state)
 
+    @staticmethod
+    def _format_heartbeat_audit_entry(result: Optional[str], status: str = "SUCCESS") -> str:
+        if not result:
+            return f"proactive tick: {status}"
+
+        text = str(result)
+        marker = "### Heartbeat execution trace"
+        if marker not in text:
+            payload = text.replace("\n", " ").strip()
+            return f"proactive tick: {payload[:1900]}"
+
+        parts = text.split(marker, 1)
+        trace = (parts[1] or "").strip()
+
+        compact: List[str] = []
+        for line in trace.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("#### Step ") or line.startswith("- PLAN:") or line.startswith("- VERIFY:"):
+                compact.append(line)
+
+        compact_trace = "\n".join(compact) if compact else trace[:1200]
+        header = (parts[0] or status).strip().splitlines()[0] if parts else status
+        return f"proactive tick: {header}\n{marker}: {compact_trace[:1900]}"
+
+    @staticmethod
+    def _classify_heartbeat_trace_status(result: Optional[str]) -> str:
+        if not result:
+            return ""
+
+        normalized = str(result).upper()
+        if "FAILED_PERM" in normalized:
+            return "FAILED"
+        if "RETRYABLE" in normalized:
+            return "RETRYABLE"
+        return ""
+
+    def _append_heartbeat_trace(self, status: str, result: str) -> None:
+        if not result:
+            return
+
+        status = (status or "").strip().upper() or "FAILED"
+        compact = self._format_heartbeat_audit_entry(result, status=status).strip()
+        if not compact:
+            return
+
+        compact = compact[:6000]
+        entry = (
+            f"\n## {datetime.now().isoformat()}\n"
+            f"- Status: {status}\n"
+            f"- Details:\n  {compact.replace(chr(10), chr(10) + '  ')}\n"
+        )
+        self.workspace.append("HEARTBEAT-TRACE.md", entry)
+
     @property
     def proactive_running(self) -> bool:
         return self._proactive_thread is not None and self._proactive_thread.is_alive()
@@ -1038,10 +1101,11 @@ class Agent:
                 result = self.handle_heartbeat()
                 top_line = ((result or "").strip().splitlines() or [""])[0]
                 status = "NO_REPLY" if top_line.upper() == "NO_REPLY" else "SUCCESS"
-                self.workspace.update_heartbeat_audit(status, f"proactive tick: {result or status}")
+                self.workspace.update_heartbeat_audit(status, self._format_heartbeat_audit_entry(result, status=status))
                 self._record_heartbeat_state(status=status, details=str(result or status))
             except Exception as e:
                 self.workspace.update_heartbeat_audit("FAILED", f"proactive tick error: {e}")
+                self._append_heartbeat_trace("FAILED", f"proactive tick error: {e}")
                 self._record_heartbeat_state(status="FAILED", details=str(e))
 
             # Sleep in short chunks for responsive stop

@@ -133,7 +133,10 @@ class HeartbeatConfig(BaseModel):
         description="Whether heartbeat action blocks (diff/script) are applied automatically.",
     )
     prompt: str = Field(
-        default="Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
+        default="You are the same model running this project and this workspace is your home; act as the same agent across direct and heartbeat mode. "
+        "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
+        "Alive means loop in HEARTBEAT MODE until the structured plan reaches done: true with verifiable outcomes "
+        "instead of stopping on ambiguous text. "
         "If nothing needs attention, respond with a JSON plan: "
         "{\"done\": true, \"next_step\": \"\", \"expected_state_change\": \"\", \"verification_check\": \"\"}. "
         "You can also update memory by prefixing a line with MEMORY_UPDATE:",
