@@ -16,7 +16,11 @@ from .base import BackendConfig, BaseBackend, Message, Response
 class OpenAICodexOAuthBackend(BaseBackend):
     def __init__(self, config: Optional[BackendConfig] = None):
         super().__init__(config)
-        self._base_url = self.config.openai_codex_base_url.rstrip("/")
+        configured_base = (self.config.openai_codex_base_url or "").rstrip("/")
+        # Auto-heal legacy misconfigurations from earlier builds.
+        if (not configured_base) or ("api.openai.com" in configured_base) or configured_base.endswith("/v1"):
+            configured_base = "https://chatgpt.com/backend-api"
+        self._base_url = configured_base
         self._model = self.config.openai_codex_model
         self._access = self._resolve_access_token()
         self._client = httpx.Client(timeout=300.0)

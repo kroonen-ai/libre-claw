@@ -255,6 +255,7 @@ class TUI:
                         return True
 
                     self.config.backend.type = "openai_codex"
+                    self.config.backend.openai_codex_base_url = "https://chatgpt.com/backend-api"
                     self._save_user_config()
                     self.agent.switch_backend("openai_codex")
                     self.console.print("  [system]Codex OAuth active. Backend set to: openai_codex[/system]")
