@@ -10,6 +10,7 @@ import shutil
 import json
 import time
 import uuid
+import textwrap
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -634,6 +635,7 @@ class Agent:
 
     def _apply_unified_diff(self, diff_text: str) -> str:
         normalized = self._normalize_unified_diff(diff_text or "")
+        normalized = self._normalize_patch_text(normalized)
         if not normalized:
             return self._heartbeat_apply_contract(
                 "FAILED_PERM",
@@ -645,38 +647,52 @@ class Agent:
         before_snapshot = self._snapshot_files(target_files)
         repaired = self._repair_unified_diff(normalized)
         embedded = self._extract_embedded_apply_patch(normalized)
-        repaired_openai = self._repair_openai_patch_context(normalized)
+        repaired_openai = self._repair_openai_patch_context(embedded or normalized)
+        normalized_embedded = self._normalize_patch_text(embedded) if embedded else None
 
         attempts: List[tuple[str, List[str], str, str]] = []
         if embedded:
-            attempts.append(("apply_patch", [], embedded, "Apply the provided OpenAI-style patch block directly."))
-            if repaired_openai and repaired_openai != normalized:
+            attempts.append(
+                (
+                    "apply_patch",
+                    [],
+                    normalized_embedded or embedded,
+                    "Apply the provided OpenAI-style patch block directly.",
+                )
+            )
+            normalized_repaired_openai = (
+                self._normalize_patch_text(repaired_openai)
+                if repaired_openai
+                else None
+            )
+            if normalized_repaired_openai and normalized_repaired_openai != (normalized_embedded or embedded):
                 attempts.append(
                     (
                         "apply_patch_repaired",
                         [],
-                        repaired_openai,
+                        normalized_repaired_openai,
                         "Retry with file-context-normalized OpenAI patch lines.",
                     )
                 )
-        attempts.extend(
-            [
-                ("git_apply_whitespace", ["--whitespace=fix", "-"], normalized, "Re-run with whitespace normalization."),
-                (
-                    "git_apply_repaired",
-                    ["--whitespace=fix", "-"],
-                    repaired,
-                    "Apply a repaired unified diff (normalized headers/paths).",
-                ),
-                (
-                    "git_apply_tolerant",
-                    ["--ignore-whitespace", "--ignore-space-change", "-"],
-                    repaired,
-                    "Retry with whitespace-tolerant matching.",
-                ),
-                ("git_apply_p0", ["-p0", "--whitespace=fix", "-"], repaired, "Retry with patch-path prefix 0 fallback."),
-            ]
-        )
+        else:
+            attempts.extend(
+                [
+                    ("git_apply_whitespace", ["--whitespace=fix", "-"], normalized, "Re-run with whitespace normalization."),
+                    (
+                        "git_apply_repaired",
+                        ["--whitespace=fix", "-"],
+                        repaired,
+                        "Apply a repaired unified diff (normalized headers/paths).",
+                    ),
+                    (
+                        "git_apply_tolerant",
+                        ["--ignore-whitespace", "--ignore-space-change", "-"],
+                        repaired,
+                        "Retry with whitespace-tolerant matching.",
+                    ),
+                    ("git_apply_p0", ["-p0", "--whitespace=fix", "-"], repaired, "Retry with patch-path prefix 0 fallback."),
+                ]
+            )
 
         last_status: Optional[str] = None
         last_message: Optional[str] = None
@@ -735,6 +751,25 @@ class Agent:
         marker = candidate.find("diff --git")
         if marker > 0:
             candidate = candidate[marker:]
+
+        return candidate
+
+    @staticmethod
+    def _normalize_patch_text(patch_text: str) -> str:
+        if not patch_text:
+            return ""
+
+        candidate = patch_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not candidate:
+            return ""
+
+        candidate = textwrap.dedent(candidate).strip()
+
+        if candidate.startswith("```") and candidate.endswith("```"):
+            candidate = re.sub(r"^```[^\n]*\n", "", candidate).strip()
+            if candidate.endswith("```"):
+                candidate = candidate[:-3].rstrip()
+            candidate = candidate.strip()
 
         return candidate
 
@@ -810,7 +845,7 @@ class Agent:
         if not patch_text:
             return ""
 
-        lines = patch_text.splitlines()
+        lines = textwrap.dedent(patch_text).splitlines()
         if not lines:
             return patch_text
 
@@ -845,7 +880,7 @@ class Agent:
                 patched.append(raw_line)
                 continue
 
-            if raw_line.startswith("*** End Patch"):
+            if stripped == "*** End Patch":
                 current_file = None
                 current_snapshot = []
                 patched.append(raw_line)
@@ -855,12 +890,18 @@ class Agent:
                 patched.append(raw_line)
                 continue
 
-            if raw_line.startswith("-") or raw_line.startswith(" "):
-                line_prefix = raw_line[0]
-                body = raw_line[1:]
-                replacement = _match_line_by_trimmed_content(body, current_snapshot)
-                if replacement is not None and replacement != body:
-                    patched.append(f"{line_prefix}{replacement}")
+            line_match = re.match(r"^[ \t]*([@ +\-])(.*)", raw_line)
+            if line_match:
+                marker = line_match.group(1)
+                body = line_match.group(2)
+                if marker in (" ", "+", "-"):
+                    replacement = _match_line_by_trimmed_content(body, current_snapshot)
+                    if replacement is not None:
+                        body = replacement
+                    patched.append(f"{marker}{body}")
+                    continue
+                else:
+                    patched.append(f"{marker}{body}")
                     continue
 
             patched.append(raw_line)
@@ -875,8 +916,10 @@ class Agent:
 
         targets: List[str] = []
         for line in diff_text.splitlines():
-            if line.startswith("--- "):
-                path = line[4:].split("\t", 1)[0].strip()
+            stripped = line.strip()
+
+            if stripped.startswith("--- "):
+                path = stripped[4:].split("\t", 1)[0].strip()
                 if not path or path == "/dev/null":
                     continue
                 if path.startswith(("a/", "b/")):
@@ -885,14 +928,14 @@ class Agent:
                     targets.append(path)
                 continue
 
-            if line.startswith("*** Update File: "):
-                path = line[len("*** Update File: "):].strip()
+            if stripped.startswith("*** Update File: "):
+                path = stripped[len("*** Update File: "):].strip()
                 if path and path not in targets and path != "/dev/null":
                     targets.append(path)
                 continue
 
-            if line.startswith("diff --git "):
-                parts = line.split()
+            if stripped.startswith("diff --git "):
+                parts = stripped.split()
                 if len(parts) < 4:
                     continue
                 for path in parts[2:4]:
@@ -970,13 +1013,16 @@ class Agent:
         if not patch_text:
             return None
 
-        match = re.search(r"\*\*\* Begin Patch[\s\S]*?\*\*\* End Patch", patch_text)
+        match = re.search(
+            r"(?ms)^\s*\*\*\* Begin Patch[\s\S]*?^\s*\*\*\* End Patch",
+            patch_text,
+        )
         if match:
-            return match.group(0).strip()
+            return textwrap.dedent(match.group(0)).strip()
         return None
 
     def _sanitize_apply_patch(self, patch_text: str) -> str:
-        candidate = (patch_text or "").strip()
+        candidate = self._normalize_patch_text(patch_text or "")
         if not candidate:
             return ""
 
@@ -989,7 +1035,7 @@ class Agent:
         if embedded:
             return f"{embedded}\n"
 
-        if not candidate.startswith("*** Begin Patch"):
+        if not candidate.lstrip().startswith("*** Begin Patch"):
             return ""
         return f"{candidate}\n"
 

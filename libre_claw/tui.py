@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import time
+import textwrap
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -455,6 +456,7 @@ class TUI:
         if not text:
             return None
 
+        text = textwrap.dedent(text)
         for match in re.finditer(r"```(?:diff|apply_patch|patch)\n([\s\S]*?)\n?```", text):
             candidate = (match.group(1) or "").strip()
             embedded = self._extract_embedded_apply_patch(candidate)
@@ -463,9 +465,9 @@ class TUI:
             if candidate:
                 return candidate
 
-        match = re.search(r"\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch", text)
+        match = re.search(r"(?ms)^\s*\*\*\* Begin Patch[\s\S]*?^\s*\*\*\* End Patch", text)
         if match:
-            return match.group(0).strip()
+            return textwrap.dedent(match.group(0)).strip()
 
         raw = self._extract_raw_unified_diff_block(text)
         if raw:
@@ -477,7 +479,7 @@ class TUI:
         if hasattr(self.agent, "_apply_unified_diff"):
             return self.agent._apply_unified_diff(diff_text)
 
-        candidate = self._normalize_unified_diff(diff_text)
+        candidate = textwrap.dedent(self._normalize_unified_diff(diff_text)).strip()
         if not candidate:
             return "Auto-apply: no valid diff content found."
 
@@ -485,7 +487,7 @@ class TUI:
         if embedded:
             return self._apply_apply_patch_block(embedded)
 
-        if candidate.strip().startswith("*** Begin Patch"):
+        if candidate.lstrip().startswith("*** Begin Patch"):
             return self._apply_apply_patch_block(candidate)
         try:
             p = subprocess.run(
@@ -533,7 +535,7 @@ class TUI:
         if embedded:
             return f"{embedded}\n"
 
-        if not candidate.startswith("*** Begin Patch"):
+        if not candidate.lstrip().startswith("*** Begin Patch"):
             return ""
         return f"{candidate}\n"
 
@@ -541,9 +543,9 @@ class TUI:
         if not text:
             return None
 
-        match = re.search(r"\*\*\* Begin Patch[\s\S]*?\*\*\* End Patch", text)
+        match = re.search(r"(?ms)^\s*\*\*\* Begin Patch[\s\S]*?^\s*\*\*\* End Patch", text)
         if match:
-            return match.group(0).strip()
+            return textwrap.dedent(match.group(0)).strip()
         return None
 
     def _apply_apply_patch_block(self, patch_text: str) -> str:
