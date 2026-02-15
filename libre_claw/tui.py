@@ -474,6 +474,9 @@ class TUI:
         return None
 
     def _apply_unified_diff(self, diff_text: str) -> str:
+        if hasattr(self.agent, "_apply_unified_diff"):
+            return self.agent._apply_unified_diff(diff_text)
+
         candidate = self._normalize_unified_diff(diff_text)
         if not candidate:
             return "Auto-apply: no valid diff content found."
@@ -569,7 +572,18 @@ class TUI:
 
     def _should_auto_apply(self, user_input: str) -> bool:
         lowered = user_input.lower()
-        triggers = ["edit", "update", "create", "write", "fix", "patch", "implement"]
+        exact_phrases = [
+            "do it",
+            "please do",
+            "apply it",
+            "go ahead",
+            "go for it",
+            "proceed",
+        ]
+        if any(phrase in lowered for phrase in exact_phrases):
+            return True
+
+        triggers = ["add", "apply", "edit", "update", "create", "write", "fix", "patch", "implement", "fill", "set", "change", "remember"]
         return any(t in lowered for t in triggers)
 
     def _looks_like_done_claim(self, text: str) -> bool:

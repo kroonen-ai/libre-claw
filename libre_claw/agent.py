@@ -733,18 +733,98 @@ class Agent:
         if not diff_text:
             return ""
 
-        repaired_lines = []
-        for line in diff_text.splitlines():
-            if line.startswith("--- ") or line.startswith("+++ "):
-                prefix, path = line.split(" ", 1)
-                path = path.split("\t", 1)[0].strip()
-                if path and path != "/dev/null" and not path.startswith(("a/", "b/")):
-                    path = f"a/{path}"
-                repaired_lines.append(f"{prefix} {path}")
-            else:
-                repaired_lines.append(line)
+        def normalize_path(path: str, default_prefix: str) -> str:
+            if not path:
+                return ""
+            cleaned = path.split("\t", 1)[0].strip()
+            if not cleaned or cleaned == "/dev/null":
+                return cleaned
+            if cleaned.startswith("a/") or cleaned.startswith("b/"):
+                return cleaned
+            return f"{default_prefix}{cleaned}"
+
+        # Split into diff blocks and patch in missing headers per block.
+        repaired_lines: List[str] = []
+        for block in re.split(r"(?m)^(?=diff --git )", diff_text):
+            if not block.strip():
+                continue
+
+            lines = block.splitlines()
+            if not lines or not lines[0].startswith("diff --git"):
+                repaired_lines.append(block.strip())
+                continue
+
+            parts = lines[0].split()
+            a_path = normalize_path(parts[2], "a/") if len(parts) > 2 else "a/"
+            b_path = normalize_path(parts[3], "b/") if len(parts) > 3 else a_path
+
+            has_dash = False
+            has_plus = False
+            hunk_index: Optional[int] = None
+
+            for idx, raw_line in enumerate(lines[1:], start=1):
+                if raw_line.startswith("@@ "):
+                    hunk_index = idx
+                    break
+
+                if raw_line.startswith("--- "):
+                    has_dash = True
+                    prefix, path = raw_line.split(" ", 1)
+                    normalized = normalize_path(path, "a/")
+                    if normalized:
+                        lines[idx] = f"{prefix} {normalized}"
+                    continue
+
+                if raw_line.startswith("+++ "):
+                    has_plus = True
+                    prefix, path = raw_line.split(" ", 1)
+                    normalized = normalize_path(path, "b/")
+                    if normalized:
+                        lines[idx] = f"{prefix} {normalized}"
+
+            if hunk_index is None:
+                hunk_index = len(lines)
+
+            insert_at = hunk_index
+            if not has_dash and a_path:
+                lines.insert(insert_at, f"--- {a_path}")
+                insert_at += 1
+            if not has_plus and b_path:
+                lines.insert(insert_at, f"+++ {b_path}")
+
+            repaired_lines.extend(lines)
 
         return "\n".join(repaired_lines).strip()
+
+    @staticmethod
+    def _extract_patch_target_files(diff_text: str) -> List[str]:
+        if not diff_text:
+            return []
+
+        targets: List[str] = []
+        for line in diff_text.splitlines():
+            if line.startswith("--- "):
+                path = line[4:].split("\t", 1)[0].strip()
+                if not path or path == "/dev/null":
+                    continue
+                if path.startswith(("a/", "b/")):
+                    path = path[2:]
+                if path not in targets:
+                    targets.append(path)
+                continue
+
+            if line.startswith("diff --git "):
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                for path in parts[2:4]:
+                    if not path.startswith(("a/", "b/")) or path == "/dev/null":
+                        continue
+                    normalized = path[2:]
+                    if normalized and normalized not in targets:
+                        targets.append(normalized)
+
+        return targets
 
     @staticmethod
     def _extract_patch_target_files(diff_text: str) -> List[str]:
