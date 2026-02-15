@@ -1657,9 +1657,77 @@ class Agent:
         if any(blocked in lowered for blocked in blocked):
             return "Auto-apply blocked: destructive command detected"
 
+        unsafe_commands = {
+            "python",
+            "python3",
+            "node",
+            "bun",
+            "deno",
+            "ruby",
+            "perl",
+            "php",
+            "go",
+            "cargo",
+            "npm",
+            "pnpm",
+            "yarn",
+            "pytest",
+            "uvicorn",
+            "flask",
+            "gunicorn",
+            "read",
+            "bash",
+            "sh",
+            "zsh",
+            "fish",
+        }
+
+        safe_lines: List[str] = []
+        unsafe_lines: List[str] = []
+        for raw_line in script.splitlines():
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+
+            segs = re.split(r"\s*(?:&&|\|\||;|\|)\s*", stripped)
+            safe_segments: List[str] = []
+            for segment in segs:
+                seg = segment.strip()
+                if not seg:
+                    continue
+                cmd_parts = seg.split()
+                cmd = ""
+                for part in cmd_parts:
+                    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", part):
+                        continue
+                    cmd = part
+                    break
+                cmd = (cmd or "").lower()
+
+                if (
+                    cmd in unsafe_commands
+                    or cmd.endswith(".py")
+                    or (cmd.startswith(("./", "/")) and re.search(r"\.(py|sh|rb|js|ts)$", cmd))
+                ):
+                    unsafe_lines.append(seg)
+                else:
+                    safe_segments.append(seg)
+
+            if safe_segments:
+                safe_lines.append(" && ".join(safe_segments))
+
+        safe_script = "\n".join(safe_lines).strip()
+        if not safe_script:
+            if unsafe_lines:
+                return (
+                    f"Auto-apply skipped interactive commands only: {', '.join(unsafe_lines)}. "
+                    "Please re-issue with edit-only steps."
+                )
+            return "Auto-apply could not find a valid shell command."
+
         try:
             result = subprocess.run(
-                ["bash", "-lc", script],
+                ["bash", "-lc", safe_script],
                 cwd=str(self.workspace.path),
                 capture_output=True,
                 text=True,
@@ -1668,7 +1736,19 @@ class Agent:
             out = (result.stdout or "").strip()
             err = (result.stderr or "").strip()
             if result.returncode == 0:
+                if unsafe_lines:
+                    return (
+                        "Auto-apply command succeeded for edit-safe commands; "
+                        f"runtime commands skipped: {', '.join(unsafe_lines)}. "
+                        f"{(out or err)[:300]}".strip()
+                    )
                 return f"Auto-apply command succeeded. {(out or err)[:300]}".strip()
+            if unsafe_lines:
+                return (
+                    "Auto-apply command failed for edit-safe commands. "
+                    f"unsafe commands skipped: {', '.join(unsafe_lines)}. "
+                    f"{(err or out)[:300]}".strip()
+                )
             return f"Auto-apply command failed (exit {result.returncode}). {(err or out)[:300]}".strip()
         except Exception as e:
             return f"Auto-apply command error: {e}"

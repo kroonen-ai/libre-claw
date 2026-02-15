@@ -1002,6 +1002,121 @@ class TUI:
 
         return self._auto_apply_shell_script(refreshed_script)
 
+    @staticmethod
+    def _shell_segment_command(segment: str) -> str:
+        trimmed = (segment or "").strip()
+        if not trimmed:
+            return ""
+
+        tokens = trimmed.split()
+        idx = 0
+        while idx < len(tokens):
+            token = tokens[idx]
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
+                idx += 1
+                continue
+            return token.strip()
+        return ""
+
+    @staticmethod
+    def _is_interactive_shell_segment(segment: str) -> bool:
+        cmd = TUI._shell_segment_command(segment).lower()
+        if not cmd:
+            return False
+
+        unsafe_commands = {
+            "python",
+            "python3",
+            "node",
+            "bun",
+            "deno",
+            "ruby",
+            "perl",
+            "php",
+            "go",
+            "cargo",
+            "npm",
+            "pnpm",
+            "yarn",
+            "pytest",
+            "uvicorn",
+            "flask",
+            "gunicorn",
+            "read",
+            "bash",
+            "sh",
+            "zsh",
+            "fish",
+        }
+
+        if cmd in unsafe_commands:
+            return True
+        if cmd.startswith(("./", "/")) and re.search(r"\.(py|sh|rb|js|ts)$", cmd):
+            return True
+        if cmd.endswith(".py"):
+            return True
+        return False
+
+    def _sanitize_shell_script_for_autorun(self, script: str) -> tuple[str, List[str]]:
+        if not script:
+            return "", []
+
+        safe_lines: List[str] = []
+        unsafe_lines: List[str] = []
+        in_here_doc = False
+        here_marker = ""
+
+        for line in script.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                safe_lines.append(line)
+                continue
+
+            if in_here_doc:
+                safe_lines.append(line)
+                if stripped == here_marker:
+                    in_here_doc = False
+                    here_marker = ""
+                continue
+
+            heredoc = re.search(r"<<\s*['\"]?([A-Za-z0-9_]+)['\"]?", stripped)
+            if heredoc:
+                safe_lines.append(line)
+                in_here_doc = True
+                here_marker = heredoc.group(1)
+                continue
+
+            segments = re.split(r"\s*(?:&&|\|\||;|\|)\s*", line)
+            safe_segments: List[str] = []
+            for segment in segments:
+                seg = segment.strip()
+                if not seg:
+                    continue
+                if self._is_interactive_shell_segment(seg):
+                    unsafe_lines.append(seg)
+                else:
+                    safe_segments.append(seg)
+
+            if safe_segments:
+                safe_lines.append(" && ".join(safe_segments))
+
+        safe_script = "\n".join(safe_lines).strip()
+        return safe_script, unsafe_lines
+
+    def _run_shell_script(self, script: str) -> str:
+        result = subprocess.run(
+            ["bash", "-lc", script],
+            cwd=str(self.agent.workspace.path),
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        out = (result.stdout or "").strip()
+        err = (result.stderr or "").strip()
+        if result.returncode == 0:
+            return f"APPLIED; next_action=none; details=Command output: {(out or 'success').strip()}"
+        return f"RETRYABLE; next_action=retry with corrected script; details=Auto-apply failed (exit {result.returncode}). {(err or out)[:300]}".strip()
+
     def _parse_apply_contract(self, output: str) -> tuple[str, str, str]:
         if hasattr(self.agent, "_parse_heartbeat_action_contract"):
             try:
@@ -1137,19 +1252,33 @@ class TUI:
         if any(b in s for b in blocked):
             return "FAILED_PERM; next_action=adjust command; details=Auto-apply blocked: destructive command detected"
 
-        try:
-            result = subprocess.run(
-                ["bash", "-lc", script],
-                cwd=str(self.agent.workspace.path),
-                capture_output=True,
-                text=True,
-                timeout=90,
+        safe_script, unsafe_lines = self._sanitize_shell_script_for_autorun(script)
+        if not safe_script and unsafe_lines:
+            return (
+                "RETRYABLE; next_action=apply edit-only commands only; "
+                f"details=No safe commands available after sanitization. Skipped: {', '.join(unsafe_lines)}"
             )
-            out = (result.stdout or "").strip()
-            err = (result.stderr or "").strip()
-            if result.returncode == 0:
-                return f"APPLIED; next_action=none; details=Command output: {(out or 'success').strip()}"
-            return f"RETRYABLE; next_action=retry with corrected script; details=Auto-apply failed (exit {result.returncode}). {err[:300]}".strip()
+
+        if not safe_script:
+            return "FAILED_PERM; next_action=provide valid script; details=No executable shell content."
+
+        try:
+            outcome = self._run_shell_script(safe_script)
+            status, _next_action, details = self._parse_apply_contract(outcome)
+
+            if unsafe_lines:
+                skipped = ", ".join(unsafe_lines)
+                if status == "APPLIED":
+                    return (
+                        "RETRYABLE; next_action=run skipped runtime commands separately; "
+                        f"details=Applied safe operations. Skipped commands: {skipped}. Details: {details}"
+                    )
+                return (
+                    f"{status}; next_action=retry with corrected script; "
+                    f"details={details}. Also skipped runtime commands: {skipped}"
+                )
+
+            return outcome
         except Exception as e:
             return f"FAILED_PERM; next_action=retry with corrected script; details=Auto-apply error: {e}"
 
