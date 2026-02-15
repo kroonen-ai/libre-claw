@@ -466,28 +466,48 @@ class TUI:
         except Exception as e:
             return f"Auto-apply error: {e}"
 
-    def _set_user_name(self, name: str) -> str:
-        """Deterministically update USER.md name field."""
+    def _update_user_field(self, field_label: str, value: str) -> str:
         filename = "USER.md"
         content = self.agent.workspace.read(filename) or "# USER.md - About the User\n\n"
         lines = content.splitlines()
         updated = False
+        key = f"- **{field_label}:**"
         for i, line in enumerate(lines):
-            if line.strip().lower().startswith("- **name:**"):
-                lines[i] = f"- **Name:** {name}"
+            if line.strip().lower().startswith(key.lower()):
+                lines[i] = f"{key} {value}"
                 updated = True
                 break
         if not updated:
-            lines.append(f"- **Name:** {name}")
+            lines.append(f"{key} {value}")
         self.agent.workspace.write(filename, "\n".join(lines).rstrip() + "\n")
-        return f"Done — updated USER.md with Name: {name}."
+        return f"Done — updated USER.md with {field_label}: {value}."
+
+    def _set_user_name(self, name: str) -> str:
+        """Deterministically update USER.md name field."""
+        return self._update_user_field("Name", name)
+
+    def _set_user_timezone(self, tz: str) -> str:
+        return self._update_user_field("Timezone", tz)
 
     def _handle_direct_profile_update(self, user_input: str) -> Optional[str]:
         text = user_input.strip()
+        lower = text.lower()
+
+        # Name intents
         m = re.search(r"(?:my name is|add)\s+([A-Za-z][A-Za-z0-9 _'\-]{1,40})", text, re.IGNORECASE)
-        if m and ("user.md" in text.lower() or "name" in text.lower()):
+        if m and ("user.md" in lower or "name" in lower):
             name = m.group(1).strip().split()[0]
             return self._set_user_name(name)
+
+        # Timezone intents
+        tz_match = re.search(r"(?:timezone is|update(?: my)? timezone(?: to)?|set timezone(?: to)?)\s+([A-Za-z_]+(?:/[A-Za-z_]+)?)", text, re.IGNORECASE)
+        if tz_match:
+            tz = tz_match.group(1).replace(" ", "_")
+            return self._set_user_timezone(tz)
+        if re.fullmatch(r"[A-Za-z_]+/[A-Za-z_]+", text):
+            hist = self.agent.backend.get_history()
+            if hist and "timezone" in hist[-1].content.lower():
+                return self._set_user_timezone(text.replace(" ", "_"))
 
         m2 = re.fullmatch(r"[A-Za-z][A-Za-z0-9 _'\-]{1,40}", text)
         if m2:
@@ -500,15 +520,29 @@ class TUI:
 
     def _workspace_changes_summary(self) -> str:
         try:
+            ws = str(self.agent.workspace.path)
+            top = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=ws,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if top.returncode != 0:
+                return "Workspace changes: unavailable (not a git repo)"
+            root = (top.stdout or "").strip()
+            if Path(root).resolve() != Path(ws).resolve():
+                return "Workspace changes: unavailable (workspace is inside another repo)"
+
             r = subprocess.run(
                 ["git", "status", "--short"],
-                cwd=str(self.agent.workspace.path),
+                cwd=ws,
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
             if r.returncode != 0:
-                return "Workspace changes: unavailable (not a git repo)"
+                return "Workspace changes: unavailable"
             lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
             if not lines:
                 return "Workspace changes: none"
