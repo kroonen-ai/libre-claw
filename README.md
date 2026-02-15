@@ -32,7 +32,10 @@ pip install -e ".[dev]"
 # Initialize workspace
 libre-claw --init ~/my-workspace
 
-# Start TUI
+# Start TUI (auto-creates ./.workspace if not specified)
+libre-claw
+
+# Or explicit workspace
 libre-claw -w ~/my-workspace
 
 # Or start API server

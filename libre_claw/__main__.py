@@ -94,18 +94,26 @@ def main():
         print(f"Initialized workspace at: {workspace.path}")
         return
 
-    # Load configuration
-    config = Config.load(args.config)
+    # Determine workspace path first (default: repo-local .workspace)
+    default_workspace = str((Path.cwd() / ".workspace").resolve())
+    selected_workspace = args.workspace or default_workspace
+
+    # Load configuration (workspace config takes precedence over global)
+    config = Config.load(args.config, workspace_path=selected_workspace)
 
     # Override config with CLI args
-    if args.workspace:
-        config.workspace.path = args.workspace
+    config.workspace.path = selected_workspace
 
     if args.backend:
         config.backend.type = args.backend
 
     if args.no_git:
         config.git.enabled = False
+
+    # Ensure workspace exists and has baseline files/config
+    ws = Workspace(config.workspace.path, config)
+    if not ws.exists:
+        ws.init(force=False)
 
     if args.api:
         # Start API server
@@ -137,7 +145,7 @@ def main():
             ),
         )
 
-        workspace = Workspace(config.workspace.path, config)
+        workspace = ws
         memory = None
         if config.memory.enabled:
             memory = MemoryManager(config.memory.chromadb_url)

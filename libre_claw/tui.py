@@ -68,11 +68,11 @@ class TUI:
         configured = self.config.backend.openai_auth_file or "~/.config/libre-claw/auth/openai.json"
         return Path(configured).expanduser()
 
-    def _user_config_path(self) -> Path:
-        return Path.home() / ".config" / "libre-claw" / "config.yaml"
+    def _workspace_config_path(self) -> Path:
+        return self.agent.workspace.path / "config.yaml"
 
     def _save_user_config(self) -> None:
-        target = self._user_config_path()
+        target = self._workspace_config_path()
         self.config.save(target)
 
     def _import_openai_auth_from_codex(self) -> Optional[str]:

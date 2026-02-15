@@ -40,3 +40,6 @@ Thumbs.db
 
 # Config (user-specific)
 config.yaml
+
+# Local default workspace
+.workspace/

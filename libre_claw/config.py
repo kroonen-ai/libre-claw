@@ -106,19 +106,25 @@ class Config(BaseSettings):
         return cls(**data, config_file=path)
 
     @classmethod
-    def load(cls, config_path: Optional[str] = None) -> "Config":
+    def load(cls, config_path: Optional[str] = None, workspace_path: Optional[str] = None) -> "Config":
         """Load configuration from default or specified path.
 
         Searches for config in:
         1. Specified path
-        2. ./config.yaml
-        3. ~/.config/libre-claw/config.yaml
-        4. Environment variables
+        2. <workspace>/config.yaml (if workspace provided)
+        3. ./config.yaml
+        4. ~/.config/libre-claw/config.yaml
+        5. Environment variables
         """
         if config_path:
-            path = Path(config_path)
+            path = Path(config_path).expanduser()
             if path.exists():
                 return cls.from_yaml(path)
+
+        if workspace_path:
+            ws_config = Path(workspace_path).expanduser() / "config.yaml"
+            if ws_config.exists():
+                return cls.from_yaml(ws_config)
 
         # Check current directory
         local_config = Path("config.yaml")
