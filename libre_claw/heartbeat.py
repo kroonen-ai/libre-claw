@@ -4,6 +4,7 @@ Provides async heartbeat loop with cadence checks for autonomous task execution.
 """
 
 import asyncio
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from .config import HeartbeatConfig
@@ -83,13 +84,58 @@ class Heartbeat:
             return
 
         # Execute callback if provided
-        if self.on_tick:
-            result = self.on_tick()
-            if asyncio.iscoroutine(result):
-                await result
+        status = "FAILED"
+        details = ""
+        try:
+            if self.on_tick:
+                result = self.on_tick()
+                if asyncio.iscoroutine(result):
+                    result = await result
+            else:
+                result = None
 
-        # Update audit log
-        self.workspace.update_heartbeat_audit("SUCCESS", f"Session #{state.get('total_runs', 0) + 1}")
+            details = str(result or "")
+            status = self._classify_tick_result(details)
+            if not details:
+                details = status
+
+            self.workspace.update_heartbeat_audit(status, f"Session #{state.get('total_runs', 0) + 1} {details[:200]}")
+        except Exception as e:
+            self.workspace.update_heartbeat_audit(
+                "FAILED",
+                f"proactive tick error: {e}",
+            )
+            status = "FAILED"
+            details = str(e)
+            raise
+        finally:
+            self._update_heartbeat_state(state=state, status=status, details=details)
+
+    def _update_heartbeat_state(self, state: Dict[str, Any], status: str, details: str = "") -> None:
+        state["total_runs"] = state.get("total_runs", 0) + 1
+        state["last_run_at"] = datetime.now().isoformat()
+        state["last_status"] = status
+        if details:
+            state["last_status_details"] = details[:2000]
+
+        if status in {"FAILED", "ERROR", "TIMEOUT"}:
+            state["consecutive_failures"] = state.get("consecutive_failures", 0) + 1
+        else:
+            state["consecutive_failures"] = 0
+
+        if status == "NO_REPLY":
+            state["consecutive_no_reply"] = state.get("consecutive_no_reply", 0) + 1
+        else:
+            state["consecutive_no_reply"] = 0
+
+        self.workspace.save_heartbeat_state(state)
+
+    @staticmethod
+    def _classify_tick_result(result: str) -> str:
+        normalized = (result or "").strip().upper()
+        if normalized == "NO_REPLY":
+            return "NO_REPLY"
+        return "SUCCESS"
 
     def _should_skip(self, state: Dict[str, Any]) -> bool:
         """Determine if heartbeat should skip this tick.

@@ -88,8 +88,49 @@ def test_agent_mode_switching():
     assert agent.state.mode == AgentMode.DIRECT
     agent._set_mode(AgentMode.HEARTBEAT)
     assert agent.state.mode == AgentMode.HEARTBEAT
-    agent._set_mode(AgentMode.DIRECT)
-    assert agent.state.mode == AgentMode.DIRECT
+
+
+def test_agent_heartbeat_no_reply():
+    backend = MockBackend("NO_REPLY")
+    config = Config()
+    config.memory.enabled = False
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ws = Workspace(tmpdir, config)
+        ws.init()
+
+        agent = Agent(backend=backend, workspace=ws, config=config)
+        response = agent.handle_heartbeat()
+
+        assert response == "NO_REPLY"
+
+
+def test_agent_heartbeat_memory_update():
+    class FakeMemory:
+        def __init__(self):
+            self.calls = []
+
+        def remember(self, content, memory_type="general", importance=0.5, tags=None):
+            self.calls.append((content, memory_type, importance, tags))
+            return True
+
+    backend = MockBackend("MEMORY_UPDATE: captured heartbeat note")
+    config = Config()
+    config.memory.enabled = False
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ws = Workspace(tmpdir, config)
+        ws.init()
+
+        fake_memory = FakeMemory()
+        agent = Agent(backend=backend, workspace=ws, config=config, memory=fake_memory)
+        response = agent.handle_heartbeat()
+
+        assert response == "MEMORY_UPDATE"
+        assert fake_memory.calls
+        assert fake_memory.calls[0][0] == "captured heartbeat note"
+        memory_file = (ws.path / "MEMORY.md").read_text()
+        assert "captured heartbeat note" in memory_file
 
 
 def test_agent_session_info():

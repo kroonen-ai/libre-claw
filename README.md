@@ -107,7 +107,11 @@ workspace:
 
 heartbeat:
   enabled: true
-  interval_seconds: 30
+  interval_seconds: 15m  # supports seconds/minutes/hours, e.g. 30, 15m, 2h
+  prompt: |
+    Read HEARTBEAT.md and follow it.
+    If nothing needs action, reply NO_REPLY.
+    Use MEMORY_UPDATE: <text> to curate memory during proactive runs.
 
 memory:
   enabled: true

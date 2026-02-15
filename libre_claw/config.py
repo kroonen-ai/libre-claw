@@ -3,11 +3,12 @@
 Loads settings from YAML config files with Pydantic validation.
 """
 
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -20,6 +21,67 @@ DEFAULT_CODEX_MODELS = [
     "openai-codex/gpt-5.3-codex",
     "openai-codex/gpt-5.3-codex-spark",
 ]
+
+
+def _parse_heartbeat_interval(value: Any) -> int:
+    """Parse heartbeat interval values into seconds.
+
+    Supported forms:
+    - 30
+    - "30"
+    - "30s", "30m", "2h", "1d"
+    - "30 sec", "15 min", "1 hour", etc.
+    """
+    if isinstance(value, bool):
+        raise ValueError("heartbeat interval cannot be a boolean")
+
+    if isinstance(value, (int, float)):
+        if value <= 0:
+            raise ValueError("heartbeat interval must be greater than zero")
+        return int(value)
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("heartbeat interval cannot be empty")
+
+        match = re.fullmatch(
+            r"(\d+(?:\.\d+)?)\s*"
+            r"(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)?",
+            normalized,
+        )
+        if not match:
+            raise ValueError("invalid heartbeat interval format")
+
+        amount = float(match.group(1))
+        unit = match.group(2) or "s"
+        multipliers = {
+            "s": 1,
+            "sec": 1,
+            "secs": 1,
+            "second": 1,
+            "seconds": 1,
+            "m": 60,
+            "min": 60,
+            "mins": 60,
+            "minute": 60,
+            "minutes": 60,
+            "h": 3600,
+            "hr": 3600,
+            "hrs": 3600,
+            "hour": 3600,
+            "hours": 3600,
+            "d": 86400,
+            "day": 86400,
+            "days": 86400,
+        }
+
+        seconds = int(amount * multipliers[unit])
+        if seconds <= 0:
+            raise ValueError("heartbeat interval must be greater than zero")
+        return seconds
+
+    raise ValueError("heartbeat interval must be numeric or unit-suffixed string")
 
 
 class BackendConfig(BaseModel):
@@ -58,12 +120,21 @@ class HeartbeatConfig(BaseModel):
     """Heartbeat configuration."""
 
     enabled: bool = Field(default=True, description="Enable heartbeat system")
-    interval_seconds: int = Field(default=30, description="Heartbeat poll interval")
+    interval_seconds: int = Field(
+        default=30,
+        description="Heartbeat poll interval (supports seconds, minutes, hours, e.g. 30, 15m, 2h)",
+    )
     prompt: str = Field(
         default="Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
-        "Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+        "Do not infer or repeat old tasks. If nothing needs attention, reply NO_REPLY. "
+        "You can also update memory by prefixing a line with MEMORY_UPDATE:",
         description="Heartbeat poll prompt"
     )
+
+    @field_validator("interval_seconds", mode="before")
+    @classmethod
+    def _normalize_interval_seconds(cls, value: Any) -> int:
+        return _parse_heartbeat_interval(value)
 
 
 class MemoryConfig(BaseModel):

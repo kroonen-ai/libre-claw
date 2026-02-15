@@ -45,3 +45,16 @@ def test_heartbeat_config():
     hc = HeartbeatConfig()
     assert hc.interval_seconds == 30
     assert "HEARTBEAT" in hc.prompt
+
+
+def test_heartbeat_interval_string_config():
+    hc = HeartbeatConfig(interval_seconds="2h")
+    assert hc.interval_seconds == 7200
+
+
+def test_heartbeat_interval_from_yaml():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("heartbeat:\n  interval_seconds: 15m\n")
+        f.flush()
+        config = Config.from_yaml(Path(f.name))
+        assert config.heartbeat.interval_seconds == 900
