@@ -4,6 +4,7 @@ Rich-based TUI with slash commands, streaming output, and a polished experience.
 """
 
 import json
+import re
 import subprocess
 import time
 from datetime import datetime
@@ -431,6 +432,40 @@ class TUI:
         text = "\n".join(ctx.values()) + "\n" + history_text
         return max(1, len(text) // 4)
 
+    def _extract_bash_block(self, text: str) -> Optional[str]:
+        match = re.search(r"```(?:bash|sh)?\n([\s\S]*?)\n```", text)
+        if not match:
+            return None
+        return match.group(1).strip()
+
+    def _should_auto_apply(self, user_input: str) -> bool:
+        lowered = user_input.lower()
+        triggers = ["edit", "update", "create", "write", "fix", "patch", "implement"]
+        return any(t in lowered for t in triggers)
+
+    def _auto_apply_shell_script(self, script: str) -> str:
+        # Guardrails: block obvious destructive commands.
+        blocked = ["rm -rf /", "mkfs", "shutdown", "reboot", "diskutil erase"]
+        s = script.lower()
+        if any(b in s for b in blocked):
+            return "Auto-apply blocked: destructive command detected"
+
+        try:
+            result = subprocess.run(
+                ["bash", "-lc", script],
+                cwd=str(self.agent.workspace.path),
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            out = (result.stdout or "").strip()
+            err = (result.stderr or "").strip()
+            if result.returncode == 0:
+                return f"Auto-applied changes successfully. {out[:300]}".strip()
+            return f"Auto-apply failed (exit {result.returncode}). {err[:300]}".strip()
+        except Exception as e:
+            return f"Auto-apply error: {e}"
+
     def _format_uptime(self) -> str:
         delta = datetime.now() - self._start_time
         seconds = int(delta.total_seconds())
@@ -549,6 +584,13 @@ class TUI:
                             response = self.agent.handle_message(effective_input)
 
                         elapsed = time.monotonic() - t0
+
+                    # Optional auto-apply for coding-assistant style file actions.
+                    if self._should_auto_apply(user_input):
+                        script = self._extract_bash_block(response)
+                        if script:
+                            apply_result = self._auto_apply_shell_script(script)
+                            response = f"{response}\n\n---\n**Auto-apply:** {apply_result}"
 
                     # Display response
                     self.console.print()
