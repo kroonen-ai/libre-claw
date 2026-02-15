@@ -290,20 +290,46 @@ class Agent:
         return updates
 
     def _extract_diff_blocks(self, text: str) -> List[str]:
+        if not text:
+            return []
+
         blocks: List[str] = []
-        blocks.extend(match.strip() for match in re.findall(r"```diff\n([\s\S]*?)\n```", text))
-        blocks.extend(match.strip() for match in re.findall(r"```(?:apply_patch|patch)\n(\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch)\n```", text))
-        blocks.extend(match.strip() for match in re.findall(r"\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch", text))
+        seen: set[str] = set()
+
+        # Fenced diff blocks (```diff ... ``` or generic patch blocks).
+        for match in re.finditer(r"```(?:diff|apply_patch|patch)\n([\s\S]*?)\n?```", text):
+            candidate = (match.group(1) or "").strip()
+            embedded = self._extract_embedded_apply_patch(candidate)
+            if embedded:
+                candidate = embedded
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            blocks.append(candidate)
+
+        # Bare OpenAI-style apply_patch blocks.
+        for match in re.finditer(r"\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch", text):
+            candidate = (match.group(0) or "").strip()
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            blocks.append(candidate)
+
         return blocks
 
     def _extract_bash_blocks(self, text: str) -> List[str]:
-        return [
-            match.strip()
-            for match in re.findall(r"```(?:bash|sh|shell)\n([\s\S]*?)\n```", text)
-        ]
+        if not text:
+            return []
+
+        blocks: List[str] = []
+        for match in re.finditer(r"```(?:bash|sh|shell)\n([\s\S]*?)\n?```", text):
+            candidate = (match.group(1) or "").strip()
+            if candidate:
+                blocks.append(candidate)
+        return blocks
 
     def _apply_unified_diff(self, diff_text: str) -> str:
-        if diff_text.strip().startswith("*** Begin Patch"):
+        if self._extract_embedded_apply_patch(diff_text) or diff_text.strip().startswith("*** Begin Patch"):
             return self._apply_apply_patch_block(diff_text)
         try:
             p = subprocess.run(
@@ -320,16 +346,47 @@ class Agent:
         except Exception as e:
             return f"Diff apply error: {e}"
 
+    def _extract_embedded_apply_patch(self, patch_text: str) -> Optional[str]:
+        if not patch_text:
+            return None
+
+        match = re.search(r"\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch", patch_text)
+        if match:
+            return match.group(0).strip()
+        return None
+
+    def _sanitize_apply_patch(self, patch_text: str) -> str:
+        candidate = (patch_text or "").strip()
+        if not candidate:
+            return ""
+
+        # Remove markdown-style fences if accidentally included.
+        candidate = re.sub(r"^```[^\n]*\n", "", candidate).strip()
+        if candidate.endswith("```"):
+            candidate = candidate[:-3].rstrip()
+
+        embedded = self._extract_embedded_apply_patch(candidate)
+        if embedded:
+            return f"{embedded}\n"
+
+        if not candidate.startswith("*** Begin Patch"):
+            return ""
+        return f"{candidate}\n"
+
     def _apply_apply_patch_block(self, patch_text: str) -> str:
         apply_patch_path = shutil.which("apply_patch")
         if not apply_patch_path:
             return "Auto-apply failed: apply_patch utility not found"
 
+        candidate = self._sanitize_apply_patch(patch_text)
+        if not candidate:
+            return "Auto-apply failed: not an apply_patch block"
+
         try:
             p = subprocess.run(
                 [apply_patch_path],
                 cwd=str(self.workspace.path),
-                input=patch_text,
+                input=candidate,
                 capture_output=True,
                 text=True,
                 timeout=90,

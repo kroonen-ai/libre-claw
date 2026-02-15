@@ -414,23 +414,30 @@ class TUI:
         return max(1, len(text) // 4)
 
     def _extract_bash_block(self, text: str) -> Optional[str]:
-        match = re.search(r"```(?:bash|sh)?\n([\s\S]*?)\n```", text)
+        if not text:
+            return None
+        match = re.search(r"```(?:bash|sh)?\n([\s\S]*?)\n?```", text)
         if not match:
             return None
         return match.group(1).strip()
 
     def _extract_diff_block(self, text: str) -> Optional[str]:
-        match = re.search(r"```diff\n([\s\S]*?)\n```", text)
-        if not match:
-            match = re.search(r"```(?:apply_patch|patch)\n(\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch)\n```", text)
-            if match:
-                return match.group(1).strip()
-
-            match = re.search(r"\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch", text)
-            if match:
-                return match.group(0).strip()
+        if not text:
             return None
-        return match.group(1).strip()
+
+        for match in re.finditer(r"```(?:diff|apply_patch|patch)\n([\s\S]*?)\n?```", text):
+            candidate = (match.group(1) or "").strip()
+            embedded = self._extract_embedded_apply_patch(candidate)
+            if embedded:
+                return embedded
+            if candidate:
+                return candidate
+
+        match = re.search(r"\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch", text)
+        if match:
+            return match.group(0).strip()
+
+        return None
 
     def _apply_unified_diff(self, diff_text: str) -> str:
         if diff_text.strip().startswith("*** Begin Patch"):
@@ -450,16 +457,47 @@ class TUI:
         except Exception as e:
             return f"Diff apply error: {e}"
 
+    def _sanitize_apply_patch(self, patch_text: str) -> str:
+        candidate = (patch_text or "").strip()
+        if not candidate:
+            return ""
+
+        # Remove markdown-style fences if accidentally included.
+        candidate = re.sub(r"^```[^\n]*\n", "", candidate).strip()
+        if candidate.endswith("```"):
+            candidate = candidate[:-3].rstrip()
+
+        embedded = self._extract_embedded_apply_patch(candidate)
+        if embedded:
+            return f"{embedded}\n"
+
+        if not candidate.startswith("*** Begin Patch"):
+            return ""
+        return f"{candidate}\n"
+
+    def _extract_embedded_apply_patch(self, text: str) -> Optional[str]:
+        if not text:
+            return None
+
+        match = re.search(r"\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch", text)
+        if match:
+            return match.group(0).strip()
+        return None
+
     def _apply_apply_patch_block(self, patch_text: str) -> str:
         apply_patch_path = shutil.which("apply_patch")
         if not apply_patch_path:
             return "Auto-apply failed: apply_patch utility not found"
 
+        candidate = self._sanitize_apply_patch(patch_text)
+        if not candidate:
+            return "Auto-apply failed: not an apply_patch block"
+
         try:
             p = subprocess.run(
                 [apply_patch_path],
                 cwd=str(self.agent.workspace.path),
-                input=patch_text,
+                input=candidate,
                 capture_output=True,
                 text=True,
                 timeout=90,
@@ -610,7 +648,11 @@ class TUI:
                             context = self.agent.workspace.get_context(mode="direct")
                             system_prompt = self.agent._build_system_prompt(context, is_heartbeat=False)
 
-                            prior = self.agent.backend.get_history()[-12:]
+                            prior = [
+                                m
+                                for m in self.agent.backend.get_history()[-12:]
+                                if not self.agent._is_heartbeat_history_message(m.content)
+                            ]
                             self.agent.backend.add_message(Message(role="user", content=effective_input))
 
                             # Keep short rolling transcript for codex-cli progress path.
@@ -642,7 +684,11 @@ class TUI:
                             context = self.agent.workspace.get_context(mode="direct")
                             system_prompt = self.agent._build_system_prompt(context, is_heartbeat=False)
 
-                            prior = self.agent.backend.get_history()[-12:]
+                            prior = [
+                                m
+                                for m in self.agent.backend.get_history()[-12:]
+                                if not self.agent._is_heartbeat_history_message(m.content)
+                            ]
                             self.agent.backend.add_message(Message(role="user", content=effective_input))
 
                             transcript_parts = []
