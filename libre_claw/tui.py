@@ -653,6 +653,14 @@ class TUI:
         if embedded:
             result = self._apply_apply_patch_block(embedded)
             status, next_action, details = self._parse_apply_contract(result)
+            if status == "FAILED_PERM" and "apply_patch utility not found" in (details or "").lower():
+                repaired = self._repair_patch_with_file_context(embedded)
+                if repaired:
+                    return repaired
+                return (
+                    "RETRYABLE; next_action=re-read target file context and regenerate patch; "
+                    "details=apply_patch utility not found and deterministic repair did not match current file content."
+                )
             if status != "RETRYABLE":
                 return result
 
@@ -664,6 +672,14 @@ class TUI:
         if candidate.lstrip().startswith("*** Begin Patch"):
             result = self._apply_apply_patch_block(candidate)
             status, next_action, details = self._parse_apply_contract(result)
+            if status == "FAILED_PERM" and "apply_patch utility not found" in (details or "").lower():
+                repaired = self._repair_patch_with_file_context(candidate)
+                if repaired:
+                    return repaired
+                return (
+                    "RETRYABLE; next_action=re-read target file context and regenerate patch; "
+                    "details=apply_patch utility not found and deterministic repair did not match current file content."
+                )
             if status != "RETRYABLE":
                 return result
 
@@ -696,6 +712,13 @@ class TUI:
         operations = self._extract_patch_line_ops(diff_text)
         if not operations:
             return None
+
+        def normalize_line_for_match(line: str) -> str:
+            normalized = (line or "").strip()
+            normalized = normalized.strip("*")
+            normalized = re.sub(r"^\s*[+-]+\s*", "", normalized)
+            normalized = normalized.strip()
+            return normalized
 
         applied_files = []
         no_change_files = []
@@ -739,6 +762,18 @@ class TUI:
                     continue
 
                 if removed_lines and added_lines:
+                    if len(removed_lines) == 1 and len(added_lines) == 1:
+                        old_line = removed_lines[0]
+                        new_line = added_lines[0]
+                        old_norm = normalize_line_for_match(old_line)
+                        for line in next_content.splitlines():
+                            if normalize_line_for_match(line) == old_norm:
+                                next_content = next_content.replace(line, new_line, 1)
+                                file_changed = True
+                                break
+                        if file_changed:
+                            continue
+
                     if old_block in next_content and (
                         next_content.count(old_block) == 1
                         or (
@@ -814,6 +849,11 @@ class TUI:
 
             if line.startswith("diff --git"):
                 flush()
+                m = re.match(r"^diff --git\s+a/(\S+)\s+b/(\S+)", line)
+                if m:
+                    current_file = m.group(2)
+                    if current_file == "/dev/null":
+                        current_file = None
                 in_patch = True
                 continue
 
@@ -823,6 +863,12 @@ class TUI:
                 continue
 
             if line.startswith("---"):
+                path = line[3:].strip()
+                if path:
+                    if path.startswith(("a/", "b/")):
+                        path = path[2:]
+                    if path != "/dev/null":
+                        current_file = path
                 in_patch = True
                 continue
 
@@ -1037,7 +1083,7 @@ class TUI:
         apply_patch_path = shutil.which("apply_patch")
         if not apply_patch_path:
             return (
-                "FAILED_PERM; next_action=fallback to git apply; "
+                "FAILED_PERM; next_action=re-read target file context and regenerate patch; "
                 "details=apply_patch utility not found"
             )
 
