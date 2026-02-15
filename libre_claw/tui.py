@@ -1365,10 +1365,10 @@ class TUI:
                         diff_req = self.agent.handle_message(
                             "Provide only an actionable patch for the requested edit. Prefer a single ```diff``` block. No prose."
                         )
-                            diff_req = self._strip_json_command_prefix(diff_req)
-                            diff_block = self._extract_diff_block(diff_req)
-                            if not diff_block:
-                                script = self._extract_bash_block(diff_req)
+                        diff_req = self._strip_json_command_prefix(diff_req)
+                        diff_block = self._extract_diff_block(diff_req)
+                        if not diff_block:
+                            script = self._extract_bash_block(diff_req)
 
                         if script or diff_block:
                             decision = self._approval_mode
