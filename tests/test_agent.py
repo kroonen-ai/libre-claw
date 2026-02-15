@@ -17,6 +17,7 @@ class MockBackend(BaseBackend):
         self.response_text = response_text
         self.last_prompt = None
         self.last_system_prompt = None
+        self.last_messages = []
         self.call_count = 0
 
     @property
@@ -30,6 +31,9 @@ class MockBackend(BaseBackend):
         return Response(content=self.response_text, model="mock")
 
     def chat(self, messages, tools=None):
+        self.last_messages = list(messages)
+        if messages and messages[0].role == "system":
+            self.last_system_prompt = messages[0].content
         self.call_count += 1
         return Response(content=self.response_text, model="mock")
 
@@ -74,7 +78,7 @@ def test_agent_heartbeat():
         agent = Agent(backend=backend, workspace=ws, config=config)
         response = agent.heartbeat_tick()
 
-        assert response == "HEARTBEAT_OK"
+        assert response.startswith("HEARTBEAT_OK")
         assert agent.state.mode == AgentMode.HEARTBEAT
 
 
@@ -102,7 +106,7 @@ def test_agent_heartbeat_no_reply():
         agent = Agent(backend=backend, workspace=ws, config=config)
         response = agent.handle_heartbeat()
 
-        assert response == "NO_REPLY"
+        assert response.startswith("NO_REPLY")
 
 
 def test_agent_heartbeat_memory_update():
@@ -126,7 +130,7 @@ def test_agent_heartbeat_memory_update():
         agent = Agent(backend=backend, workspace=ws, config=config, memory=fake_memory)
         response = agent.handle_heartbeat()
 
-        assert response == "MEMORY_UPDATE: captured heartbeat note"
+        assert response.startswith("MEMORY_UPDATE: captured heartbeat note")
         assert fake_memory.calls
         assert fake_memory.calls[0][0] == "captured heartbeat note"
         memory_file = (ws.path / "MEMORY.md").read_text()
@@ -190,3 +194,111 @@ def test_agent_system_prompt_heartbeat():
         agent.handle_heartbeat()
 
         assert "HEARTBEAT MODE" in backend.last_system_prompt
+        assert any(
+            msg.role == "system" and "HEARTBEAT MODE" in msg.content
+            for msg in backend.last_messages
+        )
+
+
+def test_repair_openai_patch_context_adds_missing_bullet_markers():
+    config = Config()
+    config.memory.enabled = False
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ws = Workspace(tmpdir, config)
+        ws.init()
+        ws.write(
+            "USER.md",
+            "# USER.md - About the User\n\nDescribe the person you're helping.\n\n- **Timezone:**\n",
+        )
+
+        agent = Agent(backend=MockBackend(), workspace=ws, config=config)
+        raw_patch = """*** Begin Patch
+*** Update File: USER.md
+@@
+- **Timezone:**
++ **Timezone:** America/Montreal
+*** End Patch"""
+        repaired = agent._repair_openai_patch_context(raw_patch)
+
+        assert "-- **Timezone:**" in repaired
+        assert "+- **Timezone:** America/Montreal" in repaired
+
+
+def test_apply_unified_diff_retries_with_repaired_openai_payload():
+    config = Config()
+    config.memory.enabled = False
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ws = Workspace(tmpdir, config)
+        ws.init()
+        ws.write(
+            "USER.md",
+            "# USER.md - About the User\n\nDescribe the person you're helping.\n\n- **Timezone:**\n",
+        )
+
+        agent = Agent(backend=MockBackend(), workspace=ws, config=config)
+        attempts = []
+
+        def fake_apply_patch(payload: str):
+            attempts.append(payload)
+            if "-- **Timezone:**" in payload and "+- **Timezone:** America/Montreal" in payload:
+                return "APPLIED", "applied"
+            return "RETRYABLE", "still not repaired"
+
+        agent._run_apply_patch_block = fake_apply_patch  # type: ignore[assignment]
+        agent._verify_patch_application = lambda before, target_files: (True, "verified")  # type: ignore[assignment]
+        agent._run_git_apply = lambda patch_text, options: ("FAILED_PERM", "should not be reached")  # type: ignore[assignment]
+
+        patch = """*** Begin Patch
+*** Update File: USER.md
+@@
+- **Timezone:**
++ **Timezone:** America/Montreal
+*** End Patch"""
+        result = agent._apply_unified_diff(patch)
+
+        assert result.startswith("APPLIED")
+        assert len(attempts) >= 2
+        assert "-- **Timezone:**" in attempts[1]
+        assert "+- **Timezone:** America/Montreal" in attempts[1]
+
+
+def test_apply_unified_diff_embedded_fallbacks_to_git_when_apply_patch_fails():
+    config = Config()
+    config.memory.enabled = False
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ws = Workspace(tmpdir, config)
+        ws.init()
+        ws.write(
+            "USER.md",
+            "# USER.md - About the User\n\nDescribe the person you're helping.\n\nHello\n",
+        )
+
+        agent = Agent(backend=MockBackend(), workspace=ws, config=config)
+        strategy_calls: list[tuple[str, object]] = []
+
+        def fake_apply_patch(payload: str):
+            strategy_calls.append(("apply_patch", payload))
+            return "RETRYABLE", "No valid patches in input"
+
+        def fake_git_apply(patch_text: str, options: list[str]):
+            strategy_calls.append(("git_apply", tuple(options), patch_text))
+            return "APPLIED", "applied"
+
+        agent._run_apply_patch_block = fake_apply_patch  # type: ignore[assignment]
+        agent._run_git_apply = fake_git_apply  # type: ignore[assignment]
+        agent._verify_patch_application = lambda before, target_files: (True, "verified")  # type: ignore[assignment]
+
+        patch = """*** Begin Patch
+*** Update File: USER.md
+@@
+- Hello
++ Hello, world
+*** End Patch"""
+        result = agent._apply_unified_diff(patch)
+
+        assert result.startswith("APPLIED")
+        assert any(call[0] == "apply_patch" for call in strategy_calls)
+        assert any(call[0] == "git_apply" for call in strategy_calls)

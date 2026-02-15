@@ -688,6 +688,7 @@ class Agent:
                         "Retry with file-context-normalized OpenAI patch lines.",
                     )
                 )
+
             if normalized_converted_from_openai:
                 attempts.append(
                     (
@@ -705,7 +706,50 @@ class Agent:
                         "Retry converted unified diff with whitespace-tolerant matching.",
                     )
                 )
+                attempts.append(
+                    (
+                        "git_apply_from_openai_p1",
+                        ["-p1", "--whitespace=fix", "-"],
+                        normalized_converted_from_openai,
+                        "Retry converted unified diff with prefix-stripping fallback.",
+                    )
+                )
+                attempts.append(
+                    (
+                        "git_apply_from_openai_p0",
+                        ["-p0", "--whitespace=fix", "-"],
+                        normalized_converted_from_openai,
+                        "Retry converted unified diff with full path prefix.",
+                    )
+                )
         else:
+            repaired_snapshot = repaired or normalized
+            converted_to_openai = self._convert_unified_to_openai(repaired_snapshot)
+            normalized_converted_to_openai = self._normalize_patch_text(converted_to_openai) if converted_to_openai else None
+            repaired_converted_to_openai = None
+            if converted_to_openai:
+                repaired_openai = self._repair_openai_patch_context(converted_to_openai)
+                repaired_converted_to_openai = self._normalize_patch_text(repaired_openai) if repaired_openai else None
+                if repaired_converted_to_openai == normalized_converted_to_openai:
+                    repaired_converted_to_openai = None
+
+            if normalized_converted_to_openai:
+                attempts.append(
+                    (
+                        "apply_patch_from_unified_repaired",
+                        [],
+                        repaired_converted_to_openai or normalized_converted_to_openai,
+                        "Try OpenAI-style patch after unified repair/context normalization.",
+                    )
+                )
+                attempts.append(
+                    (
+                        "apply_patch_from_unified",
+                        [],
+                        normalized_converted_to_openai,
+                        "Try OpenAI-style patch application for no-openai diff.",
+                    )
+                )
             attempts.extend(
                 [
                     ("git_apply_whitespace", ["--whitespace=fix", "-"], normalized, "Re-run with whitespace normalization."),
@@ -721,6 +765,12 @@ class Agent:
                         repaired,
                         "Retry with whitespace-tolerant matching.",
                     ),
+                    (
+                        "git_apply_p1",
+                        ["-p1", "--whitespace=fix", "-"],
+                        repaired,
+                        "Retry with patch-path prefix 1 fallback.",
+                    ),
                     ("git_apply_p0", ["-p0", "--whitespace=fix", "-"], repaired, "Retry with patch-path prefix 0 fallback."),
                 ]
             )
@@ -728,7 +778,7 @@ class Agent:
         last_status: Optional[str] = None
         last_message: Optional[str] = None
         for idx, (strategy, options, payload, action_hint) in enumerate(attempts):
-            if strategy == "apply_patch":
+            if strategy.startswith("apply_patch"):
                 status, message = self._run_apply_patch_block(payload)
             else:
                 status, message = self._run_git_apply(payload, options)
@@ -1124,12 +1174,51 @@ class Agent:
                 return candidate
 
             for line in snapshot:
+                if line == f"- {candidate.lstrip()}":
+                    return line
+                if line == f"+ {candidate.lstrip()}":
+                    return line
+                if line == f"  {candidate.lstrip()}":
+                    return line
                 if line.rstrip() == normalized_candidate:
                     return line
 
             return None
 
+        def _candidate_signature(line: str) -> str:
+            value = line.lstrip()
+            if value.startswith("- "):
+                value = value[2:]
+            return value.strip()
+
+        def _maybe_prefix_missing_bullet(
+            marker: str,
+            body: str,
+            snapshot: List[str],
+            recent_minus: str,
+        ) -> Optional[str]:
+            if marker not in {"+", "-"}:
+                return None
+            if not body or not body.startswith(" "):
+                return None
+
+            # If line looks like a markdown list item but lost one '-' character,
+            # repair by restoring it when we can verify against snapshot context.
+            prefixed = f"-{body}"
+            replacement = _match_line_by_trimmed_content(prefixed, snapshot)
+            if replacement is not None:
+                return replacement
+
+            # For additions immediately following a removal, infer the intended prefix
+            # from the removed line when the key part appears to match.
+            if marker == "+" and recent_minus:
+                if _candidate_signature(recent_minus).startswith(_candidate_signature(body).split(":")[0] + ":"):
+                    return f"-{body}"
+
+            return None
+
         patched: List[str] = []
+        last_removed_line = ""
         for raw_line in lines:
             stripped = raw_line.strip()
             if stripped.startswith("*** Update File:"):
@@ -1155,8 +1244,22 @@ class Agent:
                 body = line_match.group(2)
                 if marker in (" ", "+", "-"):
                     replacement = _match_line_by_trimmed_content(body, current_snapshot)
+                    inferred = _maybe_prefix_missing_bullet(
+                        marker=marker,
+                        body=body,
+                        snapshot=current_snapshot,
+                        recent_minus=last_removed_line,
+                    )
+                    if inferred is not None:
+                        replacement = inferred
+
                     if replacement is not None:
                         body = replacement
+                    if marker == "-":
+                        last_removed_line = body
+                    elif marker != "+" or not body:
+                        last_removed_line = ""
+
                     patched.append(f"{marker}{body}")
                     continue
                 else:
@@ -1224,6 +1327,74 @@ class Agent:
                 continue
             if raw_line.startswith((" ", "+", "-", "\\")):
                 hunk_lines.append(raw_line)
+
+        flush()
+        return "\n\n".join(blocks)
+
+    def _convert_unified_to_openai(self, patch_text: str) -> str:
+        if not patch_text:
+            return ""
+
+        lines = textwrap.dedent(patch_text).splitlines()
+        if not lines:
+            return ""
+
+        blocks: List[str] = []
+        current_file: Optional[str] = None
+        hunk_lines: List[str] = []
+
+        def flush() -> None:
+            nonlocal current_file, hunk_lines
+            if not current_file or not hunk_lines:
+                current_file = None
+                hunk_lines = []
+                return
+
+            blocks.append(
+                "\n".join(
+                    [
+                        "*** Begin Patch",
+                        f"*** Update File: {current_file}",
+                        "@@",
+                        *hunk_lines,
+                        "*** End Patch",
+                    ]
+                )
+            )
+            current_file = None
+            hunk_lines = []
+
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if stripped.startswith("diff --git "):
+                flush()
+                parts = stripped.split()
+                if len(parts) >= 4:
+                    current_file = (parts[2].split("\t", 1)[0] or "").strip()
+                    if current_file.startswith(("a/", "b/")):
+                        current_file = current_file[2:]
+                continue
+            if stripped.startswith("--- "):
+                continue
+            if stripped.startswith("+++ "):
+                if not current_file:
+                    path = stripped[4:].split("\t", 1)[0].strip()
+                    if path.startswith(("a/", "b/")):
+                        path = path[2:]
+                    current_file = path
+                continue
+            if stripped.startswith("@@"):
+                continue
+            if not raw_line:
+                continue
+            if raw_line.startswith((" ", "+", "-", "\\")):
+                if raw_line.startswith("\\"):
+                    hunk_lines.append(raw_line)
+                else:
+                    hunk_lines.append(raw_line)
+
+            if stripped.startswith("diff --git "):
+                continue
 
         flush()
         return "\n\n".join(blocks)
@@ -1302,10 +1473,13 @@ class Agent:
 
     def _run_git_apply(self, patch_text: str, options: List[str]) -> tuple[str, str]:
         try:
+            payload = patch_text
+            if payload is not None and not payload.endswith("\n"):
+                payload = payload + "\n"
             p = subprocess.run(
                 ["git", "apply", *options],
                 cwd=str(self.workspace.path),
-                input=patch_text,
+                input=payload,
                 capture_output=True,
                 text=True,
                 timeout=30,
