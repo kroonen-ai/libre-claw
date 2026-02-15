@@ -645,10 +645,20 @@ class Agent:
         before_snapshot = self._snapshot_files(target_files)
         repaired = self._repair_unified_diff(normalized)
         embedded = self._extract_embedded_apply_patch(normalized)
+        repaired_openai = self._repair_openai_patch_context(normalized)
 
         attempts: List[tuple[str, List[str], str, str]] = []
         if embedded:
             attempts.append(("apply_patch", [], embedded, "Apply the provided OpenAI-style patch block directly."))
+            if repaired_openai and repaired_openai != normalized:
+                attempts.append(
+                    (
+                        "apply_patch_repaired",
+                        [],
+                        repaired_openai,
+                        "Retry with file-context-normalized OpenAI patch lines.",
+                    )
+                )
         attempts.extend(
             [
                 ("git_apply_whitespace", ["--whitespace=fix", "-"], normalized, "Re-run with whitespace normalization."),
@@ -688,8 +698,8 @@ class Agent:
                         "Continue heartbeat execution and verify any follow-up checks.",
                     )
 
-                status = "RETRYABLE"
-                message = f"Patch apply did not change the expected file content. {verify_msg}"
+            status = "RETRYABLE"
+            message = f"{message}"
 
             last_status = status
             last_message = message
@@ -796,6 +806,68 @@ class Agent:
 
         return "\n".join(repaired_lines).strip()
 
+    def _repair_openai_patch_context(self, patch_text: str) -> str:
+        if not patch_text:
+            return ""
+
+        lines = patch_text.splitlines()
+        if not lines:
+            return patch_text
+
+        current_file: Optional[str] = None
+        current_snapshot: List[str] = []
+        snapshot_by_file: Dict[str, List[str]] = {}
+
+        def _match_line_by_trimmed_content(
+            candidate: str,
+            snapshot: List[str],
+        ) -> Optional[str]:
+            if not snapshot:
+                return None
+
+            normalized_candidate = candidate.rstrip()
+            if any(line == candidate for line in snapshot):
+                return candidate
+
+            for line in snapshot:
+                if line.rstrip() == normalized_candidate:
+                    return line
+
+            return None
+
+        patched: List[str] = []
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if stripped.startswith("*** Update File:"):
+                current_file = stripped[len("*** Update File:"):].strip()
+                snapshot_by_file[current_file] = (self.workspace.read(current_file) or "").splitlines()
+                current_snapshot = snapshot_by_file[current_file]
+                patched.append(raw_line)
+                continue
+
+            if raw_line.startswith("*** End Patch"):
+                current_file = None
+                current_snapshot = []
+                patched.append(raw_line)
+                continue
+
+            if not current_file or not current_snapshot:
+                patched.append(raw_line)
+                continue
+
+            if raw_line.startswith("-") or raw_line.startswith(" "):
+                line_prefix = raw_line[0]
+                body = raw_line[1:]
+                replacement = _match_line_by_trimmed_content(body, current_snapshot)
+                if replacement is not None and replacement != body:
+                    patched.append(f"{line_prefix}{replacement}")
+                    continue
+
+            patched.append(raw_line)
+
+        repaired = "\n".join(patched).strip()
+        return repaired if repaired else patch_text
+
     @staticmethod
     def _extract_patch_target_files(diff_text: str) -> List[str]:
         if not diff_text:
@@ -813,6 +885,12 @@ class Agent:
                     targets.append(path)
                 continue
 
+            if line.startswith("*** Update File: "):
+                path = line[len("*** Update File: "):].strip()
+                if path and path not in targets and path != "/dev/null":
+                    targets.append(path)
+                continue
+
             if line.startswith("diff --git "):
                 parts = line.split()
                 if len(parts) < 4:
@@ -823,26 +901,6 @@ class Agent:
                     normalized = path[2:]
                     if normalized and normalized not in targets:
                         targets.append(normalized)
-
-        return targets
-
-    @staticmethod
-    def _extract_patch_target_files(diff_text: str) -> List[str]:
-        if not diff_text:
-            return []
-
-        targets: List[str] = []
-        for line in diff_text.splitlines():
-            if not (line.startswith("--- ") or line.startswith("+++ ")):
-                continue
-
-            path = line[4:].split("\t", 1)[0].strip()
-            if not path or path == "/dev/null":
-                continue
-            if path.startswith(("a/", "b/")):
-                path = path[2:]
-            if path not in targets:
-                targets.append(path)
 
         return targets
 
