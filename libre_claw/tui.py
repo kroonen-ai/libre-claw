@@ -48,6 +48,7 @@ class TUI:
         "backend": "Show or switch backend (usage: /backend [claude_code|codex_cli|anthropic|openai|ollama])",
         "login": "Import/login provider auth (usage: /login openai)",
         "model": "Show/set model for current backend (usage: /model [model-id])",
+        "models": "List available models for current backend",
         "context": "Show loaded workspace context files",
         "daily": "Append to today's daily note (usage: /daily <text>)",
         "files": "List workspace files",
@@ -285,7 +286,30 @@ class TUI:
             backend = self.config.backend.type
             if not args:
                 if backend == "openai":
-                    self.console.print(f"  Current model: [bold]{self.config.backend.openai_model}[/bold] (openai)")
+                    current = self.config.backend.openai_model
+                    self.console.print(f"  Current model: [bold]{current}[/bold] (openai)")
+                    if hasattr(self.agent.backend, "list_models"):
+                        models = self.agent.backend.list_models()
+                        if models:
+                            shown = models[:30]
+                            for i, m in enumerate(shown, 1):
+                                self.console.print(f"  [dim]{i:>2}.[/dim] {m}")
+                            pick = Prompt.ask("  Pick model number (or Enter to keep current)", default="").strip()
+                            if pick:
+                                try:
+                                    idx = int(pick)
+                                    if 1 <= idx <= len(shown):
+                                        chosen = shown[idx - 1]
+                                        self.config.backend.openai_model = chosen
+                                        self._save_user_config()
+                                        self.agent.switch_backend(backend)
+                                        self.console.print(f"  [system]Saved model '{chosen}' for backend {backend}[/system]")
+                                    else:
+                                        self.console.print("  [error]Invalid model number[/error]")
+                                except ValueError:
+                                    self.console.print("  [error]Please enter a number[/error]")
+                        else:
+                            self.console.print("  [system]Could not fetch model list; use /model <model-id>[/system]")
                 elif backend == "anthropic":
                     self.console.print(f"  Current model: [bold]{self.config.backend.anthropic_model}[/bold] (anthropic)")
                 elif backend == "ollama":
@@ -293,6 +317,7 @@ class TUI:
                 elif backend == "codex_cli":
                     model = self.config.backend.codex_model or "(codex default)"
                     self.console.print(f"  Current model: [bold]{model}[/bold] (codex_cli)")
+                    self.console.print("  [dim]Set explicit override with: /model <model-id>[/dim]")
                 else:
                     self.console.print(f"  Backend [bold]{backend}[/bold] does not expose a model selector")
             else:
@@ -315,6 +340,18 @@ class TUI:
                 except Exception:
                     pass
                 self.console.print(f"  [system]Saved model '{model}' for backend {backend}[/system]")
+
+        elif cmd == "models":
+            backend = self.config.backend.type
+            if hasattr(self.agent.backend, "list_models"):
+                models = self.agent.backend.list_models()
+                if models:
+                    for m in models[:100]:
+                        self.console.print(f"  [dim]•[/dim] {m}")
+                else:
+                    self.console.print(f"  [system]No model list available for {backend} right now[/system]")
+            else:
+                self.console.print(f"  [system]Backend {backend} does not support listing models[/system]")
 
         elif cmd == "context":
             ctx = self.agent.workspace.get_context(self.agent.state.mode.value)

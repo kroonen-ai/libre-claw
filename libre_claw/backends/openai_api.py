@@ -127,3 +127,21 @@ class OpenAIBackend(BaseBackend):
 
     def check_available(self) -> bool:
         return bool(self._token)
+
+    def list_models(self) -> List[str]:
+        """Return available OpenAI model ids for the current auth token."""
+        if not self._token:
+            return []
+        try:
+            res = self._client.get(
+                f"{self._base_url}/models",
+                headers={"Authorization": f"Bearer {self._token}"},
+            )
+            if res.status_code >= 400:
+                return []
+            data = res.json()
+            items = data.get("data", [])
+            ids = [m.get("id") for m in items if isinstance(m, dict) and m.get("id")]
+            return sorted(ids)
+        except Exception:
+            return []
