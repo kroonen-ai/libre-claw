@@ -246,42 +246,20 @@ class TUI:
             if provider != "openai":
                 self.console.print("  [error]Usage: /login openai[/error]")
             else:
-                # First: if Codex OAuth session exists, use codex_cli backend directly
+                # OpenClaw-like behavior: OAuth login means Codex backend, no token paste flow.
                 try:
                     codex_bin = self.config.backend.codex_path or "codex"
                     status = subprocess.run([codex_bin, "login", "status"], capture_output=True, text=True, timeout=10)
-                    if status.returncode == 0:
-                        self.config.backend.type = "codex_cli"
-                        self._save_user_config()
-                        self.agent.switch_backend("codex_cli")
-                        self.console.print("  [system]Detected Codex OAuth login. Backend switched to: codex_cli[/system]")
-                        return True
-                except Exception:
-                    pass
-
-                imported_from = self._import_openai_auth_from_codex()
-                if imported_from:
-                    self.console.print(f"  [system]Imported OpenAI token from: {imported_from}[/system]")
-                else:
-                    self.console.print("  [system]No exportable Codex auth file found. Paste OpenAI API token.[/system]")
-                    token = Prompt.ask("  [cyan]OpenAI token[/cyan]", password=True).strip()
-                    if token:
-                        target = self._openai_auth_target_path()
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_text(json.dumps({"access_token": token}, indent=2) + "\n")
-                        self.console.print(f"  [system]Saved token to: {target}[/system]")
-                    else:
-                        self.console.print("  [error]No token provided[/error]")
+                    if status.returncode != 0:
+                        self.console.print("  [error]Codex OAuth not active. Run: codex login[/error]")
                         return True
 
-                try:
-                    self.config.backend.type = "openai"
+                    self.config.backend.type = "codex_cli"
                     self._save_user_config()
-                    self.agent.switch_backend("openai")
-                    self.console.print("  [system]Backend switched to: openai[/system]")
+                    self.agent.switch_backend("codex_cli")
+                    self.console.print("  [system]Codex OAuth active. Backend set to: codex_cli[/system]")
                 except Exception as e:
-                    self.console.print(f"  [error]OpenAI backend switch failed: {e}[/error]")
-
+                    self.console.print(f"  [error]Codex login check failed: {e}[/error]")
         elif cmd == "model":
             backend = self.config.backend.type
             if not args:

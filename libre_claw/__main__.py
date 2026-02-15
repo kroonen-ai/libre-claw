@@ -1,6 +1,7 @@
 """Entry point for Libre Claw."""
 
 import argparse
+import subprocess
 from pathlib import Path
 
 import uvicorn
@@ -106,6 +107,15 @@ def main():
 
     if args.backend:
         config.backend.type = args.backend
+    else:
+        # OpenClaw-like default: if Codex OAuth is active, use codex_cli automatically.
+        try:
+            codex_bin = config.backend.codex_path or "codex"
+            status = subprocess.run([codex_bin, "login", "status"], capture_output=True, text=True, timeout=10)
+            if status.returncode == 0:
+                config.backend.type = "codex_cli"
+        except Exception:
+            pass
 
     if args.no_git:
         config.git.enabled = False
