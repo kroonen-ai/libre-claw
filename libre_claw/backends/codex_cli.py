@@ -3,6 +3,7 @@
 Uses local Codex login session (ChatGPT OAuth) via `codex exec`.
 """
 
+import json
 import subprocess
 import tempfile
 from typing import Any, Callable, Dict, List, Optional
@@ -70,22 +71,41 @@ class CodexCLIBackend(BaseBackend):
                     text=True,
                 )
 
+                stdout_lines: List[str] = []
                 if proc.stdout:
                     for line in proc.stdout:
                         text = (line or "").strip()
                         if not text:
                             continue
+                        stdout_lines.append(text)
                         if progress_callback:
                             progress_callback(f"codex: {text[:120]}")
 
                 return_code = proc.wait(timeout=300)
                 stderr = proc.stderr.read().strip() if proc.stderr else ""
 
-                if return_code != 0:
-                    return Response(content=f"Error: Codex exec failed: {stderr}", stop_reason="error")
-
                 out.seek(0)
                 content = out.read().decode("utf-8").strip()
+
+                # Fallback: parse JSON event stream for assistant text when output-last-message is empty.
+                if not content and stdout_lines:
+                    for line in reversed(stdout_lines):
+                        try:
+                            event = json.loads(line)
+                        except Exception:
+                            continue
+                        if event.get("type") == "item.completed":
+                            item = event.get("item") or {}
+                            if item.get("type") == "agent_message" and item.get("text"):
+                                content = str(item.get("text"))
+                                break
+
+                if return_code != 0 and not content:
+                    return Response(content=f"Error: Codex exec failed: {stderr}", stop_reason="error")
+
+                if not content:
+                    return Response(content="Error: Codex returned no assistant message", stop_reason="error")
+
                 return Response(content=content, model="codex-cli", stop_reason="end_turn")
             except FileNotFoundError:
                 return Response(content=f"Error: Codex CLI not found at {self._codex_path}", stop_reason="error")
