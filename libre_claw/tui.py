@@ -49,7 +49,8 @@ class TUI:
         "login": "Import/login provider auth (usage: /login openai)",
         "model": "Show/set model for current backend (usage: /model [model-id])",
         "models": "List available models for current backend",
-        "context": "Show loaded workspace context files",
+        "context": "Show loaded workspace context files + estimated context usage",
+        "compact": "Compact conversation history (keeps recent turns)",
         "daily": "Append to today's daily note (usage: /daily <text>)",
         "files": "List workspace files",
         "read": "Read a workspace file (usage: /read <filename>)",
@@ -364,6 +365,18 @@ class TUI:
                     self.console.print(f"  [dim]●[/dim] {filename} ({size:,} chars)")
             else:
                 self.console.print("  [system]No context files loaded[/system]")
+            est = self._estimate_context_tokens()
+            self.console.print(f"  [system]Estimated context: ~{est:,} tokens[/system]")
+
+        elif cmd == "compact":
+            history = self.agent.backend.get_history()
+            keep = 12
+            if len(history) <= keep:
+                self.console.print("  [system]Nothing to compact[/system]")
+            else:
+                dropped = len(history) - keep
+                self.agent.backend._conversation_history = history[-keep:]
+                self.console.print(f"  [system]Compacted history: dropped {dropped} messages, kept {keep}[/system]")
 
         elif cmd == "daily":
             if args:
@@ -411,6 +424,13 @@ class TUI:
 
         return True
 
+    def _estimate_context_tokens(self) -> int:
+        # lightweight estimate: ~4 chars/token
+        ctx = self.agent.workspace.get_context(self.agent.state.mode.value)
+        history_text = "\n".join(m.content for m in self.agent.backend.get_history())
+        text = "\n".join(ctx.values()) + "\n" + history_text
+        return max(1, len(text) // 4)
+
     def _format_uptime(self) -> str:
         delta = datetime.now() - self._start_time
         seconds = int(delta.total_seconds())
@@ -450,7 +470,8 @@ class TUI:
                     with self.console.status("[dim]Preparing request...[/dim]", spinner="dots") as status:
                         t0 = time.monotonic()
                         backend_name = self.agent.backend.name
-                        status.update(f"[dim]Using backend: {backend_name}[/dim]")
+                        est_ctx = self._estimate_context_tokens()
+                        status.update(f"[dim]Using backend: {backend_name} | ctx~{est_ctx:,} tok[/dim]")
 
                         add_dirs = []
                         docs_dir = str((Path.home() / "Documents").resolve())
