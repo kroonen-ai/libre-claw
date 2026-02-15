@@ -236,8 +236,9 @@ class TUI:
             else:
                 # First: if Codex OAuth session exists, use codex_cli backend directly
                 try:
-                    status = subprocess.run(["codex", "login", "status"], capture_output=True, text=True, timeout=10)
-                    if status.returncode == 0 and "Logged in" in status.stdout:
+                    codex_bin = self.config.backend.codex_path or "codex"
+                    status = subprocess.run([codex_bin, "login", "status"], capture_output=True, text=True, timeout=10)
+                    if status.returncode == 0:
                         self.agent.switch_backend("codex_cli")
                         self.console.print("  [system]Detected Codex OAuth login. Backend switched to: codex_cli[/system]")
                         return True
