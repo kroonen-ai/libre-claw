@@ -476,6 +476,11 @@ class TUI:
         triggers = ["edit", "update", "create", "write", "fix", "patch", "implement"]
         return any(t in lowered for t in triggers)
 
+    def _looks_like_done_claim(self, text: str) -> bool:
+        l = text.lower()
+        markers = ["done", "updated", "i updated", "applied", "completed"]
+        return any(m in l for m in markers)
+
     def _auto_apply_shell_script(self, script: str) -> str:
         # Guardrails: block obvious destructive commands.
         blocked = ["rm -rf /", "mkfs", "shutdown", "reboot", "diskutil erase"]
@@ -668,12 +673,14 @@ class TUI:
                         script = self._extract_bash_block(response)
                         diff_block = self._extract_diff_block(response)
 
-                        # If no diff provided, ask model to provide one for preview.
-                        if script and not diff_block:
+                        # Always require actionable patch/script for edit intents.
+                        if not diff_block and not script:
                             diff_req = self.agent.handle_message(
-                                "Convert your proposed file edits into a single ```diff``` block only. No prose."
+                                "Provide only an actionable patch for the requested edit. Prefer a single ```diff``` block. No prose."
                             )
                             diff_block = self._extract_diff_block(diff_req)
+                            if not diff_block:
+                                script = self._extract_bash_block(diff_req)
 
                         if script or diff_block:
                             decision = self._approval_mode
@@ -711,6 +718,13 @@ class TUI:
                                     "User denied the proposed file edits. Provide next best steps without modifying files."
                                 )
                                 response = f"{response}\n\n**Alternative plan:**\n{alt}"
+                        else:
+                            # Prevent fake "done" claims when no patch exists.
+                            if self._looks_like_done_claim(response):
+                                response = (
+                                    f"{response}\n\n---\n"
+                                    "**Auto-apply:** NOT_APPLIED (no actionable diff/script produced)."
+                                )
 
                     response = f"{response}\n\n{self._workspace_changes_summary()}"
 
