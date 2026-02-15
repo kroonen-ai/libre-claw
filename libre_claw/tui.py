@@ -466,6 +466,38 @@ class TUI:
         except Exception as e:
             return f"Auto-apply error: {e}"
 
+    def _set_user_name(self, name: str) -> str:
+        """Deterministically update USER.md name field."""
+        filename = "USER.md"
+        content = self.agent.workspace.read(filename) or "# USER.md - About the User\n\n"
+        lines = content.splitlines()
+        updated = False
+        for i, line in enumerate(lines):
+            if line.strip().lower().startswith("- **name:**"):
+                lines[i] = f"- **Name:** {name}"
+                updated = True
+                break
+        if not updated:
+            lines.append(f"- **Name:** {name}")
+        self.agent.workspace.write(filename, "\n".join(lines).rstrip() + "\n")
+        return f"Done — updated USER.md with Name: {name}."
+
+    def _handle_direct_profile_update(self, user_input: str) -> Optional[str]:
+        text = user_input.strip()
+        m = re.search(r"(?:my name is|add)\s+([A-Za-z][A-Za-z0-9 _'\-]{1,40})", text, re.IGNORECASE)
+        if m and ("user.md" in text.lower() or "name" in text.lower()):
+            name = m.group(1).strip().split()[0]
+            return self._set_user_name(name)
+
+        m2 = re.fullmatch(r"[A-Za-z][A-Za-z0-9 _'\-]{1,40}", text)
+        if m2:
+            # If prior assistant asked for a name, allow one-word follow-up.
+            hist = self.agent.backend.get_history()
+            if hist and "name" in hist[-1].content.lower():
+                name = m2.group(0).strip().split()[0]
+                return self._set_user_name(name)
+        return None
+
     def _format_uptime(self) -> str:
         delta = datetime.now() - self._start_time
         seconds = int(delta.total_seconds())
@@ -500,6 +532,18 @@ class TUI:
 
                     # Display user message
                     self._message_count += 1
+
+                    # Deterministic direct-edit intents (avoid model claiming fake edits)
+                    direct_result = self._handle_direct_profile_update(user_input)
+                    if direct_result:
+                        self.console.print()
+                        self.console.print(Panel(
+                            Markdown(direct_result),
+                            title="[assistant]Assistant[/assistant] [dim](local edit)[/dim]",
+                            border_style="green",
+                            padding=(1, 2),
+                        ))
+                        continue
 
                     # Get response with visible execution phases
                     with self.console.status("[dim]Preparing request...[/dim]", spinner="dots") as status:
