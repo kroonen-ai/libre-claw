@@ -97,8 +97,12 @@ class Config(BaseSettings):
         if not path.exists():
             return cls()
 
-        with open(path) as f:
-            data = yaml.safe_load(f) or {}
+        try:
+            with open(path) as f:
+                data = yaml.safe_load(f) or {}
+        except yaml.YAMLError:
+            # Corrupted/unsafe YAML: fall back to defaults instead of crashing.
+            return cls()
 
         # Remove config_file from data if present (it's set explicitly below)
         data.pop("config_file", None)
@@ -141,5 +145,6 @@ class Config(BaseSettings):
     def save(self, path: Path) -> None:
         """Save configuration to a YAML file."""
         path.parent.mkdir(parents=True, exist_ok=True)
+        data = self.model_dump(exclude={"config_file"})
         with open(path, "w") as f:
-            yaml.dump(self.model_dump(), f, default_flow_style=False)
+            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
