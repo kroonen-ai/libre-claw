@@ -1,155 +1,144 @@
-# Libre Claw
+# Libre Claw 🐾
 
-An agentic AI framework for Kroonen AI Inc. that wraps the Claude Code CLI (`claude`) as its primary backend, with support for additional backends (Anthropic API, Ollama).
+An agentic AI framework by [Kroonen AI Inc.](https://kroonen.ai)
 
-## Overview
+Libre Claw wraps AI backends (Claude Code CLI, Ollama, Anthropic API) into a persistent agent with workspace management, heartbeat autonomy, semantic memory, and a polished terminal UI.
 
-Libre Claw is an agentic AI framework designed to provide a flexible, extensible interface for interacting with Claude Code and other AI backends. It features:
+## Features
 
-- **TUI (Terminal User Interface)**: Interactive Rich-based terminal interface
-- **HTTP API**: FastAPI-based REST API for programmatic access
-- **Multiple Backend Support**: Claude Code, Anthropic API, Ollama
-- **Session Management**: Persistent sessions with workspace context
-- **Heartbeat System**: Autonomous task execution during idle periods
-- **Memory Integration**: ChromaDB-backed long-term memory
+- **Multiple backends** — Claude Code CLI, Ollama (local), Anthropic API (planned)
+- **Workspace system** — Markdown-based context files (SOUL.md, USER.md, AGENTS.md, etc.)
+- **Mode-aware context** — Direct mode loads MEMORY.md, heartbeat mode loads HEARTBEAT.md
+- **Heartbeat autonomy** — Async heartbeat loop for autonomous task execution
+- **Semantic memory** — ChromaDB integration for long-term memory search/storage
+- **Rich TUI** — Terminal UI with slash commands, markdown rendering, and spinners
+- **HTTP API** — FastAPI server for programmatic access
+- **Cost tracking** — Token usage and cost estimation
+- **Git sync** — Auto-commit and push workspace changes
+- **Daily notes** — Automatic `memory/YYYY-MM-DD.md` journal entries
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                    Libre Claw                        │
-│                                                     │
-│  ┌──────────┐  ┌──────────┐  ┌───────────────────┐ │
-│  │   TUI    │  │ HTTP API │  │ Discord/Telegram  │ │
-│  │  (Rich)  │  │ (FastAPI)│  │    (future)       │ │
-│  └────┬─────┘  └────┬─────┘  └────────┬──────────┘ │
-│       └──────────────┼────────────────┘             │
-│                      ▼                              │
-│              ┌───────────────┐                      │
-│              │  Agent Core   │                      │
-│              │  - Session    │                      │
-│              │  - Workspace  │◄── .md files         │
-│              │  - Heartbeat  │                      │
-│              └───────┬───────┘                      │
-│                      │                              │
-│          ┌───────────┼───────────┐                  │
-│          ▼           ▼           ▼                  │
-│  ┌────────────┐ ┌──────────┐ ┌──────────┐          │
-│  │Claude Code │ │ Anthropic│ │  Ollama  │          │
-│  │  Backend   │ │   API    │ │ Backend  │          │
-│  │(claude -p) │ │ Backend  │ │ (local)  │          │
-│  └────────────┘ │ (future) │ └──────────┘          │
-│                 └──────────┘                        │
-└─────────────────────────────────────────────────────┘
-```
-
-## Requirements
-
-- Python 3.11+
-- Claude Code CLI v2.1.42+ (for Claude Code backend)
-- Ollama (optional, for local models)
-- ChromaDB server (optional, for memory)
-
-## Installation
+## Quick Start
 
 ```bash
-# Clone the repository
-git clone git@git.kroonen.ai:kroonen-ai/libre-claw.git
+# Clone
+git clone https://github.com/kroonen-ai/libre-claw.git
 cd libre-claw
 
-# Install with uv
-uv pip install -e .
+# Install
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 
-# Or with pip
-pip install -e .
+# Initialize workspace
+libre-claw --init ~/my-workspace
+
+# Start TUI
+libre-claw -w ~/my-workspace
+
+# Or start API server
+libre-claw --api -w ~/my-workspace
 ```
 
-## Configuration
+## Workspace Structure
 
-Create a `config.yaml` file in your workspace or use the default configuration:
+```
+my-workspace/
+├── SOUL.md              # Agent personality and traits
+├── USER.md              # User profile
+├── IDENTITY.md          # Agent identity
+├── AGENTS.md            # Operating rules (direct vs heartbeat mode)
+├── MEMORY.md            # Long-term curated memory
+├── HEARTBEAT.md         # Autonomous task checklist
+├── HEARTBEAT-AUDIT.md   # Heartbeat run log
+├── INFRA.md             # Infrastructure notes
+├── TOOLS.md             # Local tool configuration
+├── config.yaml          # Framework configuration
+├── heartbeat-state.json # Heartbeat state tracking
+└── memory/
+    └── 2026-02-15.md    # Daily notes
+```
+
+## TUI Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show available commands |
+| `/clear` | Clear conversation history |
+| `/info` | Show session information |
+| `/memory <query>` | Search long-term memory |
+| `/heartbeat` | Trigger manual heartbeat |
+| `/mode [direct\|heartbeat]` | Show/switch mode |
+| `/context` | Show loaded context files |
+| `/daily <text>` | Append to today's daily note |
+| `/files` | List workspace files |
+| `/read <file>` | Read a workspace file |
+| `/cost` | Show token usage |
+| `/quit` | Exit |
+
+## Configuration
 
 ```yaml
 # config.yaml
 backend:
-  type: claude_code  # claude_code, anthropic, ollama
+  type: claude_code           # claude_code, ollama, anthropic
   claude_path: /opt/homebrew/bin/claude
+  ollama_url: http://localhost:11434
+  ollama_model: llama3
 
 workspace:
-  path: ~/.openclaw/workspace
+  path: ~/.libre-claw/workspace
 
 heartbeat:
   enabled: true
   interval_seconds: 30
 
 memory:
-  chromadb_url: http://stargate.local:8420
+  enabled: true
+  chromadb_url: http://localhost:8420
+
+git:
+  enabled: true
+  auto_commit: true
+  remote: origin
 ```
 
-## Usage
+Environment variables override config: `LIBRE_CLAW_BACKEND__TYPE=ollama`
 
-### CLI
+## Backends
 
+### Claude Code CLI (default)
+Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed:
 ```bash
-# Start the TUI
-python -m libre_claw
-
-# Start the API server
-python -m libre_claw --api
-
-# Initialize a new workspace
-python -m libre_claw init /path/to/workspace
+npm install -g @anthropic-ai/claude-code
 ```
 
-### Python API
-
-```python
-from libre_claw import Agent
-from libre_claw.workspace import Workspace
-from libre_claw.backends import ClaudeCodeBackend
-
-# Create backend and workspace
-backend = ClaudeCodeBackend()
-workspace = Workspace("~/my-workspace")
-
-# Create agent
-agent = Agent(backend=backend, workspace=workspace)
-
-# Send a message
-response = agent.handle_message("Hello, how are you?")
-print(response)
+### Ollama (local)
+Requires [Ollama](https://ollama.ai) running:
+```bash
+ollama serve
+ollama pull llama3
+libre-claw --backend ollama
 ```
 
-## Workspace Files
-
-Libre Claw uses markdown files for configuration and context:
-
-- `SOUL.md` — Agent's core identity and purpose
-- `USER.md` — User profile and preferences
-- `IDENTITY.md` — Current session identity
-- `AGENTS.md` — Workspace rules and behavioral guidelines
-- `MEMORY.md` — Long-term memory and curated learnings
-- `HEARTBEAT.md` — Autonomous task checklist
-- `HEARTBEAT-AUDIT.md` — Heartbeat execution log
-- `INFRA.md` — Infrastructure documentation
-- `TOOLS.md` — Tool configurations and notes
+### Anthropic API (planned)
+Direct API access — coming in v0.2.
 
 ## Development
 
 ```bash
 # Install dev dependencies
-uv pip install -e ".[dev]"
+pip install -e ".[dev]"
 
 # Run tests
-pytest
+pytest tests/ -v
 
-# Run with coverage
-pytest --cov=libre_claw
+# Lint
+ruff check libre_claw/
+
+# Type check
+mypy libre_claw/
 ```
 
 ## License
 
-Apache License 2.0 — See [LICENSE](LICENSE) for details.
-
-## Authors
-
-- Robin Kroonen — Founder, Kroonen AI Inc.
+Apache 2.0 — © 2026 Kroonen AI Inc.

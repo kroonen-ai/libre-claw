@@ -10,9 +10,9 @@ __author__ = "Robin Kroonen"
 from .agent import Agent
 from .backends import ClaudeCodeBackend, OllamaBackend, get_backend
 from .config import Config
-from .workspace import Workspace
 from .heartbeat import Heartbeat
 from .memory import MemoryManager
+from .workspace import Workspace
 
 __all__ = [
     "__version__",

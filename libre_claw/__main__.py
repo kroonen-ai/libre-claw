@@ -2,14 +2,13 @@
 
 import argparse
 import asyncio
-import sys
 from pathlib import Path
 
 import uvicorn
 
 from .agent import Agent
 from .api import create_app
-from .backends import get_backend, BackendConfig
+from .backends import BackendConfig, get_backend
 from .config import Config
 from .memory import MemoryManager
 from .tui import start_tui

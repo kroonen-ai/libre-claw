@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .backends import BackendConfig, BaseBackend, Message, get_backend
 from .config import Config
@@ -17,16 +17,12 @@ from .workspace import Workspace
 
 
 class AgentMode(Enum):
-    """Agent operating modes."""
-
-    DIRECT = "direct"  # Direct conversation with user
-    HEARTBEAT = "heartbeat"  # Autonomous heartbeat mode
+    DIRECT = "direct"
+    HEARTBEAT = "heartbeat"
 
 
 @dataclass
 class AgentState:
-    """Current state of the agent."""
-
     mode: AgentMode = AgentMode.DIRECT
     session_id: str = ""
     started_at: Optional[datetime] = None
@@ -35,11 +31,7 @@ class AgentState:
 
 
 class Agent:
-    """Main agent class for Libre Claw.
-
-    Handles message processing, mode switching, and coordinates
-    backend, workspace, heartbeat, and memory components.
-    """
+    """Main agent class for Libre Claw."""
 
     def __init__(
         self,
@@ -48,17 +40,8 @@ class Agent:
         config: Optional[Config] = None,
         memory: Optional[MemoryManager] = None,
     ):
-        """Initialize the agent.
-
-        Args:
-            backend: AI backend instance
-            workspace: Workspace instance
-            config: Configuration
-            memory: Memory manager instance
-        """
         self.config = config or Config()
 
-        # Initialize backend
         if backend is None:
             backend = get_backend(
                 self.config.backend.type,
@@ -71,15 +54,10 @@ class Agent:
             )
         self.backend = backend
 
-        # Initialize workspace
         if workspace is None:
-            workspace = Workspace(
-                path=self.config.workspace.path,
-                config=self.config,
-            )
+            workspace = Workspace(path=self.config.workspace.path, config=self.config)
         self.workspace = workspace
 
-        # Initialize memory
         if memory is None and self.config.memory.enabled:
             memory = MemoryManager(
                 url=self.config.memory.chromadb_url,
@@ -87,14 +65,12 @@ class Agent:
             )
         self.memory = memory
 
-        # Initialize heartbeat
         self.heartbeat = Heartbeat(
             workspace=self.workspace,
             config=self.config.heartbeat,
             on_tick=self._on_heartbeat_tick,
         )
 
-        # Agent state
         self.state = AgentState(
             session_id=str(uuid.uuid4()),
             started_at=datetime.now(),
@@ -106,30 +82,16 @@ class Agent:
         context: Optional[Dict[str, str]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
-        """Handle an incoming message in direct mode.
-
-        Args:
-            message: User message
-            context: Optional additional context
-            tools: Optional tool definitions
-
-        Returns:
-            Agent response
-        """
-        # Switch to direct mode
+        """Handle an incoming message in direct mode."""
         self._set_mode(AgentMode.DIRECT)
 
-        # Load workspace context if not provided
+        # Load mode-aware context
         if context is None:
-            context = self.workspace.get_context()
+            context = self.workspace.get_context(mode="direct")
 
-        # Build system prompt from workspace
-        system_prompt = self._build_system_prompt(context)
-
-        # Add user message to history
+        system_prompt = self._build_system_prompt(context, is_heartbeat=False)
         self.backend.add_message(Message(role="user", content=message))
 
-        # Get completion
         response = self.backend.complete(
             prompt=message,
             system_prompt=system_prompt,
@@ -137,106 +99,71 @@ class Agent:
             tools=tools,
         )
 
-        # Add response to history
         self.backend.add_message(Message(role="assistant", content=response.content))
-
-        # Update state
         self.state.message_count += 1
         self.state.last_activity = datetime.now()
 
         return response.content
 
-    def handle_heartbeat(
-        self,
-        prompt: Optional[str] = None,
-    ) -> str:
-        """Handle a heartbeat poll in heartbeat mode.
-
-        Args:
-            prompt: Optional custom heartbeat prompt
-
-        Returns:
-            Heartbeat response
-        """
-        # Switch to heartbeat mode
+    def handle_heartbeat(self, prompt: Optional[str] = None) -> str:
+        """Handle a heartbeat poll in heartbeat mode."""
         self._set_mode(AgentMode.HEARTBEAT)
 
-        # Load workspace context
-        context = self.workspace.get_context()
-
-        # Build heartbeat prompt
+        context = self.workspace.get_context(mode="heartbeat")
         hb_prompt = prompt or self.config.heartbeat.prompt
 
-        # Read HEARTBEAT.md for tasks
+        # Include HEARTBEAT.md content in the prompt
         hb_content = self.workspace.read("HEARTBEAT.md")
         if hb_content:
             hb_prompt += f"\n\n# HEARTBEAT.md\n{hb_content}"
 
-        # Build system prompt
         system_prompt = self._build_system_prompt(context, is_heartbeat=True)
 
-        # Get completion
         response = self.backend.complete(
             prompt=hb_prompt,
             system_prompt=system_prompt,
             context=context,
         )
 
-        # Update state
         self.state.last_activity = datetime.now()
-
         return response.content
 
     def heartbeat_tick(self) -> str:
-        """Execute a heartbeat tick manually.
-
-        Returns:
-            Response from heartbeat
-        """
         return self.handle_heartbeat()
 
     def _on_heartbeat_tick(self) -> Any:
-        """Internal callback for heartbeat ticks."""
         return self.handle_heartbeat()
 
     def _set_mode(self, mode: AgentMode) -> None:
-        """Switch agent mode.
-
-        Args:
-            mode: New mode
-        """
         if self.state.mode != mode:
             self.state.mode = mode
-            print(f"Agent mode switched to: {mode.value}")
 
     def _build_system_prompt(
         self,
         context: Dict[str, str],
         is_heartbeat: bool = False,
     ) -> str:
-        """Build system prompt from workspace context.
-
-        Args:
-            context: Workspace context files
-            is_heartbeat: Whether this is a heartbeat prompt
-
-        Returns:
-            Formatted system prompt
-        """
+        """Build system prompt from workspace context."""
         parts = []
 
-        # Add identity and rules
         if "SOUL.md" in context:
             parts.append(f"# SOUL\n{context['SOUL.md']}")
-
         if "AGENTS.md" in context:
             parts.append(f"# RULES\n{context['AGENTS.md']}")
-
-        # Add user context
         if "USER.md" in context:
             parts.append(f"# USER\n{context['USER.md']}")
+        if "IDENTITY.md" in context:
+            parts.append(f"# IDENTITY\n{context['IDENTITY.md']}")
+        if "MEMORY.md" in context:
+            parts.append(f"# MEMORY\n{context['MEMORY.md']}")
+        if "HEARTBEAT.md" in context:
+            parts.append(f"# HEARTBEAT\n{context['HEARTBEAT.md']}")
 
-        # Add mode-specific instructions
+        # Daily note context
+        for key, val in context.items():
+            if key.startswith("memory/"):
+                parts.append(f"# {key}\n{val}")
+
         if is_heartbeat:
             parts.append(
                 "\n# MODE\nYou are in HEARTBEAT MODE. Be proactive. Maintain systems. "
@@ -251,11 +178,9 @@ class Agent:
         return "\n\n".join(parts)
 
     async def start_heartbeat(self) -> None:
-        """Start the heartbeat loop."""
         await self.heartbeat.start()
 
     async def stop_heartbeat(self) -> None:
-        """Stop the heartbeat loop."""
         await self.heartbeat.stop()
 
     def search_memory(
@@ -264,24 +189,9 @@ class Agent:
         memory_type: Optional[str] = None,
         limit: int = 5,
     ) -> List[Dict[str, Any]]:
-        """Search long-term memory.
-
-        Args:
-            query: Search query
-            memory_type: Optional type filter
-            limit: Maximum results
-
-        Returns:
-            List of matching memories
-        """
         if not self.memory:
             return []
-
-        return self.memory.recall(
-            query=query,
-            memory_type=memory_type,
-            limit=limit,
-        )
+        return self.memory.recall(query=query, memory_type=memory_type, limit=limit)
 
     def remember(
         self,
@@ -290,33 +200,13 @@ class Agent:
         importance: float = 0.5,
         tags: Optional[List[str]] = None,
     ) -> bool:
-        """Store a memory.
-
-        Args:
-            content: Memory content
-            memory_type: Type of memory
-            importance: Importance 0-1
-            tags: Optional tags
-
-        Returns:
-            True if successful
-        """
         if not self.memory:
             return False
-
         return self.memory.remember(
-            content=content,
-            memory_type=memory_type,
-            importance=importance,
-            tags=tags,
+            content=content, memory_type=memory_type, importance=importance, tags=tags,
         )
 
     def get_session_info(self) -> Dict[str, Any]:
-        """Get current session information.
-
-        Returns:
-            Session info dictionary
-        """
         return {
             "session_id": self.state.session_id,
             "mode": self.state.mode.value,

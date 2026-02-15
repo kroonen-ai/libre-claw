@@ -1,27 +1,16 @@
-# HEARTBEAT.md - Autonomous Task Checklist
+# HEARTBEAT.md
 
-Tasks to execute during heartbeat mode. Keep this small to limit token burn.
+Checklist for autonomous heartbeat ticks.
+Add tasks here that should run periodically.
 
----
+## Checks
 
-## Every Heartbeat
+- [ ] Example: Check service health
+- [ ] Example: Sync workspace to git
+- [ ] Example: Check for new messages
 
-- [ ] Check `memory/` for today's file — create if missing
-- [ ] Review any pending tasks in IDENTITY.md
+## Rules
 
-## Periodic (Every Few Hours)
-
-- [ ] Git sync workspace if changes exist
-- [ ] Review and update MEMORY.md with recent learnings
-
-## Daily
-
-- [ ] Create daily memory file `memory/YYYY-MM-DD.md`
-- [ ] Review yesterday's notes for anything worth adding to MEMORY.md
-
-## Notes
-
-- If nothing needs attention, reply `HEARTBEAT_OK`
-- Don't infer tasks from prior conversations
-- Don't repeat completed tasks
-- Credentials must be read from files, never guessed
+- Run one check per heartbeat to minimize token burn
+- Report if actionable, otherwise reply HEARTBEAT_OK
+- Update timestamps in heartbeat-state.json after each check

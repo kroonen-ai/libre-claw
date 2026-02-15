@@ -1,5 +1,5 @@
-# HEARTBEAT-AUDIT.md - Heartbeat Execution Log
+# Heartbeat Audit Log
 
-Automatic log of heartbeat executions. Each entry records timestamp, status, and details.
+Automated log of heartbeat tick results.
 
 ---

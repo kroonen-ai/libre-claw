@@ -4,7 +4,6 @@ Provides async heartbeat loop with cadence checks for autonomous task execution.
 """
 
 import asyncio
-from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from .config import HeartbeatConfig

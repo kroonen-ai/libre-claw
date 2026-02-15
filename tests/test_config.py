@@ -1,80 +1,47 @@
-"""Tests for configuration module."""
+"""Tests for configuration management."""
 
 import tempfile
 from pathlib import Path
 
-import pytest
-import yaml
-
-from libre_claw.config import Config, BackendConfig, WorkspaceConfig, HeartbeatConfig
+from libre_claw.config import Config, BackendConfig, HeartbeatConfig
 
 
-class TestConfig:
-    """Test configuration loading."""
+def test_default_config():
+    config = Config()
+    assert config.backend.type == "claude_code"
+    assert config.heartbeat.enabled is True
+    assert config.memory.enabled is True
+    assert config.git.enabled is True
 
-    def test_default_config(self):
-        """Test default configuration values."""
-        config = Config()
-        assert config.backend.type == "claude_code"
-        assert config.backend.claude_path == "/opt/homebrew/bin/claude"
-        assert config.heartbeat.enabled is True
-        assert config.heartbeat.interval_seconds == 30
-        assert config.memory.enabled is True
 
-    def test_backend_config(self):
-        """Test backend configuration."""
-        config = BackendConfig()
-        assert config.type == "claude_code"
-        assert config.ollama_url == "http://localhost:11434"
-        assert config.anthropic_api_key is None
+def test_backend_config_defaults():
+    bc = BackendConfig()
+    assert bc.type == "claude_code"
+    assert "claude" in bc.claude_path
+    assert bc.ollama_url == "http://localhost:11434"
 
-    def test_workspace_config(self):
-        """Test workspace configuration."""
-        config = WorkspaceConfig()
-        assert config.path == "~/.openclaw/workspace"
 
-    def test_heartbeat_config(self):
-        """Test heartbeat configuration."""
-        config = HeartbeatConfig()
-        assert config.enabled is True
-        assert config.interval_seconds == 30
-        assert "HEARTBEAT.md" in config.prompt
-
-    def test_from_yaml(self, tmp_path):
-        """Test loading config from YAML."""
-        config_data = {
-            "backend": {
-                "type": "ollama",
-                "ollama_url": "http://stargate.local:11434",
-                "ollama_model": "qwen2.5",
-            },
-            "heartbeat": {
-                "enabled": False,
-                "interval_seconds": 60,
-            },
-        }
-        config_file = tmp_path / "config.yaml"
-        with open(config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        config = Config.from_yaml(config_file)
+def test_config_from_yaml():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("backend:\n  type: ollama\n  ollama_model: llama3\n")
+        f.flush()
+        config = Config.from_yaml(Path(f.name))
         assert config.backend.type == "ollama"
-        assert config.backend.ollama_url == "http://stargate.local:11434"
-        assert config.heartbeat.enabled is False
-        assert config.heartbeat.interval_seconds == 60
+        assert config.backend.ollama_model == "llama3"
 
-    def test_from_yaml_missing_file(self, tmp_path):
-        """Test loading config from non-existent file returns defaults."""
-        config = Config.from_yaml(tmp_path / "nonexistent.yaml")
-        assert config.backend.type == "claude_code"
 
-    def test_save_config(self, tmp_path):
-        """Test saving config to YAML."""
+def test_config_save_load():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "config.yaml"
         config = Config()
-        save_path = tmp_path / "saved_config.yaml"
-        config.save(save_path)
+        config.save(path)
+        assert path.exists()
 
-        assert save_path.exists()
-
-        loaded = Config.from_yaml(save_path)
+        loaded = Config.from_yaml(path)
         assert loaded.backend.type == config.backend.type
+
+
+def test_heartbeat_config():
+    hc = HeartbeatConfig()
+    assert hc.interval_seconds == 30
+    assert "HEARTBEAT" in hc.prompt

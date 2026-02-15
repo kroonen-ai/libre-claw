@@ -3,7 +3,6 @@
 Uses httpx to connect to local Ollama API.
 """
 
-import json
 from typing import Any, Dict, List, Optional
 
 import httpx

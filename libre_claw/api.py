@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from .agent import Agent
-from .backends import get_backend, BackendConfig
+from .backends import BackendConfig, get_backend
 from .config import Config
 from .memory import MemoryManager
 from .workspace import Workspace
