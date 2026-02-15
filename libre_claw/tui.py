@@ -307,6 +307,19 @@ class TUI:
                 elif backend == "ollama":
                     self.config.backend.ollama_model = model
                 elif backend == "codex_cli":
+                    codex_bin = self.config.backend.codex_path or "codex"
+                    check = subprocess.run(
+                        [codex_bin, "exec", "--skip-git-repo-check", "--json", "-m", model, "Reply with exactly: ok"],
+                        capture_output=True,
+                        text=True,
+                        timeout=45,
+                    )
+                    if check.returncode != 0:
+                        err = (check.stderr or "").strip().splitlines()
+                        tail = err[-1] if err else "model check failed"
+                        self.console.print(f"  [error]Codex model rejected: {tail}[/error]")
+                        self.console.print("  [system]Model not saved. Try /model openai-codex/gpt-5.3-codex[/system]")
+                        return True
                     self.config.backend.codex_model = model
                 else:
                     self.console.print(f"  [error]Cannot set model for backend: {backend}[/error]")
