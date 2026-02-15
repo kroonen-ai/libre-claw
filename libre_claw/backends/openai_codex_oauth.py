@@ -125,6 +125,7 @@ class OpenAICodexOAuthBackend(BaseBackend):
 
         try:
             content_parts: List[str] = []
+            completed_payload: Optional[Dict[str, Any]] = None
             with self._client.stream(
                 "POST",
                 endpoint,
@@ -171,11 +172,30 @@ class OpenAICodexOAuthBackend(BaseBackend):
                             txt = event.get("text")
                             if txt:
                                 content_parts.append(str(txt))
+                        elif et == "response.completed":
+                            completed_payload = event.get("response") if isinstance(event.get("response"), dict) else event
                         elif et in ("error", "response.failed"):
                             msg = event.get("message") or event.get("error") or event
                             return Response(content=f"Error: {msg}", stop_reason="error")
 
             content = "".join(content_parts).strip()
+            if not content and completed_payload:
+                try:
+                    output = completed_payload.get("output") or []
+                    texts: List[str] = []
+                    for item in output:
+                        if not isinstance(item, dict):
+                            continue
+                        if item.get("type") != "message":
+                            continue
+                        for part in (item.get("content") or []):
+                            if not isinstance(part, dict):
+                                continue
+                            if part.get("type") == "output_text" and part.get("text"):
+                                texts.append(str(part.get("text")))
+                    content = "\n".join(t for t in texts if t).strip()
+                except Exception:
+                    pass
             if not content:
                 return Response(content="Error: Codex returned no assistant text", stop_reason="error")
 
