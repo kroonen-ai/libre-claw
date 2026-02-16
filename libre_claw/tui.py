@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from rich import box
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -75,6 +76,9 @@ class TUI:
     AUTO_APPLY_MAX_ATTEMPTS = 3
     PASTE_SUMMARY_MIN_LINES = 3
     PASTE_SUMMARY_MIN_CHARS = 150
+    COMPOSER_HINT = " Composer · Enter=send · Shift+Enter/Ctrl+J=new line · Ctrl+U=clear "
+    COMPOSER_MIN_WIDTH = 56
+    COMPOSER_MAX_WIDTH = 120
     CONTEXT_HINT_MODEL_WINDOWS = [
         ("gpt-5", 200000),
         ("gpt-4.1", 200000),
@@ -126,34 +130,65 @@ class TUI:
 
     def _render_banner(self) -> None:
         """Render the startup banner."""
-        banner = Text()
-        banner.append("╔══════════════════════════════════════╗\n", style="accent")
-        banner.append("║         ", style="accent")
-        banner.append("LIBRE CLAW", style="bold cyan")
-        banner.append(" v0.1.0", style="dim")
-        banner.append("         ║\n", style="accent")
-        banner.append("║   ", style="accent")
-        banner.append("Agentic AI Framework", style="green")
-        banner.append("              ║\n", style="accent")
-        banner.append("║   ", style="accent")
-        banner.append("Kroonen AI Inc.", style="dim")
-        banner.append("                   ║\n", style="accent")
-        banner.append("╚══════════════════════════════════════╝", style="accent")
-        self.console.print(banner)
-        self.console.print()
-
-        # Session info bar
         info = self.agent.get_session_info()
-        bar = Text()
-        bar.append("  ● ", style="green")
-        bar.append(f"Backend: {info['backend']}", style="info")
-        bar.append("  │  ", style="dim")
-        bar.append(f"Mode: {info['mode']}", style="info")
-        bar.append("  │  ", style="dim")
-        bar.append(f"{self._format_context_usage()}", style="info")
-        bar.append("  │  ", style="dim")
-        bar.append(f"Workspace: {info['workspace']}", style="info")
-        self.console.print(bar)
+        logo_left = [
+            "                   ",
+            "█░░░ █ █▄▄▄ █▄▄▄ █▀▀▄",
+            "█░░░ █ █▀▀▄ █▀▀▀ █▄▄▀",
+            "█▄▄█ █ █▄▄█ █▄▄▄ █ ▀▄",
+        ]
+        logo_right = [
+            "                 ▄     ",
+            " █▀▀ █░░░ █▀▀█ █░░░█  ",
+            " █░░ █░░░ █▄▄█ ▀█▄█▀  ",
+            " ▀▀▀ ▀▀▀▀ ▀░░▀ ░▀░▀   ",
+        ]
+
+        logo = Text()
+        for left, right in zip(logo_left, logo_right):
+            logo.append(left, style="dim")
+            logo.append(" ")
+            logo.append(right, style="bold cyan")
+            logo.append("\n")
+
+        status = Text()
+        status.append("● ", style="green")
+        status.append(f"Backend: {info['backend']}", style="info")
+        status.append("  │  ", style="dim")
+        status.append(f"Mode: {info['mode']}", style="info")
+        status.append("  │  ", style="dim")
+        status.append(self._format_context_usage(), style="info")
+
+        workspace = Text()
+        workspace.append("Workspace: ", style="dim")
+        workspace.append(str(info["workspace"]), style="info")
+
+        hint = Text()
+        hint.append("Type ", style="dim")
+        hint.append("/help", style="command")
+        hint.append(" for commands, ", style="dim")
+        hint.append("/quit", style="command")
+        hint.append(" to exit", style="dim")
+
+        body = Text()
+        body.append_text(logo)
+        body.append("\n")
+        body.append_text(status)
+        body.append("\n")
+        body.append_text(workspace)
+        body.append("\n")
+        body.append_text(hint)
+
+        self.console.print(
+            Panel(
+                body,
+                border_style="cyan",
+                box=box.DOUBLE,
+                padding=(1, 2),
+                title="[bold cyan]LIBRE CLAW[/bold cyan] [dim]v0.1.0[/dim]",
+                subtitle="[dim]Agentic terminal workspace[/dim]",
+            )
+        )
         self.console.print()
 
         # Check backend availability
@@ -167,8 +202,20 @@ class TUI:
                 )
                 self.console.print()
 
-        self.console.print("  [dim]Type /help for commands, /quit to exit[/dim]")
-        self.console.print()
+    def _composer_width(self) -> int:
+        cols = shutil.get_terminal_size((100, 24)).columns
+        return max(self.COMPOSER_MIN_WIDTH, min(cols - 2, self.COMPOSER_MAX_WIDTH))
+
+    def _composer_top_border(self) -> str:
+        width = self._composer_width()
+        hint = self.COMPOSER_HINT
+        if len(hint) > width:
+            hint = hint[: max(0, width - 1)] + ("…" if width > 0 else "")
+        fill = max(0, width - len(hint))
+        return f"╭{hint}{'─' * fill}╮"
+
+    def _composer_bottom_border(self) -> str:
+        return f"╰{'─' * self._composer_width()}╯"
 
     def _handle_command(self, command: str) -> bool:
         """Handle a slash command. Returns True if should continue running."""
@@ -2139,10 +2186,11 @@ class TUI:
             Syntax(snippet or "(no preview)", language, line_numbers=False, word_wrap=True),
             title=title,
             border_style="bright_blue",
+            box=box.ROUNDED,
         )
 
     def _format_input_line_prefix(self, line_no: int = 0) -> str:
-        return " > "
+        return "│ "
 
     @staticmethod
     def _normalize_file_token(token: str) -> str:
@@ -2229,10 +2277,11 @@ class TUI:
                     paste_markers.pop(marker, None)
 
         try:
+            self.console.print(f"[dim]{self._composer_top_border()}[/dim]")
             tty.setraw(fd)
             sys.stdout.write("\x1b[?2004h")
             sys.stdout.flush()
-            sys.stdout.write(f"\n{self._format_input_line_prefix()}")
+            sys.stdout.write(self._format_input_line_prefix())
             sys.stdout.flush()
 
             while True:
@@ -2339,6 +2388,7 @@ class TUI:
             sys.stdout.write("\x1b[?2004l")
             sys.stdout.write("\n")
             sys.stdout.flush()
+            self.console.print(f"[dim]{self._composer_bottom_border()}[/dim]")
 
     def run(self) -> None:
         """Run the TUI main loop."""
@@ -2609,6 +2659,7 @@ class TUI:
                         Markdown(response),
                         title=f"[assistant]Assistant[/assistant] [dim]({elapsed:.1f}s)[/dim]",
                         border_style="green",
+                        box=box.ROUNDED,
                         padding=(1, 2),
                     ))
 
