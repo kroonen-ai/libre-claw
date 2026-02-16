@@ -1,18 +1,45 @@
 # HEARTBEAT.md
 
-Checklist for autonomous heartbeat ticks.
-Add tasks here that should run periodically.
+Autonomous heartbeat contract for Libre Claw.
 
-## Checks
+## Goal
 
-- [ ] Example: Check service health
-- [ ] Example: Sync workspace to git
-- [ ] Example: Check for new messages
+Each heartbeat tick must produce one real, verifiable workspace improvement.
 
-## Rules
+## Tick Contract (required every tick)
 
-- Continue until no more work is found or the configured proactive limit is reached.
-- Report actions through structured JSON plan; when complete and verified, set done: true.
-- "Alive" means proactive and autonomous loop execution: plan → execute → verify → continue until done, then report NO further action.
-- If useful, update memory by including a MEMORY_UPDATE: entry in your output
-- Update timestamps in heartbeat-state.json after each check
+1. Pick exactly one action from the deterministic rotation list.
+2. Execute exactly one concrete action using either:
+   - an `apply_patch` / `diff` block, or
+   - a `bash` block.
+3. Verify the action with minimal proof (command output or file delta signal).
+4. Append exactly one concise audit line to `HEARTBEAT-AUDIT.md`:
+   - `- <timestamp> | action:<action-id> | result:<short-result>`
+5. Update `HEARTBEAT-ROTATION.json`.
+6. Return a structured JSON plan with `"done": true`.
+
+Hard rules:
+- Do not return `NO_REPLY` if an applicable action exists.
+- Do not repeat the same `action-id` twice in a row unless every other action is inapplicable.
+- Keep output short and operational.
+
+## Deterministic Rotation
+
+Action order:
+1. `inbox-triage`
+2. `infra-placeholder-tracking`
+3. `summary-refresh`
+4. `audit-compact`
+5. `status-refresh`
+
+State file:
+- `HEARTBEAT-ROTATION.json`
+
+Suggested shape:
+```json
+{
+  "last_action_id": "summary-refresh",
+  "last_tick": "2026-02-16T00:00:00Z",
+  "enforced_retry": false
+}
+```

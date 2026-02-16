@@ -43,3 +43,4 @@ config.yaml
 
 # Local default workspace
 .workspace/
+.workspace_test/

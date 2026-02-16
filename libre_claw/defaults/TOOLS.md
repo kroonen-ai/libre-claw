@@ -1,10 +1,21 @@
 # TOOLS.md - Local Tool Notes
 
-Environment-specific notes: camera names, SSH hosts, voice preferences, etc.
+Environment-specific notes for command/tool operation.
 
-## What Goes Here
+## Runtime
 
-- Device nicknames and IPs
-- SSH hosts and aliases
-- API endpoints and ports
-- Preferred settings for local tools
+- Preferred shell: (bash/zsh)
+- Preferred package manager: (apt/brew/pip/etc)
+- Container engine: (docker/podman)
+- Workspace path: (absolute path)
+
+## Hosts and Access
+
+- SSH aliases:
+- Local services:
+- API endpoints:
+
+## Guardrails
+
+- Keep destructive commands gated by explicit confirmation.
+- Prefer deterministic, non-interactive commands in automation.

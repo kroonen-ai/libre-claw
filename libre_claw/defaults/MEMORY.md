@@ -1,8 +1,8 @@
 # MEMORY.md - Long-Term Memory
 
-Curated memories, lessons learned, and important context.
-Updated periodically from daily notes.
+Curated memories, decisions, and persistent context.
+Updated from daily notes and validated outcomes.
 
 ---
 
-_No memories yet. Start a conversation and use `/daily` to capture notes._
+No curated memories yet.
