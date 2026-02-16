@@ -1689,6 +1689,9 @@ class Agent:
             stripped = raw_line.strip()
             if not stripped:
                 continue
+            if re.match(r"^(if|then|else|elif|fi|for|while|until|do|done|case|esac|\{|\})\b", stripped):
+                safe_lines.append(raw_line)
+                continue
 
             segs = re.split(r"\s*(?:&&|\|\||;|\|)\s*", stripped)
             safe_segments: List[str] = []

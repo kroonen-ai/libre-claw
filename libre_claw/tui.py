@@ -358,7 +358,7 @@ class TUI:
 
                 interval = payload.get("interval_seconds")
                 if isinstance(interval, int):
-                    self.console.print(f"  [dim]Interval: {interval}s[/dim]")
+                    self.console.print(f"  [dim]Interval: {self._format_interval_label(interval)}[/dim]")
                 hb_state = payload.get("heartbeat_state")
                 if isinstance(hb_state, dict):
                     last_run = hb_state.get("last_run_at")
@@ -1743,6 +1743,9 @@ class TUI:
                 in_here_doc = True
                 here_marker = heredoc.group(1)
                 continue
+            if re.match(r"^(if|then|else|elif|fi|for|while|until|do|done|case|esac|\{|\})\b", stripped):
+                safe_lines.append(line)
+                continue
 
             segments = re.split(r"\s*(?:&&|\|\||;|\|)\s*", line)
             safe_segments: List[str] = []
@@ -2119,6 +2122,15 @@ class TUI:
             h = seconds // 3600
             m = (seconds % 3600) // 60
             return f"{h}h {m}m"
+
+    @staticmethod
+    def _format_interval_label(seconds: int) -> str:
+        s = max(1, int(seconds))
+        if s % 3600 == 0:
+            return f"{s // 3600}h"
+        if s % 60 == 0:
+            return f"{s // 60}m"
+        return f"{s}s"
 
     def _read_with_timeout(self, fd: int, timeout: float) -> Optional[bytes]:
         timeout = max(0.0, timeout)
