@@ -43,7 +43,7 @@ def test_config_save_load():
 
 def test_heartbeat_config():
     hc = HeartbeatConfig()
-    assert hc.interval_seconds == 1800
+    assert hc.interval_seconds == "30m"
     assert hc.proactive_iterations == 3
     assert hc.auto_apply_actions is True
     assert "HEARTBEAT" in hc.prompt
