@@ -182,7 +182,7 @@ are accepted and normalized to `ollama` at load time.
 - `/clear`
 - `/cancel`
 - `/cost`
-- `/model <name>`
+- `/model [provider:]<name>|list`
 - `/provider anthropic|openai|openrouter|ollama`
 - `/save [name]`
 - `/load <name>`
@@ -205,6 +205,9 @@ Useful keybindings:
 - `Esc` or `/cancel` cancels active generation/tool execution
 - `Ctrl+C` exits the app
 - `Tab` completes the first slash-command suggestion
+- `Tab` after `/model ` completes known provider/model presets. Use
+  `/model <provider>:<name>` to switch provider and model together. If the
+  provider needs a key, Libre Claw points you to `libre-claw auth set-key`.
 
 The file explorer has an `Up` control. Moving the explorer root also updates the
 agent working directory, so tools follow the directory you are browsing.

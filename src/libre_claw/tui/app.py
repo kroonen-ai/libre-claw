@@ -69,7 +69,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/clear", "/clear", "Clear transcript and session history"),
     SlashCommand("/cancel", "/cancel", "Cancel active generation or tool execution"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
-    SlashCommand("/model", "/model <name>", "Switch Anthropic model for new turns"),
+    SlashCommand("/model", "/model [provider:]<name>|list", "Choose or list models for new turns"),
     SlashCommand("/provider", "/provider anthropic|openai|openrouter|ollama", "Switch provider for new turns"),
     SlashCommand("/save", "/save [name]", "Save the current session"),
     SlashCommand("/load", "/load <name>", "Load a saved session"),
@@ -79,6 +79,33 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/tools", "/tools expand|collapse|toggle <index>", "Control tool call details"),
     SlashCommand("/exit", "/exit", "Exit Libre Claw"),
 )
+
+SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "ollama")
+MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
+    "anthropic": (
+        ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+        ("claude-opus-4-20250918", "Claude Opus 4"),
+        ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+    ),
+    "openai": (
+        ("gpt-4o", "GPT-4o"),
+        ("gpt-4.1", "GPT-4.1"),
+        ("o3", "o3 reasoning"),
+        ("o4-mini", "o4-mini reasoning"),
+        ("codex-mini", "Codex Mini"),
+    ),
+    "openrouter": (
+        ("openrouter/auto", "OpenRouter automatic routing"),
+        ("anthropic/claude-sonnet-4.5", "Claude through OpenRouter"),
+        ("openai/gpt-4o", "GPT-4o through OpenRouter"),
+        ("moonshotai/kimi-k2", "Kimi K2 through OpenRouter"),
+    ),
+    "ollama": (
+        ("kimi-k2.6:cloud", "Kimi K2.6 on Ollama Cloud"),
+        ("gpt-oss:120b", "GPT OSS 120B on Ollama"),
+        ("qwen3:32b", "Qwen3 local daemon"),
+    ),
+}
 
 
 PERMISSION_KEYS: dict[str, PermissionResolution] = {
@@ -749,19 +776,36 @@ class LibreClawApp(App[None]):
 
     def _set_model(self, model: str) -> None:
         if not model:
-            self._append_system("Usage: /model <name>")
+            self._append_system(_model_help_text(self.config))
             return
-        self.config = _replace_general(self.config, default_model=model)
+
+        parsed = _parse_model_argument(model, self.config.general.default_provider)
+        if parsed is None:
+            self._append_system(_model_help_text(self.config))
+            return
+
+        provider, selected_model = parsed
+        self.config = _replace_general(self.config, default_provider=provider, default_model=selected_model)
         self._rebuild_agent()
         self._update_status()
-        self._append_system(f"Model set to {model}.")
+        if self.provider_error:
+            self._append_system(
+                f"Model set to {provider}:{selected_model}, but provider setup is incomplete.\n"
+                f"{self.provider_error}"
+            )
+        else:
+            self._append_system(f"Model set to {provider}:{selected_model}.")
 
     def _set_provider(self, provider: str) -> None:
         if not provider:
-            self._append_system("Usage: /provider anthropic|openai|openrouter|ollama")
+            self._append_system(_provider_help_text(self.config))
             return
+        provider = provider.strip().lower()
         if provider == "local":
             provider = "ollama"
+        if provider not in SUPPORTED_PROVIDERS:
+            self._append_system(_provider_help_text(self.config))
+            return
         self.config = _replace_general(self.config, default_provider=provider)
         self._rebuild_agent()
         self._update_status()
@@ -1100,13 +1144,40 @@ class LibreClawApp(App[None]):
 
     def _slash_suggestion_matches(self, text: str) -> list[SlashCommand]:
         stripped = text.lstrip()
-        if not stripped.startswith("/") or " " in stripped:
+        if not stripped.startswith("/"):
+            return []
+        argument_suggestions = self._slash_argument_suggestions(stripped)
+        if argument_suggestions:
+            return argument_suggestions
+        if " " in stripped:
             return []
         query = stripped.lower()
         matches = [command for command in SLASH_COMMANDS if command.name.startswith(query)]
         if matches:
             return matches[:6]
         return [command for command in SLASH_COMMANDS if query in command.name.lower()][:6]
+
+    def _slash_argument_suggestions(self, text: str) -> list[SlashCommand]:
+        lowered = text.lower()
+        if lowered.startswith("/provider "):
+            query = lowered.removeprefix("/provider ").strip()
+            return [
+                SlashCommand(f"/provider {provider}", f"/provider {provider}", f"Switch to {provider}")
+                for provider in SUPPORTED_PROVIDERS
+                if not query or provider.startswith(query)
+            ][:6]
+
+        if lowered.startswith("/model "):
+            query = lowered.removeprefix("/model ").strip()
+            suggestions = _model_suggestion_commands(self.config)
+            if not query:
+                return suggestions[:6]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+        return []
 
     def _slash_suggestion_text(self, suggestions: list[SlashCommand]) -> str:
         return "\n".join(f"{command.usage:<30} {command.description}" for command in suggestions)
@@ -1115,8 +1186,10 @@ class LibreClawApp(App[None]):
         if not self._slash_suggestions:
             return False
         stripped = text.lstrip()
-        if not stripped.startswith("/") or " " in stripped:
+        if not stripped.startswith("/"):
             return False
+        if " " in stripped:
+            return stripped.lower() not in {command.name.lower() for command in self._slash_suggestions}
         return all(stripped.lower() != command.name for command in SLASH_COMMANDS)
 
     def _accept_first_suggestion(self, input_widget: Input) -> None:
@@ -1128,6 +1201,8 @@ class LibreClawApp(App[None]):
         self._update_slash_suggestions(input_widget.value)
 
     def _completion_text(self, command: SlashCommand) -> str:
+        if " " in command.name:
+            return command.name
         return command.name + (" " if _usage_requires_argument(command.usage) else "")
 
     def _cost_text(self) -> str:
@@ -1200,6 +1275,79 @@ def _effective_model(config: LibreClawConfig) -> str:
     if config.general.default_model in other_defaults:
         return provider_default
     return config.general.default_model or provider_default
+
+
+def _parse_model_argument(argument: str, current_provider: str) -> tuple[str, str] | None:
+    cleaned = argument.strip()
+    if not cleaned or cleaned.lower() == "list":
+        return None
+
+    provider = "ollama" if current_provider.lower() == "local" else current_provider.lower()
+    model = cleaned
+    parts = cleaned.split(maxsplit=1)
+    if len(parts) == 2 and _canonical_tui_provider(parts[0]) in SUPPORTED_PROVIDERS:
+        provider = _canonical_tui_provider(parts[0])
+        model = parts[1].strip()
+    else:
+        prefix, separator, rest = cleaned.partition(":")
+        canonical_prefix = _canonical_tui_provider(prefix)
+        if separator and canonical_prefix in SUPPORTED_PROVIDERS and rest.strip():
+            provider = canonical_prefix
+            model = rest.strip()
+
+    if not model:
+        return None
+    return provider, model
+
+
+def _canonical_tui_provider(provider: str) -> str:
+    normalized = provider.strip().lower()
+    if normalized == "local":
+        return "ollama"
+    return normalized
+
+
+def _model_help_text(config: LibreClawConfig) -> str:
+    provider = _canonical_tui_provider(config.general.default_provider)
+    current_model = _effective_model(config)
+    lines = [
+        f"Current model: {provider}:{current_model}",
+        "Use `/model <name>` for the current provider or `/model <provider>:<name>` to switch both.",
+        "Use `Tab` after `/model ` to complete a suggested model.",
+        "Provider key setup stays in the secure CLI/keyring path:",
+    ]
+    lines.extend(f"- libre-claw auth set-key {name}" for name in SUPPORTED_PROVIDERS if name != "ollama")
+    lines.append("- libre-claw auth set-key ollama  # required for Ollama Cloud")
+    lines.append("")
+    lines.append("Suggested models:")
+    for suggestion in _model_suggestion_commands(config):
+        lines.append(f"- {suggestion.name} - {suggestion.description}")
+    return "\n".join(lines)
+
+
+def _provider_help_text(config: LibreClawConfig) -> str:
+    provider = _canonical_tui_provider(config.general.default_provider)
+    lines = [
+        f"Current provider: {provider}",
+        "Use `/provider anthropic|openai|openrouter|ollama`, or use `/model <provider>:<name>` to switch both.",
+    ]
+    return "\n".join(lines)
+
+
+def _model_suggestion_commands(config: LibreClawConfig) -> list[SlashCommand]:
+    current_provider = _canonical_tui_provider(config.general.default_provider)
+    ordered_providers = [current_provider, *(provider for provider in SUPPORTED_PROVIDERS if provider != current_provider)]
+    suggestions: list[SlashCommand] = []
+    for provider in ordered_providers:
+        for model, label in MODEL_PRESETS.get(provider, ()):
+            suggestions.append(
+                SlashCommand(
+                    name=f"/model {provider}:{model}",
+                    usage=f"/model {provider}:{model}",
+                    description=label,
+                )
+            )
+    return suggestions
 
 
 def _usage_requires_argument(usage: str) -> bool:

@@ -15,6 +15,8 @@ from libre_claw.tui.app import (
     STARTUP_ASCII,
     TranscriptEntry,
     _effective_model,
+    _model_help_text,
+    _parse_model_argument,
     _replace_general,
     _startup_message,
 )
@@ -103,6 +105,41 @@ def test_slash_suggestion_completion(monkeypatch, tmp_path: Path) -> None:
     assert app._completion_text(help_command) == "/help"
     assert app._should_complete_on_submit("/mo") is True
     assert app._should_complete_on_submit("/model") is False
+
+
+def test_model_argument_parses_provider_and_colon_model() -> None:
+    assert _parse_model_argument("kimi-k2.6:cloud", "ollama") == ("ollama", "kimi-k2.6:cloud")
+    assert _parse_model_argument("openrouter:openai/gpt-4o", "ollama") == ("openrouter", "openai/gpt-4o")
+    assert _parse_model_argument("openrouter openai/gpt-4o", "ollama") == ("openrouter", "openai/gpt-4o")
+    assert _parse_model_argument("list", "ollama") is None
+
+
+def test_model_help_includes_enrollment_commands(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+
+    help_text = _model_help_text(config)
+
+    assert "Current model: anthropic:claude-sonnet-4-6" in help_text
+    assert "libre-claw auth set-key openrouter" in help_text
+    assert "/model openrouter:openrouter/auto" in help_text
+
+
+def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    suggestions = app._slash_suggestion_matches("/model openr")
+    first = suggestions[0]
+
+    assert first.name == "/model openrouter:openrouter/auto"
+    assert app._completion_text(first) == "/model openrouter:openrouter/auto"
+    app._slash_suggestions = [first]
+    assert app._should_complete_on_submit("/model openr") is True
+    assert app._should_complete_on_submit("/model openrouter:openrouter/auto") is False
 
 
 def test_assistant_label_uses_purple_accent(monkeypatch, tmp_path: Path) -> None:

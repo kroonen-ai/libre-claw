@@ -6,7 +6,7 @@ First shippable Libre Claw release from Kroonen AI Inc.
 
 ### Current State
 
-- Terminal-native Textual TUI with streaming chat, Markdown rendering, command palette, slash-command suggestions, file explorer, session status, and startup release notes.
+- Terminal-native Textual TUI with streaming chat, Markdown rendering, command palette, slash-command suggestions, `/model` provider/model onboarding, file explorer, session status, and startup release notes.
 - Provider support for Anthropic, OpenAI, OpenRouter, and Ollama. Ollama covers local daemon use, Ollama Cloud with `kimi-k2.6:cloud`, and Ollama/OpenAI-compatible endpoints.
 - ReAct-style async agent loop with tool calling, concurrent tool execution, interrupt handling, context compaction, and configurable system prompt from TOML.
 - Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, and `bash` tools.
