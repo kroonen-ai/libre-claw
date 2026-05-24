@@ -24,6 +24,7 @@ from libre_claw.providers.local import (
     format_local_tool_schema,
     format_ollama_messages,
     parse_xml_tool_calls,
+    _ollama_api_url,
 )
 
 
@@ -170,6 +171,35 @@ async def test_local_provider_streams_ollama_tool_calls() -> None:
     ]
     assert client.last_request is not None
     assert client.last_request["json"]["tools"] == [format_local_tool_schema(TOOL_SCHEMA)]
+
+
+async def test_local_provider_supports_ollama_cloud_api_key() -> None:
+    client = FakeHTTPClient([{"message": {"content": "cloud"}, "done": True}])
+    provider = LocalProvider(
+        base_url="https://ollama.com/api",
+        model="gpt-oss:120b",
+        max_tokens=99,
+        api_key="cloud-key",
+        client=client,
+    )
+
+    events = [
+        event
+        async for event in provider.complete(
+            messages=[ChatMessage(role="user", content=[text_block("Hello cloud")])],
+        )
+    ]
+
+    assert events == [TextDelta("cloud"), Done(usage=None, stop_reason=None)]
+    assert client.last_url == "https://ollama.com/api/chat"
+    assert client.last_request is not None
+    assert client.last_request["headers"]["Authorization"] == "Bearer cloud-key"
+
+
+def test_ollama_api_url_accepts_root_or_api_base_url() -> None:
+    assert _ollama_api_url("http://localhost:11434", "chat") == "http://localhost:11434/api/chat"
+    assert _ollama_api_url("https://ollama.com", "chat") == "https://ollama.com/api/chat"
+    assert _ollama_api_url("https://ollama.com/api", "chat") == "https://ollama.com/api/chat"
 
 
 async def test_local_provider_xml_fallback_parses_tool_calls() -> None:

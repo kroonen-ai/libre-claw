@@ -94,6 +94,34 @@ Native local tool calling is used when the model/server supports it. XML
 tool-call fallback can be enabled with `tool_mode = "xml"` for local models
 without native tool support.
 
+Ollama Cloud is supported through the same `local` provider. For direct access
+to ollama.com, create an Ollama API key, set `OLLAMA_API_KEY`, and point the
+provider at Ollama's cloud host:
+
+```bash
+export OLLAMA_API_KEY="..."
+```
+
+```toml
+[general]
+default_provider = "local"
+default_model = "gpt-oss:120b"
+
+[providers.local]
+base_url = "https://ollama.com"
+api_format = "ollama"
+api_key_env = "OLLAMA_API_KEY"
+```
+
+For Ollama's OpenAI-compatible cloud API, use:
+
+```toml
+[providers.local]
+base_url = "https://ollama.com"
+api_format = "openai"
+api_key_env = "OLLAMA_API_KEY"
+```
+
 ## TUI Commands
 
 - `/help`

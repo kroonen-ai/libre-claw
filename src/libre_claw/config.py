@@ -184,7 +184,7 @@ def _load_default_config() -> ConfigTable:
                 "base_url": "http://localhost:11434",
                 "default_model": "qwen3:32b",
                 "api_format": "ollama",
-                "api_key_env": "",
+                "api_key_env": "OLLAMA_API_KEY",
                 "max_tokens": 16384,
                 "supports_tools": True,
                 "tool_mode": "auto",

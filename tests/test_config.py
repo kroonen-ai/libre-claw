@@ -23,6 +23,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.auth.token_ttl_seconds == 3600
     assert "curl | bash" in config.sandbox.blocked_patterns
     assert config.providers["local"]["api_format"] == "ollama"
+    assert config.providers["local"]["api_key_env"] == "OLLAMA_API_KEY"
     assert config.providers["local"]["tool_mode"] == "auto"
 
 

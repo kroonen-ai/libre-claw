@@ -259,7 +259,7 @@ class LocalProvider(LLMProvider):
         yield Done(usage=usage, stop_reason=stop_reason)
 
     async def _stream_ollama_request(self, request: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
-        url = urljoin(self.base_url + "/", "api/chat")
+        url = _ollama_api_url(self.base_url, "chat")
         headers = {"Content-Type": "application/json"}
         if self.api_key and self.api_key != "ollama":
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -482,3 +482,10 @@ def _openai_base_url(base_url: str) -> str:
     if normalized.endswith("/v1"):
         return normalized + "/"
     return normalized + "/v1/"
+
+
+def _ollama_api_url(base_url: str, endpoint: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/api"):
+        return urljoin(normalized + "/", endpoint)
+    return urljoin(normalized + "/", "api/" + endpoint.lstrip("/"))
