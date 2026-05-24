@@ -98,8 +98,8 @@ Ollama Cloud is supported through the same `local` provider. There are two
 correct modes.
 
 For direct access to `ollama.com`, create an Ollama API key, set
-`OLLAMA_API_KEY`, and point the provider at Ollama's cloud host. Direct API
-model names do not use the `-cloud` suffix:
+`OLLAMA_API_KEY`, and point the provider at Ollama's cloud host. Use model
+names listed by the direct API; Ollama's direct API docs show `gpt-oss:120b`:
 
 ```bash
 export OLLAMA_API_KEY="..."
@@ -133,7 +133,8 @@ api_key_env = "OLLAMA_API_KEY"
 
 If you want Ollama itself to handle cloud authentication, sign in with the
 Ollama CLI and keep Libre Claw pointed at the local daemon. In that mode, use
-the `-cloud` model name:
+the cloud model name shown by the Ollama model page, such as
+`gpt-oss:120b-cloud` or `kimi-k2.6:cloud`:
 
 ```bash
 ollama signin

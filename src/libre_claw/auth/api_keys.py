@@ -121,7 +121,7 @@ class ApiKeyStore:
             return False
         try:
             self._keyring_backend.set_password(self.service_name, account, api_key)
-            return True
+            return self._keyring_backend.get_password(self.service_name, account) == api_key
         except Exception:
             return False
 

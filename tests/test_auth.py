@@ -15,12 +15,13 @@ from libre_claw.auth.tokens import TokenManager
 
 
 class FakeKeyring:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, fail_get: bool = False) -> None:
         self.fail = fail
+        self.fail_get = fail_get
         self.values: dict[tuple[str, str], str] = {}
 
     def get_password(self, service_name: str, username: str) -> str | None:
-        if self.fail:
+        if self.fail or self.fail_get:
             raise RuntimeError("keyring unavailable")
         return self.values.get((service_name, username))
 
@@ -88,6 +89,23 @@ def test_api_key_store_falls_back_to_encrypted_file(tmp_path: Path) -> None:
     assert lookup.value == "fallback-key"
     assert lookup.source == "encrypted_file"
     assert path.read_text(encoding="utf-8") != "fallback-key"
+
+
+def test_api_key_store_falls_back_when_keyring_write_cannot_be_verified(tmp_path: Path) -> None:
+    path = tmp_path / ".keys"
+    store = ApiKeyStore(
+        service_name="libre-claw",
+        fallback_path=path,
+        keyring_backend=FakeKeyring(fail_get=True),
+        encrypted_file=encrypted_file(path),
+    )
+
+    location = store.set_api_key("local", "fallback-key")
+    lookup = store.get_api_key("local")
+
+    assert location == "encrypted_file"
+    assert lookup.value == "fallback-key"
+    assert lookup.source == "encrypted_file"
 
 
 def test_token_manager_issues_and_verifies_jwt() -> None:
