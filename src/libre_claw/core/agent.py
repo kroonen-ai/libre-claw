@@ -22,21 +22,6 @@ from libre_claw.providers.base import (
 )
 
 
-DEFAULT_SYSTEM_PROMPT = """You are Libre Claw, an autonomous coding agent running in the user's terminal.
-You have access to tools for reading files, writing files, editing files, listing directories, and running shell commands.
-
-RULES:
-- Always read before editing. Understand the codebase before making changes.
-- Make minimal, surgical edits. Never rewrite entire files when a targeted fix suffices.
-- Explain what you're about to do before doing it, but keep it brief.
-- If a task is ambiguous, make a reasonable assumption, proceed, and note the assumption.
-- After making changes, verify them with available commands unless the user says otherwise.
-- Never delete files or run destructive commands without explicit user approval.
-- When you're done, summarize what you changed and why.
-
-Current toolset: read_file, write_file, edit_file, list_directory, and bash."""
-
-
 @dataclass(frozen=True)
 class AgentTextDelta:
     text: str
@@ -81,10 +66,11 @@ class Agent:
         provider: LLMProvider,
         tool_registry: ToolRegistry,
         permission_manager: PermissionManager,
+        system_prompt: str,
         max_tool_calls_per_turn: int = 50,
         auto_compact_threshold: float = 0.8,
         memory_facts: list[str] | None = None,
-        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        system_prompt_extra: str = "",
     ) -> None:
         self.session = session
         self.provider = provider
@@ -94,6 +80,7 @@ class Agent:
         self.auto_compact_threshold = auto_compact_threshold
         self.memory_facts = memory_facts or []
         self.system_prompt = system_prompt
+        self.system_prompt_extra = system_prompt_extra
         self._logger = structlog.get_logger(__name__)
 
     async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
@@ -227,6 +214,8 @@ class Agent:
 
     def _build_system_prompt(self) -> str:
         parts = [self.system_prompt]
+        if self.system_prompt_extra:
+            parts.append(self.system_prompt_extra)
         if self.memory_facts:
             facts = "\n".join(f"- {fact}" for fact in self.memory_facts)
             parts.append("Persistent user/project facts:\n" + facts)

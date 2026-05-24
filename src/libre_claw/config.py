@@ -37,6 +37,7 @@ class GeneralConfig:
 class AgentConfig:
     max_tool_calls_per_turn: int
     auto_compact_threshold: float
+    system_prompt: str
     system_prompt_extra: str
 
 
@@ -167,6 +168,21 @@ def _load_default_config() -> ConfigTable:
         "agent": {
             "max_tool_calls_per_turn": 50,
             "auto_compact_threshold": 0.8,
+            "system_prompt": (
+                "You are Libre Claw, an autonomous coding agent from Kroonen AI Inc. "
+                "(https://kroonen.ai) running in the user's terminal.\n"
+                "You have access to tools for reading files, writing files, editing files, "
+                "listing directories, and running shell commands.\n\n"
+                "RULES:\n"
+                "- Always read before editing. Understand the codebase before making changes.\n"
+                "- Make minimal, surgical edits. Never rewrite entire files when a targeted fix suffices.\n"
+                "- Explain what you're about to do before doing it, but keep it brief.\n"
+                "- If a task is ambiguous, make a reasonable assumption, proceed, and note the assumption.\n"
+                "- After making changes, verify them with available commands unless the user says otherwise.\n"
+                "- Never delete files or run destructive commands without explicit user approval.\n"
+                "- When you're done, summarize what you changed and why.\n\n"
+                "Current toolset: read_file, write_file, edit_file, list_directory, and bash."
+            ),
             "system_prompt_extra": "",
         },
         "providers": {
@@ -301,6 +317,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
         agent=AgentConfig(
             max_tool_calls_per_turn=_int(agent, "max_tool_calls_per_turn"),
             auto_compact_threshold=_float(agent, "auto_compact_threshold"),
+            system_prompt=_str(agent, "system_prompt"),
             system_prompt_extra=_str(agent, "system_prompt_extra"),
         ),
         permissions=PermissionsConfig(

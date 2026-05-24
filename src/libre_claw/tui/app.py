@@ -777,9 +777,11 @@ class LibreClawApp(App[None]):
             provider=provider,
             tool_registry=create_builtin_registry(self.config, memory_store=self.memory_store),
             permission_manager=PermissionManager(self.config.permissions),
+            system_prompt=self.config.agent.system_prompt,
             max_tool_calls_per_turn=self.config.agent.max_tool_calls_per_turn,
             auto_compact_threshold=self.config.agent.auto_compact_threshold,
             memory_facts=self.memory_facts,
+            system_prompt_extra=self.config.agent.system_prompt_extra,
         )
 
     async def _initialize_memory(self) -> None:

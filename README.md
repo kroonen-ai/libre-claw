@@ -225,6 +225,10 @@ Basic general settings can be overridden with:
 - `LIBRE_CLAW_THEME`
 - `LIBRE_CLAW_LOG_LEVEL`
 
+The runtime agent system prompt lives in the `[agent]` config section as
+`system_prompt`, with `system_prompt_extra` available for local additions. The
+default prompt identifies Libre Claw as a Kroonen AI Inc. agent harness.
+
 Sandbox defaults restrict file access to the configured working directory and
 block dangerous shell patterns such as root removal, `sudo`, and remote install
 pipes.

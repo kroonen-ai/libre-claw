@@ -21,6 +21,9 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.permissions.default_level == "ask"
     assert config.auth.keyring_service == "libre-claw"
     assert config.auth.token_ttl_seconds == 3600
+    assert "Kroonen AI Inc. (https://kroonen.ai)" in config.agent.system_prompt
+    assert "Current toolset: read_file, write_file, edit_file, list_directory, and bash." in config.agent.system_prompt
+    assert config.agent.system_prompt_extra == ""
     assert "curl | bash" in config.sandbox.blocked_patterns
     assert config.providers["local"]["api_format"] == "ollama"
     assert config.providers["local"]["api_key_env"] == "OLLAMA_API_KEY"
@@ -38,6 +41,10 @@ def test_config_file_env_and_cli_overrides(monkeypatch, tmp_path: Path) -> None:
                 'working_directory = "from-file"',
                 'theme = "light"',
                 'log_level = "debug"',
+                "",
+                "[agent]",
+                'system_prompt = "custom system prompt"',
+                'system_prompt_extra = "custom extra"',
             ]
         ),
         encoding="utf-8",
@@ -52,6 +59,8 @@ def test_config_file_env_and_cli_overrides(monkeypatch, tmp_path: Path) -> None:
     assert config.general.default_model == "env-model"
     assert config.general.theme == "env-theme"
     assert config.general.working_directory == (tmp_path / "from-cli").resolve()
+    assert config.agent.system_prompt == "custom system prompt"
+    assert config.agent.system_prompt_extra == "custom extra"
 
 
 def test_packaged_default_config_matches_repo_default() -> None:

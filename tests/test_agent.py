@@ -84,6 +84,7 @@ def make_agent(
     provider: LLMProvider,
     registry: ToolRegistry | None = None,
     max_tool_calls_per_turn: int = 50,
+    system_prompt_extra: str = "",
 ) -> Agent:
     permissions = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=True))
     return Agent(
@@ -93,6 +94,7 @@ def make_agent(
         permission_manager=permissions,
         max_tool_calls_per_turn=max_tool_calls_per_turn,
         system_prompt="test system",
+        system_prompt_extra=system_prompt_extra,
     )
 
 
@@ -122,6 +124,15 @@ async def test_agent_streams_text_only_response_and_saves_history() -> None:
         ChatMessage(role="user", content=[text_block("Hi")]),
         ChatMessage(role="assistant", content=[text_block("Hello")]),
     ]
+
+
+async def test_agent_appends_configured_system_prompt_extra() -> None:
+    provider = ScriptedProvider([[TextDelta("ok"), Done()]])
+    agent = make_agent(provider, system_prompt_extra="extra instructions")
+
+    await collect_events(agent, "Hi")
+
+    assert provider.received_system == "test system\n\nextra instructions"
 
 
 async def test_agent_executes_tool_then_continues_to_final_answer() -> None:
