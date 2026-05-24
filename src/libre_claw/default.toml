@@ -1,0 +1,79 @@
+# Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)
+# SPDX-License-Identifier: Apache-2.0
+
+[general]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-6"
+working_directory = "."
+theme = "dark"
+log_level = "info"
+
+[agent]
+max_tool_calls_per_turn = 50
+auto_compact_threshold = 0.8
+system_prompt_extra = ""
+
+[providers.anthropic]
+api_key_env = "ANTHROPIC_API_KEY"
+default_model = "claude-sonnet-4-6"
+max_tokens = 16384
+
+[providers.openai]
+api_key_env = "OPENAI_API_KEY"
+default_model = "gpt-4o"
+max_tokens = 16384
+
+[providers.local]
+base_url = "http://localhost:11434"
+default_model = "qwen3:32b"
+api_format = "ollama" # ollama | openai
+api_key_env = ""
+max_tokens = 16384
+supports_tools = true
+tool_mode = "auto" # auto | native | xml
+
+[permissions]
+default_level = "ask"
+auto_approve_read = true
+
+[sandbox]
+command_timeout = 120
+allow_sudo = false
+blocked_patterns = [
+  "rm -rf /",
+  "rm -fr /",
+  "rm -rf -- /",
+  ":(){ :|:& };:",
+  "curl | sh",
+  "curl|sh",
+  "curl | bash",
+  "curl|bash",
+  "wget | sh",
+  "wget|sh",
+  "wget | bash",
+  "wget|bash",
+]
+restrict_to_working_dir = true
+
+[auth]
+keyring_service = "libre-claw"
+fallback_keys_path = "~/.libre-claw/.keys"
+jwt_secret_env = "LIBRE_CLAW_JWT_SECRET"
+oauth_issuer = "libre-claw"
+oauth_client_id = "libre-claw-local"
+oauth_redirect_uri = "http://127.0.0.1:8765/callback"
+token_ttl_seconds = 3600
+
+[tui]
+show_file_tree = true
+show_status_bar = true
+vim_keybindings = false
+
+[telegram]
+enabled = false
+bot_token_env = "TELEGRAM_BOT_TOKEN"
+allowed_user_ids = [123456789]
+max_message_length = 4000
+stream_update_interval = 1.5
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-6"
