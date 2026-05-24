@@ -32,6 +32,9 @@ def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
     assert "provider:model" not in app._status_text()
     assert app._palette_matches("memory")[0].name == "/memory"
     assert app._palette_matches("telegram")[0].name == "/telegram"
+    assert app._slash_suggestion_matches("/")[0].name == "/help"
+    assert [command.name for command in app._slash_suggestion_matches("/m")] == ["/model", "/memory"]
+    assert app._slash_suggestion_matches("/memory ") == []
 
 
 def test_tui_diff_text(monkeypatch, tmp_path: Path) -> None:
@@ -73,6 +76,22 @@ def test_effective_model_uses_provider_default_when_switching_to_local(monkeypat
     config = _replace_general(load_config(), default_provider="local")
 
     assert _effective_model(config) == "qwen3:32b"
+
+
+def test_slash_suggestion_completion(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    model_command = app._slash_suggestion_matches("/mo")[0]
+    help_command = app._slash_suggestion_matches("/he")[0]
+    app._slash_suggestions = [model_command]
+
+    assert app._completion_text(model_command) == "/model "
+    assert app._completion_text(help_command) == "/help"
+    assert app._should_complete_on_submit("/mo") is True
+    assert app._should_complete_on_submit("/model") is False
 
 
 async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None:

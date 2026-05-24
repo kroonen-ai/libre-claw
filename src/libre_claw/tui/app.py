@@ -141,6 +141,19 @@ class LibreClawApp(App[None]):
         display: none;
     }
 
+    #suggestions {
+        height: auto;
+        max-height: 8;
+        padding: 0 2;
+        border: solid #2f6f73;
+        background: #0d1b1f;
+        color: #cdebed;
+    }
+
+    #suggestions.hidden {
+        display: none;
+    }
+
     #chat {
         height: 1fr;
         padding: 1 2;
@@ -171,6 +184,7 @@ class LibreClawApp(App[None]):
         Binding("ctrl+b", "toggle_sidebar", "Files", show=True),
         Binding("ctrl+p", "command_palette", "Palette", show=True),
         Binding("ctrl+shift+c", "copy_last_response", "Copy Last", show=True),
+        Binding("tab", "accept_suggestion", "Complete", show=False),
     ]
 
     def __init__(self, config: LibreClawConfig | None = None) -> None:
@@ -185,6 +199,7 @@ class LibreClawApp(App[None]):
         self.transcript: list[TranscriptEntry] = []
         self.sidebar_visible = self.config.tui.show_file_tree
         self.palette_open = False
+        self._slash_suggestions: list[SlashCommand] = []
         self._active_task: asyncio.Task[None] | None = None
         self._pending_permission: AgentPermissionRequest | None = None
         self._started_at = time.monotonic()
@@ -201,6 +216,7 @@ class LibreClawApp(App[None]):
             with Vertical(id="main"):
                 yield Static("", id="palette", classes="hidden")
                 yield RichLog(id="chat", wrap=True, highlight=True, markup=True)
+                yield Static("", id="suggestions", classes="hidden")
                 yield Input(placeholder=self._input_placeholder(), id="input")
 
     async def on_mount(self) -> None:
@@ -208,6 +224,7 @@ class LibreClawApp(App[None]):
         self.query_one("#input", Input).focus()
         self._sync_sidebar_visibility()
         self._update_palette()
+        self._update_slash_suggestions("")
         self.set_interval(1, self._update_status)
         await self._initialize_memory()
         self._append_system("Libre Claw v0.1.0 ready. Type /help for commands.")
@@ -220,11 +237,22 @@ class LibreClawApp(App[None]):
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
+        if self._should_complete_on_submit(text):
+            self._accept_first_suggestion(event.input)
+            return
+
         event.input.value = ""
+        self._update_slash_suggestions("")
         if not text and not self.palette_open:
             return
 
         await self.handle_user_input(text)
+
+    async def on_input_changed(self, event: Input.Changed) -> None:
+        if self.palette_open:
+            self._update_palette(event.value)
+            return
+        self._update_slash_suggestions(event.value)
 
     async def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         event.stop()
@@ -340,10 +368,16 @@ class LibreClawApp(App[None]):
 
     def action_command_palette(self) -> None:
         self.palette_open = not self.palette_open
-        self._update_palette()
+        self._update_palette(self.query_one("#input", Input).value)
+        self._update_slash_suggestions("")
         input_widget = self.query_one("#input", Input)
         input_widget.placeholder = self._input_placeholder()
         input_widget.focus()
+
+    def action_accept_suggestion(self) -> None:
+        if self.palette_open:
+            return
+        self._accept_first_suggestion(self.query_one("#input", Input))
 
     def action_copy_last_response(self) -> None:
         if not self._last_assistant_response:
@@ -728,14 +762,14 @@ class LibreClawApp(App[None]):
     def _sync_sidebar_visibility(self) -> None:
         self.query_one("#sidebar", DirectoryTree).display = self.sidebar_visible
 
-    def _update_palette(self) -> None:
+    def _update_palette(self, query: str = "") -> None:
         palette = self.query_one("#palette", Static)
         if not self.palette_open:
             palette.add_class("hidden")
             palette.update("")
             return
         palette.remove_class("hidden")
-        palette.update(self._palette_text(""))
+        palette.update(self._palette_text(query))
 
     def _close_palette(self) -> None:
         self.palette_open = False
@@ -760,6 +794,48 @@ class LibreClawApp(App[None]):
     def _help_text(self) -> str:
         command_lines = "\n".join(f"{command.usage} - {command.description}" for command in SLASH_COMMANDS)
         return f"{command_lines}\nPermission choices: y, n, a, !"
+
+    def _update_slash_suggestions(self, text: str) -> None:
+        self._slash_suggestions = self._slash_suggestion_matches(text)
+        suggestions = self.query_one("#suggestions", Static)
+        if not self._slash_suggestions:
+            suggestions.add_class("hidden")
+            suggestions.update("")
+            return
+        suggestions.remove_class("hidden")
+        suggestions.update(self._slash_suggestion_text(self._slash_suggestions))
+
+    def _slash_suggestion_matches(self, text: str) -> list[SlashCommand]:
+        stripped = text.lstrip()
+        if not stripped.startswith("/") or " " in stripped:
+            return []
+        query = stripped.lower()
+        matches = [command for command in SLASH_COMMANDS if command.name.startswith(query)]
+        if matches:
+            return matches[:6]
+        return [command for command in SLASH_COMMANDS if query in command.name.lower()][:6]
+
+    def _slash_suggestion_text(self, suggestions: list[SlashCommand]) -> str:
+        return "\n".join(f"{command.usage:<30} {command.description}" for command in suggestions)
+
+    def _should_complete_on_submit(self, text: str) -> bool:
+        if not self._slash_suggestions:
+            return False
+        stripped = text.lstrip()
+        if not stripped.startswith("/") or " " in stripped:
+            return False
+        return all(stripped.lower() != command.name for command in SLASH_COMMANDS)
+
+    def _accept_first_suggestion(self, input_widget: Input) -> None:
+        if not self._slash_suggestions:
+            return
+        command = self._slash_suggestions[0]
+        input_widget.value = self._completion_text(command)
+        input_widget.cursor_position = len(input_widget.value)
+        self._update_slash_suggestions(input_widget.value)
+
+    def _completion_text(self, command: SlashCommand) -> str:
+        return command.name + (" " if _usage_requires_argument(command.usage) else "")
 
     def _cost_text(self) -> str:
         return f"Tokens: {self.usage.total_tokens} total ({self.usage.input_tokens} input, {self.usage.output_tokens} output). Cost: $0.00."
@@ -828,3 +904,7 @@ def _effective_model(config: LibreClawConfig) -> str:
     if config.general.default_model in other_defaults:
         return provider_default
     return config.general.default_model or provider_default
+
+
+def _usage_requires_argument(usage: str) -> bool:
+    return " " in usage

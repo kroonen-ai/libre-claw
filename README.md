@@ -118,6 +118,7 @@ Useful keybindings:
 - `Ctrl+P` opens the command palette
 - `Ctrl+Shift+C` copies the last assistant response
 - `Ctrl+C` or `Esc` cancels active generation/tool execution
+- `Tab` completes the first slash-command suggestion
 
 ## Tools
 
