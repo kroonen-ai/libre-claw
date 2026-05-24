@@ -1,32 +1,52 @@
 # Libre Claw
 
-Libre Claw is a terminal-native AI agent harness from Kroonen AI Inc.
-(https://kroonen.ai). It provides a Textual TUI, Anthropic, OpenAI,
-OpenRouter, and Ollama streaming providers, a permissioned coding toolset,
-SQLite-backed memory, Telegram daemon support, key storage, and sandbox
-hardening.
+Libre Claw is a terminal-native AI coding agent harness from Kroonen AI Inc.
+(https://kroonen.ai). It runs as a single Python TUI app, streams model output,
+uses permissioned tools for coding tasks, supports Telegram, and keeps provider
+keys out of project config files.
 
-Version `0.1.0` is the first shippable CLI/TUI release. It is still early
-software, but it is functional end to end: launch the TUI, choose a provider,
-chat with the agent, approve tools from an interactive panel, navigate the file
-explorer, persist sessions, and run the Telegram bridge.
+Version `0.1.0` is the first shippable release. It is early, but functional:
+you can launch the TUI, choose Anthropic, OpenAI, OpenRouter, or Ollama, chat
+with the agent, approve tool calls, browse files, save sessions, use memory,
+and run the Telegram daemon.
 
-## Install
+## What You Get
 
-For development:
+- Textual terminal UI with streaming Markdown chat.
+- Providers: Anthropic, OpenAI, OpenRouter, and Ollama.
+- Ollama support for local daemon use, Ollama Cloud, and OpenAI-compatible
+  Ollama endpoints.
+- Built-in tools: `read_file`, `write_file`, `edit_file`, `list_directory`,
+  and `bash`.
+- Interactive permission prompts for write/edit/shell actions.
+- File explorer whose root can move up and down with the user.
+- SQLite-backed memory, saved sessions, and context compaction.
+- Secure API key storage through environment variables, OS keyring, or an
+  encrypted fallback file.
+- Telegram daemon with allowlist auth.
+
+## Requirements
+
+- Python 3.11 or newer.
+- A provider API key if you use a cloud provider.
+- Optional: Ollama installed locally if you want local daemon mode.
+- Optional: a Telegram bot token if you use the Telegram daemon.
+
+## Install From This Repo
+
+Use a virtual environment. This avoids macOS/Homebrew's
+`externally-managed-environment` pip error.
 
 ```bash
-python3 -m pip install -e ".[dev]"
+git clone https://github.com/kroonen-ai/libre-claw.git
+cd libre-claw
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 ```
 
-For a local wheel build:
-
-```bash
-python3 -m build
-python3 -m pip install dist/libre_claw-0.1.0-py3-none-any.whl
-```
-
-## Quick Start
+Run the app:
 
 ```bash
 libre-claw
@@ -35,19 +55,28 @@ libre-claw
 or:
 
 ```bash
-python3 -m libre_claw
+python -m libre_claw
 ```
 
-Set provider keys with environment variables:
+Build and install a wheel locally:
+
+```bash
+python -m build
+python -m pip install dist/libre_claw-0.1.0-py3-none-any.whl
+```
+
+## First Provider Setup
+
+Libre Claw never needs real API keys in TOML. Use environment variables:
 
 ```bash
 export ANTHROPIC_API_KEY="..."
 export OPENAI_API_KEY="..."
 export OPENROUTER_API_KEY="..."
+export OLLAMA_API_KEY="..."
 ```
 
-or store them securely with OS keyring, falling back to
-`~/.libre-claw/.keys` when keyring is unavailable:
+or store them securely:
 
 ```bash
 libre-claw auth set-key anthropic
@@ -57,73 +86,46 @@ libre-claw auth set-key ollama
 libre-claw auth status
 ```
 
-## Providers
+Key lookup order is:
 
-Anthropic is the default provider:
+1. Environment variable.
+2. OS keyring.
+3. Encrypted fallback file at `~/.libre-claw/.keys`.
 
-```toml
-[general]
-default_provider = "anthropic"
-default_model = "claude-sonnet-4-6"
+## Fast Starts
+
+### OpenRouter
+
+```bash
+libre-claw auth set-key openrouter
+libre-claw
 ```
 
-OpenAI can be selected with:
+Inside the TUI:
 
-```toml
-[general]
-default_provider = "openai"
-default_model = "gpt-4o"
-```
-
-OpenRouter can be selected with:
-
-```toml
-[general]
-default_provider = "openrouter"
-default_model = "openrouter/auto"
-
-[providers.openrouter]
-api_key_env = "OPENROUTER_API_KEY"
-base_url = "https://openrouter.ai/api/v1"
-default_model = "openrouter/auto"
+```text
+/model openrouter:openrouter/auto
 ```
 
 Libre Claw always sends OpenRouter app attribution as `Libre Claw` from
-`https://kroonen.ai`, including the `cli-agent` category, so users do not need
-to configure product identity headers themselves.
+`https://kroonen.ai`, including the `cli-agent` category. Users do not configure
+those product identity headers.
 
-Ollama defaults to the local daemon at `http://localhost:11434`:
-
-```bash
-ollama pull qwen3:32b
-```
-
-```toml
-[general]
-default_provider = "ollama"
-
-[providers.ollama]
-base_url = "http://localhost:11434"
-default_model = "qwen3:32b"
-api_format = "ollama" # ollama | openai
-supports_tools = true
-tool_mode = "auto" # auto | native | xml
-```
-
-Native Ollama tool calling is used when the model/server supports it. XML
-tool-call fallback can be enabled with `tool_mode = "xml"` for models without
-native tool support.
-
-Ollama Cloud is supported through the same `ollama` provider. There are two
-correct modes.
-
-For direct access to `ollama.com`, create an Ollama API key, set
-`OLLAMA_API_KEY`, and point the provider at Ollama's cloud host. The current
-recommended cloud example is `kimi-k2.6:cloud`:
+### Ollama Cloud With Kimi K2.6
 
 ```bash
-export OLLAMA_API_KEY="..."
+libre-claw auth set-key ollama
+libre-claw
 ```
+
+Inside the TUI:
+
+```text
+/model ollama:kimi-k2.6:cloud
+```
+
+For direct Ollama Cloud API use, your config should point at Ollama's cloud
+host:
 
 ```toml
 [general]
@@ -137,24 +139,7 @@ api_format = "ollama"
 api_key_env = "OLLAMA_API_KEY"
 ```
 
-Libre Claw also accepts a stored Ollama-provider key:
-
-```bash
-libre-claw auth set-key ollama
-```
-
-For Ollama's OpenAI-compatible cloud API, use:
-
-```toml
-[providers.ollama]
-base_url = "https://ollama.com"
-api_format = "openai"
-api_key_env = "OLLAMA_API_KEY"
-```
-
-If you want Ollama itself to handle cloud authentication, sign in with the
-Ollama CLI and keep Libre Claw pointed at the local daemon. In that mode, use
-the cloud model name shown by the Ollama model page, such as `kimi-k2.6:cloud`:
+If you want the local Ollama daemon to handle cloud auth instead:
 
 ```bash
 ollama signin
@@ -173,8 +158,63 @@ api_format = "ollama"
 api_key_env = ""
 ```
 
-Legacy configs that still say `default_provider = "local"` or `[providers.local]`
-are accepted and normalized to `ollama` at load time.
+### Anthropic
+
+```bash
+libre-claw auth set-key anthropic
+libre-claw
+```
+
+Default model:
+
+```toml
+[general]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-6"
+```
+
+### OpenAI
+
+```bash
+libre-claw auth set-key openai
+libre-claw
+```
+
+Default example:
+
+```toml
+[general]
+default_provider = "openai"
+default_model = "gpt-4o"
+```
+
+## Model Switching
+
+Use `/model` from inside the TUI:
+
+```text
+/model
+/model list
+/model kimi-k2.6:cloud
+/model ollama:kimi-k2.6:cloud
+/model openrouter:openrouter/auto
+```
+
+`/model <name>` changes the model for the current provider.
+`/model <provider>:<name>` changes provider and model together.
+Press `Tab` after `/model ` to complete known presets.
+
+Use `/provider` when you only want to switch provider:
+
+```text
+/provider anthropic
+/provider openai
+/provider openrouter
+/provider ollama
+```
+
+Legacy configs that still say `default_provider = "local"` or
+`[providers.local]` are accepted and normalized to `ollama`.
 
 ## TUI Commands
 
@@ -192,41 +232,37 @@ are accepted and normalized to `ollama` at load time.
 - `/telegram`
 - `/exit`
 
-Permission prompts render as an interactive panel with Approve, Deny, Always
-Tool, and Always Command buttons. They also accept `y`, `n`, `a`, and `!`
-shortcuts without sending a chat message. Dangerous sandbox-blocked bash
-commands show a warning and only allow one-time approval or denial.
-
 Useful keybindings:
 
-- `Ctrl+B` toggles the file tree
-- `Ctrl+P` opens the command palette
-- `Ctrl+Shift+C` copies the last assistant response
-- `Esc` or `/cancel` cancels active generation/tool execution
-- `Ctrl+C` exits the app
-- `Tab` completes the first slash-command suggestion
-- `Tab` after `/model ` completes known provider/model presets. Use
-  `/model <provider>:<name>` to switch provider and model together. If the
-  provider needs a key, Libre Claw points you to `libre-claw auth set-key`.
+- `Ctrl+B` toggles the file tree.
+- `Ctrl+P` opens the command palette.
+- `Ctrl+Shift+C` copies the last assistant response.
+- `Esc` or `/cancel` cancels active generation/tool execution.
+- `Ctrl+C` exits the app.
+- `Tab` completes the first slash-command suggestion.
 
-The file explorer has an `Up` control. Moving the explorer root also updates the
-agent working directory, so tools follow the directory you are browsing.
+## Tool Permissions
+
+Read/list tools run without prompting. File writes, file edits, and shell
+commands ask first.
+
+Permission prompts render as an interactive panel with:
+
+- Approve
+- Deny
+- Always Tool
+- Always Command
+
+They also accept `y`, `n`, `a`, and `!` shortcuts. Dangerous sandbox-blocked
+bash commands show a warning and only allow one-time approval or denial.
+
+## File Explorer
+
+The file explorer has an `Up` control. Moving the explorer root also updates
+the agent working directory, so tools follow the directory you are browsing.
 
 On startup, the TUI shows Libre Claw ASCII art plus the latest release notes
 from `RELEASE.md`.
-
-## Tools
-
-The current built-in tools are:
-
-- `read_file`
-- `write_file`
-- `edit_file`
-- `list_directory`
-- `bash`
-
-Read/list operations are allowed by default. Write/edit/bash operations require
-approval unless the user grants a session override.
 
 ## Telegram
 
@@ -247,14 +283,19 @@ allowed_user_ids = [123456789]
 
 ## Configuration
 
-Bundled defaults can be printed with:
+Bundled defaults:
 
 ```bash
 libre-claw config defaults
 ```
 
-User configuration is loaded from `~/.libre-claw/config.toml` when present.
-Basic general settings can be overridden with:
+User configuration is loaded from:
+
+```text
+~/.libre-claw/config.toml
+```
+
+Basic settings can be overridden with:
 
 - `LIBRE_CLAW_DEFAULT_PROVIDER`
 - `LIBRE_CLAW_DEFAULT_MODEL`
@@ -270,17 +311,57 @@ Sandbox defaults restrict file access to the configured working directory and
 block dangerous shell patterns such as root removal, `sudo`, and remote install
 pipes.
 
+## Troubleshooting
+
+### `externally-managed-environment`
+
+Create and activate a virtual environment, then install inside it:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+### Missing API Key
+
+Run:
+
+```bash
+libre-claw auth status
+libre-claw auth set-key openrouter
+```
+
+Replace `openrouter` with `anthropic`, `openai`, or `ollama`.
+
+### Ollama Cloud 401
+
+Make sure you are not using the model name as the bearer token. Store or export
+the real Ollama API key:
+
+```bash
+libre-claw auth set-key ollama
+```
+
+or:
+
+```bash
+export OLLAMA_API_KEY="..."
+```
+
+Then use:
+
+```toml
+[providers.ollama]
+base_url = "https://ollama.com"
+api_format = "ollama"
+api_key_env = "OLLAMA_API_KEY"
+```
+
 ## Development
 
 ```bash
-python3 -m pytest
-python3 -m compileall src tests
+python -m pytest
+python -m compileall src tests
 git diff --check
 ```
-
-GitHub Actions runs the same checks on `main` pushes and pull requests, plus a
-wheel/source distribution build.
-
-## License
-
-Libre Claw is licensed under Apache-2.0.
