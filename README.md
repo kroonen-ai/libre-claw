@@ -757,17 +757,25 @@ Useful bot slash commands:
 /start - Check that the bot is ready
 /help - Show Telegram slash commands
 /new - Start a fresh chat session
-/model <name> - Switch the current model
-/provider anthropic|openai|openrouter|ollama|codex - Switch provider
+/model - Open provider/model buttons
+/model <provider>:<name> - Switch model by text
+/models - Open provider/model buttons
+/provider - Open provider buttons
 /cost - Show token and cost usage
+/status - Show token and cost usage
 /compact - Compact the current context
 /schedule examples|list|add ... - Manage recurring runs
 /cancel - Cancel the active generation
+/stop - Cancel the active generation
 ```
 
 Libre Claw registers these commands with Telegram on startup, so supported
 commands should appear in the Telegram client when you type `/`. Sending `/`
 by itself also prints the command list.
+
+`/model`, `/models`, and `/provider` open a Hermes-style inline keyboard for
+provider and model selection. The selected model applies immediately to the
+running Telegram bridge.
 
 Telegram authorization uses the numeric user ID, not the `@username`. If a user
 messages the bot while blocked, Libre Claw replies with the numeric ID and the

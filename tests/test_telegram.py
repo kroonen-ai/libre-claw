@@ -20,8 +20,13 @@ from libre_claw.telegram.bridge import (
     TelegramToolNotice,
 )
 from libre_claw.telegram.handlers import (
+    TELEGRAM_MODEL_PRESETS,
+    TelegramHandlers,
     _finish_text_response,
     _message_chunks,
+    _model_configuration_text,
+    _model_keyboard,
+    _provider_keyboard,
     _reply_text_chunks,
     _stream_preview,
     _telegram_help_text,
@@ -128,8 +133,11 @@ def test_telegram_help_text_lists_slash_commands() -> None:
 
     assert "/help" in text
     assert "/start" in text
-    assert "/model <name>" in text
-    assert "/provider anthropic|openai|openrouter|ollama|codex" in text
+    assert "/model - Open provider/model buttons" in text
+    assert "/models - Open provider/model buttons" in text
+    assert "/provider - Open provider buttons" in text
+    assert "/status - Show token and cost usage" in text
+    assert "/stop - Cancel the active generation" in text
     assert "Send a normal message" in text
 
 
@@ -210,7 +218,68 @@ def test_telegram_command_specs_drive_bot_menu() -> None:
 
     assert commands["help"] == "Show Telegram slash commands"
     assert "start" in commands
+    assert commands["models"] == "Open model configuration"
+    assert commands["status"] == "Show session info"
+    assert commands["stop"] == "Cancel active generation"
     assert "schedule" in commands
+
+
+def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+
+    text = _model_configuration_text(config)
+    provider_keyboard = _provider_keyboard(config)
+    model_keyboard = _model_keyboard(config, "openrouter")
+
+    assert "Model Configuration" in text
+    assert "Select a provider" in text
+    assert provider_keyboard.inline_keyboard
+    assert any("OpenRouter" in button.text for row in provider_keyboard.inline_keyboard for button in row)
+    assert len([button for row in model_keyboard.inline_keyboard for button in row if button.callback_data.startswith("cfg:model:openrouter:")]) == len(
+        TELEGRAM_MODEL_PRESETS["openrouter"]
+    )
+
+
+async def test_telegram_model_callback_sets_provider_and_model(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    bridge = TelegramBridge(config)
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))
+
+    class User:
+        id = 123
+
+    class Query:
+        data = "cfg:model:openrouter:0"
+        from_user = User()
+
+        def __init__(self) -> None:
+            self.answers: list[str] = []
+            self.edits: list[str] = []
+
+        async def answer(self, text: str, show_alert: bool = False) -> None:
+            del show_alert
+            self.answers.append(text)
+
+        async def edit_message_text(self, text: str, reply_markup: object | None = None) -> None:
+            del reply_markup
+            self.edits.append(text)
+
+    class Update:
+        def __init__(self, query: Query) -> None:
+            self.callback_query = query
+
+    query = Query()
+
+    await handlers.callback(Update(query), object())  # type: ignore[arg-type]
+
+    assert bridge.config.general.default_provider == "openrouter"
+    assert bridge.config.general.default_model == TELEGRAM_MODEL_PRESETS["openrouter"][0].model
+    assert query.answers == ["Model selected."]
+    assert "Your next Telegram message will use this model." in query.edits[-1]
 
 
 def test_telegram_bot_reads_secure_stored_token(monkeypatch, tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from libre_claw.telegram.auth import TelegramAuth
@@ -21,6 +22,58 @@ from libre_claw.telegram.bridge import (
 TELEGRAM_HARD_MESSAGE_LIMIT = 4096
 TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
 TELEGRAM_CONTINUED_SUFFIX = "\n\n...[continued]"
+
+
+@dataclass(frozen=True)
+class TelegramModelPreset:
+    provider: str
+    model: str
+    label: str
+
+
+TELEGRAM_PROVIDER_LABELS: dict[str, str] = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI API",
+    "openrouter": "OpenRouter",
+    "ollama": "Ollama Cloud/Local",
+    "codex": "OpenAI Codex",
+}
+
+TELEGRAM_MODEL_PRESETS: dict[str, tuple[TelegramModelPreset, ...]] = {
+    "ollama": (
+        TelegramModelPreset("ollama", "kimi-k2.6:cloud", "Kimi K2.6 Cloud"),
+        TelegramModelPreset("ollama", "qwen3.6:27b", "Qwen3.6 27B"),
+        TelegramModelPreset("ollama", "gpt-oss:120b", "GPT OSS 120B"),
+        TelegramModelPreset("ollama", "qwen3:32b", "Qwen3 32B"),
+    ),
+    "openrouter": (
+        TelegramModelPreset("openrouter", "qwen/qwen3.7-max", "Qwen3.7 Max"),
+        TelegramModelPreset("openrouter", "openrouter/auto", "Auto Router"),
+        TelegramModelPreset("openrouter", "anthropic/claude-sonnet-4.5", "Claude Sonnet 4.5"),
+        TelegramModelPreset("openrouter", "openai/gpt-5.5", "GPT-5.5"),
+        TelegramModelPreset("openrouter", "openai/gpt-4o", "GPT-4o"),
+        TelegramModelPreset("openrouter", "moonshotai/kimi-k2", "Kimi K2"),
+    ),
+    "openai": (
+        TelegramModelPreset("openai", "gpt-5.5", "GPT-5.5"),
+        TelegramModelPreset("openai", "gpt-4o", "GPT-4o"),
+        TelegramModelPreset("openai", "gpt-4.1", "GPT-4.1"),
+        TelegramModelPreset("openai", "o3", "o3"),
+        TelegramModelPreset("openai", "o4-mini", "o4-mini"),
+        TelegramModelPreset("openai", "codex-mini", "Codex Mini"),
+    ),
+    "codex": (
+        TelegramModelPreset("codex", "gpt-5.5", "GPT-5.5"),
+        TelegramModelPreset("codex", "gpt-5", "GPT-5"),
+        TelegramModelPreset("codex", "codex-mini", "Codex Mini"),
+    ),
+    "anthropic": (
+        TelegramModelPreset("anthropic", "claude-opus-4-6", "Claude Opus 4.6"),
+        TelegramModelPreset("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6"),
+        TelegramModelPreset("anthropic", "claude-opus-4-20250918", "Claude Opus 4"),
+        TelegramModelPreset("anthropic", "claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+    ),
+}
 
 try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -76,20 +129,29 @@ class TelegramHandlers:
             return
         model = " ".join(context.args or [])
         if not model:
-            await update.effective_message.reply_text("Usage: /model <name>")
+            await update.effective_message.reply_text(
+                _model_configuration_text(self.bridge.config),
+                reply_markup=_provider_keyboard(self.bridge.config),
+            )
             return
-        self.bridge.config = _replace_general(self.bridge.config, default_model=model)
-        await update.effective_message.reply_text(f"Model set to {model}.")
+        provider, selected_model = _parse_telegram_model_argument(model, self.bridge.config.general.default_provider)
+        self.bridge.config = _replace_general(self.bridge.config, default_provider=provider, default_model=selected_model)
+        await update.effective_message.reply_text(f"Model set to {provider}:{selected_model}.")
 
     async def provider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
         provider = " ".join(context.args or [])
         if not provider:
-            await update.effective_message.reply_text("Usage: /provider anthropic|openai|openrouter|ollama|codex")
+            await update.effective_message.reply_text(
+                _model_configuration_text(self.bridge.config),
+                reply_markup=_provider_keyboard(self.bridge.config),
+            )
             return
-        if provider == "local":
-            provider = "ollama"
+        provider = _canonical_telegram_provider(provider)
+        if provider not in TELEGRAM_PROVIDER_LABELS:
+            await update.effective_message.reply_text(_provider_usage_text())
+            return
         self.bridge.config = _replace_general(self.bridge.config, default_provider=provider)
         await update.effective_message.reply_text(f"Provider set to {provider}.")
 
@@ -199,6 +261,47 @@ class TelegramHandlers:
             prompt_id = data.removeprefix("perm:no:")
             resolved = await self.bridge.resolve_permission_async(prompt_id, "deny")
             await query.answer("Denied." if resolved else "Prompt expired.")
+            return
+        if data == "cfg:cancel":
+            await query.answer("Cancelled.")
+            await query.edit_message_text("Model configuration cancelled.")
+            return
+        if data == "cfg:providers":
+            await query.answer("Providers")
+            await query.edit_message_text(
+                _model_configuration_text(self.bridge.config),
+                reply_markup=_provider_keyboard(self.bridge.config),
+            )
+            return
+        if data.startswith("cfg:provider:"):
+            provider = _canonical_telegram_provider(data.removeprefix("cfg:provider:"))
+            if provider not in TELEGRAM_PROVIDER_LABELS:
+                await query.answer("Unknown provider.", show_alert=True)
+                return
+            await query.answer(TELEGRAM_PROVIDER_LABELS[provider])
+            await query.edit_message_text(
+                _provider_model_text(self.bridge.config, provider),
+                reply_markup=_model_keyboard(self.bridge.config, provider),
+            )
+            return
+        if data.startswith("cfg:model:"):
+            parts = data.split(":")
+            if len(parts) != 4:
+                await query.answer("Invalid model selection.", show_alert=True)
+                return
+            _, _, provider, index_text = parts
+            provider = _canonical_telegram_provider(provider)
+            preset = _model_preset_at(provider, index_text)
+            if preset is None:
+                await query.answer("Unknown model.", show_alert=True)
+                return
+            self.bridge.config = _replace_general(
+                self.bridge.config,
+                default_provider=preset.provider,
+                default_model=preset.model,
+            )
+            await query.answer("Model selected.")
+            await query.edit_message_text(_model_selected_text(preset))
 
     async def _authorized(self, update: Update) -> bool:
         user_id = update.effective_user.id if update.effective_user else None
@@ -324,12 +427,16 @@ def _telegram_help_text() -> str:
             "/start - Check that the bot is ready",
             "/help - Show this command list",
             "/new - Start a fresh chat session",
-            "/model <name> - Switch the current model",
-            "/provider anthropic|openai|openrouter|ollama|codex - Switch provider",
+            "/model - Open provider/model buttons",
+            "/model <provider>:<name> - Switch model by text",
+            "/models - Open provider/model buttons",
+            "/provider - Open provider buttons",
             "/cost - Show token and cost usage",
+            "/status - Show token and cost usage",
             "/compact - Compact the current context",
             "/schedule examples|list|add ... - Manage recurring runs",
             "/cancel - Cancel the active generation",
+            "/stop - Cancel the active generation",
             "",
             "Send a normal message to start an agent run.",
         ]
@@ -341,12 +448,15 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("start", "Check that Libre Claw is ready"),
         ("help", "Show Telegram slash commands"),
         ("new", "Start a fresh chat session"),
-        ("model", "Switch the current model"),
-        ("provider", "Switch provider"),
+        ("model", "Open model configuration"),
+        ("models", "Open model configuration"),
+        ("provider", "Open provider selector"),
         ("cost", "Show token and cost usage"),
+        ("status", "Show session info"),
         ("compact", "Compact the current context"),
         ("schedule", "Manage recurring runs"),
         ("cancel", "Cancel active generation"),
+        ("stop", "Cancel active generation"),
     )
 
 
@@ -354,3 +464,126 @@ def _replace_general(config, **changes):
     from libre_claw.tui.app import _replace_general as replace_general
 
     return replace_general(config, **changes)
+
+
+def _canonical_telegram_provider(provider: str) -> str:
+    normalized = provider.strip().lower()
+    if normalized in {"local", "ollama-cloud", "ollama_cloud"}:
+        return "ollama"
+    if normalized in {"openai-codex", "openai_codex"}:
+        return "codex"
+    return normalized
+
+
+def _parse_telegram_model_argument(argument: str, current_provider: str) -> tuple[str, str]:
+    cleaned = argument.strip()
+    provider = _canonical_telegram_provider(current_provider)
+    if not cleaned:
+        return provider, ""
+    prefix, separator, rest = cleaned.partition(":")
+    canonical_prefix = _canonical_telegram_provider(prefix)
+    if separator and canonical_prefix in TELEGRAM_PROVIDER_LABELS and rest.strip():
+        return canonical_prefix, rest.strip()
+    return provider, cleaned
+
+
+def _provider_usage_text() -> str:
+    providers = "|".join(TELEGRAM_PROVIDER_LABELS)
+    return f"Usage: /provider {providers}\nOr send /provider to use buttons."
+
+
+def _model_configuration_text(config: Any) -> str:
+    provider = _canonical_telegram_provider(str(config.general.default_provider))
+    model = str(config.general.default_model)
+    label = TELEGRAM_PROVIDER_LABELS.get(provider, provider)
+    return "\n".join(
+        [
+            "Model Configuration",
+            "",
+            f"Current model: {model}",
+            f"Provider: {label}",
+            "",
+            "Select a provider:",
+        ]
+    )
+
+
+def _provider_model_text(config: Any, provider: str) -> str:
+    current_provider = _canonical_telegram_provider(str(config.general.default_provider))
+    current_model = str(config.general.default_model)
+    label = TELEGRAM_PROVIDER_LABELS.get(provider, provider)
+    lines = [
+        "Model Configuration",
+        "",
+        f"Provider: {label}",
+        f"Current model: {current_provider}:{current_model}",
+        "",
+        "Select a model:",
+    ]
+    return "\n".join(lines)
+
+
+def _model_selected_text(preset: TelegramModelPreset) -> str:
+    label = TELEGRAM_PROVIDER_LABELS.get(preset.provider, preset.provider)
+    return "\n".join(
+        [
+            "Model selected",
+            "",
+            f"Provider: {label}",
+            f"Model: {preset.model}",
+            "",
+            "Your next Telegram message will use this model.",
+        ]
+    )
+
+
+def _provider_keyboard(config: Any) -> Any:
+    provider = _canonical_telegram_provider(str(config.general.default_provider))
+    buttons: list[list[Any]] = []
+    row: list[Any] = []
+    for provider_name in TELEGRAM_MODEL_PRESETS:
+        label = TELEGRAM_PROVIDER_LABELS[provider_name]
+        count = len(TELEGRAM_MODEL_PRESETS.get(provider_name, ()))
+        prefix = "✓ " if provider_name == provider else ""
+        row.append(InlineKeyboardButton(f"{prefix}{label} ({count})", callback_data=f"cfg:provider:{provider_name}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton("× Cancel", callback_data="cfg:cancel")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def _model_keyboard(config: Any, provider: str) -> Any:
+    current_provider = _canonical_telegram_provider(str(config.general.default_provider))
+    current_model = str(config.general.default_model)
+    presets = TELEGRAM_MODEL_PRESETS.get(provider, ())
+    buttons: list[list[Any]] = []
+    row: list[Any] = []
+    for index, preset in enumerate(presets):
+        selected = provider == current_provider and preset.model == current_model
+        prefix = "✓ " if selected else ""
+        row.append(InlineKeyboardButton(f"{prefix}{preset.label}", callback_data=f"cfg:model:{provider}:{index}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append(
+        [
+            InlineKeyboardButton("‹ Providers", callback_data="cfg:providers"),
+            InlineKeyboardButton("× Cancel", callback_data="cfg:cancel"),
+        ]
+    )
+    return InlineKeyboardMarkup(buttons)
+
+
+def _model_preset_at(provider: str, index_text: str) -> TelegramModelPreset | None:
+    if not index_text.isdigit():
+        return None
+    presets = TELEGRAM_MODEL_PRESETS.get(provider, ())
+    index = int(index_text)
+    if index < 0 or index >= len(presets):
+        return None
+    return presets[index]
