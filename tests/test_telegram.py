@@ -283,6 +283,57 @@ async def test_telegram_model_callback_sets_provider_and_model(monkeypatch, tmp_
     assert "Your next Telegram message will use this model." in query.edits[-1]
 
 
+async def test_telegram_permission_callback_data_stays_under_telegram_limit(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    long_prompt_id = "daemon:run-20260525-200404-a2b6bb7f:" + ("toolu_browser_call_" * 8)
+
+    class Bridge:
+        config = load_config()
+
+        def __init__(self) -> None:
+            self.resolved: list[tuple[str, str]] = []
+
+        async def resolve_permission_async(self, prompt_id: str, resolution: str) -> bool:
+            self.resolved.append((prompt_id, resolution))
+            return True
+
+    bridge = Bridge()
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))  # type: ignore[arg-type]
+    markup = handlers._permission_reply_markup(long_prompt_id)
+    approve_data = markup.inline_keyboard[0][0].callback_data
+    deny_data = markup.inline_keyboard[0][1].callback_data
+
+    assert approve_data is not None
+    assert deny_data is not None
+    assert len(approve_data) <= 64
+    assert len(deny_data) <= 64
+
+    class User:
+        id = 123
+
+    class Query:
+        data = approve_data
+        from_user = User()
+
+        def __init__(self) -> None:
+            self.answers: list[str] = []
+
+        async def answer(self, text: str, show_alert: bool = False) -> None:
+            del show_alert
+            self.answers.append(text)
+
+    class Update:
+        def __init__(self, query: Query) -> None:
+            self.callback_query = query
+
+    query = Query()
+    await handlers.callback(Update(query), object())  # type: ignore[arg-type]
+
+    assert bridge.resolved == [(long_prompt_id, "allow_once")]
+    assert query.answers == ["Approved."]
+
+
 def test_telegram_bot_reads_secure_stored_token(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

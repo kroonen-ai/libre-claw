@@ -78,6 +78,8 @@ class TelegramHandlers:
         self.auth = auth
         self._heartbeat_tasks: dict[int, asyncio.Task[None]] = {}
         self._heartbeat_intervals: dict[int, int] = {}
+        self._permission_callback_ids: dict[str, str] = {}
+        self._permission_callback_counter = 0
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -224,19 +226,7 @@ class TelegramHandlers:
                         await _reply_text_chunks(update.effective_message, event.text, self.bridge.config.telegram.max_message_length)
                         continue
                     if isinstance(event, TelegramPermissionPrompt):
-                        await _reply_text_chunks(
-                            update.effective_message,
-                            event.text,
-                            self.bridge.config.telegram.max_message_length,
-                            reply_markup=InlineKeyboardMarkup(
-                                [
-                                    [
-                                        InlineKeyboardButton("Approve", callback_data=f"perm:yes:{event.prompt_id}"),
-                                        InlineKeyboardButton("Deny", callback_data=f"perm:no:{event.prompt_id}"),
-                                    ]
-                                ]
-                            ),
-                        )
+                        await self._reply_permission_prompt(update.effective_message, event)
                         continue
                     if isinstance(event, TelegramDone):
                         if accumulated:
@@ -309,18 +299,7 @@ class TelegramHandlers:
                 await _send_text_chunks(context.bot, chat_id, event.text, self.bridge.config.telegram.max_message_length)
                 continue
             if isinstance(event, TelegramPermissionPrompt):
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=event.text,
-                    reply_markup=InlineKeyboardMarkup(
-                        [
-                            [
-                                InlineKeyboardButton("Approve", callback_data=f"perm:yes:{event.prompt_id}"),
-                                InlineKeyboardButton("Deny", callback_data=f"perm:no:{event.prompt_id}"),
-                            ]
-                        ]
-                    ),
-                )
+                await self._send_permission_prompt(context.bot, chat_id, event)
                 continue
             if isinstance(event, TelegramDone):
                 await _send_text_chunks(
@@ -342,13 +321,13 @@ class TelegramHandlers:
             await query.answer("Not authorized.", show_alert=True)
             return
         data = query.data or ""
-        if data.startswith("perm:yes:"):
-            prompt_id = data.removeprefix("perm:yes:")
+        if data.startswith("p:y:"):
+            prompt_id = self._permission_callback_ids.pop(data.removeprefix("p:y:"), "")
             resolved = await self.bridge.resolve_permission_async(prompt_id, "allow_once")
             await query.answer("Approved." if resolved else "Prompt expired.")
             return
-        if data.startswith("perm:no:"):
-            prompt_id = data.removeprefix("perm:no:")
+        if data.startswith("p:n:"):
+            prompt_id = self._permission_callback_ids.pop(data.removeprefix("p:n:"), "")
             resolved = await self.bridge.resolve_permission_async(prompt_id, "deny")
             await query.answer("Denied." if resolved else "Prompt expired.")
             return
@@ -402,6 +381,64 @@ class TelegramHandlers:
             await update.effective_message.reply_text(_unauthorized_text(user_id, username))
         return False
 
+    async def _reply_permission_prompt(self, message: Any, event: TelegramPermissionPrompt) -> None:
+        try:
+            await _reply_text_chunks(
+                message,
+                event.text,
+                self.bridge.config.telegram.max_message_length,
+                reply_markup=self._permission_reply_markup(event.prompt_id),
+            )
+        except Exception as exc:
+            await self._deny_unrenderable_permission(event.prompt_id, exc, message=message)
+
+    async def _send_permission_prompt(self, bot: Any, chat_id: int, event: TelegramPermissionPrompt) -> None:
+        chunks = _message_chunks(event.text, self.bridge.config.telegram.max_message_length)
+        try:
+            for index, chunk in enumerate(chunks):
+                markup = self._permission_reply_markup(event.prompt_id) if index == len(chunks) - 1 else None
+                await bot.send_message(chat_id=chat_id, text=chunk, reply_markup=markup)
+        except Exception as exc:
+            await self._deny_unrenderable_permission(event.prompt_id, exc, bot=bot, chat_id=chat_id)
+
+    def _permission_reply_markup(self, prompt_id: str) -> Any:
+        token = self._register_permission_prompt(prompt_id)
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Approve", callback_data=f"p:y:{token}"),
+                    InlineKeyboardButton("Deny", callback_data=f"p:n:{token}"),
+                ]
+            ]
+        )
+
+    def _register_permission_prompt(self, prompt_id: str) -> str:
+        self._permission_callback_counter += 1
+        token = _base36(self._permission_callback_counter)
+        self._permission_callback_ids[token] = prompt_id
+        if len(self._permission_callback_ids) > 500:
+            stale_tokens = list(self._permission_callback_ids)[:100]
+            for stale_token in stale_tokens:
+                self._permission_callback_ids.pop(stale_token, None)
+        return token
+
+    async def _deny_unrenderable_permission(
+        self,
+        prompt_id: str,
+        exc: Exception,
+        *,
+        message: Any | None = None,
+        bot: Any | None = None,
+        chat_id: int | None = None,
+    ) -> None:
+        await self.bridge.resolve_permission_async(prompt_id, "deny")
+        notice = f"Telegram could not render the permission prompt, so Libre Claw denied it safely: {exc}"
+        if message is not None:
+            await _reply_text_chunks(message, notice, self.bridge.config.telegram.max_message_length)
+            return
+        if bot is not None and chat_id is not None:
+            await _send_text_chunks(bot, chat_id, notice, self.bridge.config.telegram.max_message_length)
+
 
 def _truncate(text: str, limit: int) -> str:
     limit = _telegram_message_limit(limit)
@@ -420,6 +457,18 @@ def _stream_preview(text: str, configured_limit: int) -> str:
 
 def _telegram_message_limit(configured_limit: int) -> int:
     return max(1, min(configured_limit, TELEGRAM_HARD_MESSAGE_LIMIT, TELEGRAM_SAFE_MESSAGE_LIMIT))
+
+
+def _base36(value: int) -> str:
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+    if value <= 0:
+        return "0"
+    digits: list[str] = []
+    remaining = value
+    while remaining:
+        remaining, index = divmod(remaining, 36)
+        digits.append(alphabet[index])
+    return "".join(reversed(digits))
 
 
 async def _edit_text_preview(message: Any, text: str, configured_limit: int) -> None:
