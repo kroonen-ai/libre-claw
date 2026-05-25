@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +17,24 @@ from libre_claw.core.tools import BaseTool, ToolResult, register_tool
 
 
 MAX_BROWSER_TEXT_CHARS = 30000
+MAX_BROWSER_EXTRACT_CHARS = 60000
 DEFAULT_PROFILE = "default"
+COOKIE_CONSENT_SELECTORS = (
+    "button:has-text('Accept all')",
+    "button:has-text('Accept All')",
+    "button:has-text('Accept cookies')",
+    "button:has-text('Accept Cookies')",
+    "button:has-text('I agree')",
+    "button:has-text('Agree')",
+    "button:has-text('OK')",
+    "button:has-text('Got it')",
+    "[id*='accept'][role='button']",
+    "[class*='accept'][role='button']",
+    "#onetrust-accept-btn-handler",
+    ".cc-allow",
+    ".cc-accept",
+    ".cookie-accept",
+)
 
 
 class BrowserState:
@@ -76,11 +95,18 @@ class BrowserNavigateTool(BaseTool):
         "url": {"type": "string", "description": "HTTP or HTTPS URL to open"},
         "profile": {"type": "string", "description": "Persistent browser profile name", "default": DEFAULT_PROFILE},
         "timeout_ms": {"type": "integer", "description": "Navigation timeout in milliseconds", "default": 30000},
+        "dismiss_cookies": {"type": "boolean", "description": "Try to dismiss common cookie consent popups after load", "default": True},
     }
     required = ("url",)
     permission_level = "ask"
 
-    async def execute(self, url: str, profile: str = DEFAULT_PROFILE, timeout_ms: int | None = None) -> ToolResult:
+    async def execute(
+        self,
+        url: str,
+        profile: str = DEFAULT_PROFILE,
+        timeout_ms: int | None = None,
+        dismiss_cookies: bool = True,
+    ) -> ToolResult:
         try:
             timeout = _timeout(timeout_ms, self.context.browser_default_timeout_ms)
         except ValueError as exc:
@@ -95,6 +121,7 @@ class BrowserNavigateTool(BaseTool):
             return ToolResult(error=error)
         try:
             response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+            dismissed = await _dismiss_cookie_banners(page) if dismiss_cookies else []
             title = await page.title()
         except Exception as exc:
             return ToolResult(error=str(exc))
@@ -104,8 +131,18 @@ class BrowserNavigateTool(BaseTool):
             return ToolResult(error=f"Navigation reached a blocked URL: {post_error}")
         status = getattr(response, "status", None)
         return ToolResult(
-            content=f"Opened {page.url}\ntitle: {title}\nstatus: {status if status is not None else 'unknown'}",
-            metadata={"artifact_type": "browser_page", "profile": state.profile, "url": page.url, "title": title, "status": status},
+            content=(
+                f"Opened {page.url}\ntitle: {title}\nstatus: {status if status is not None else 'unknown'}"
+                + (f"\ndismissed_cookie_selectors: {len(dismissed)}" if dismiss_cookies else "")
+            ),
+            metadata={
+                "artifact_type": "browser_page",
+                "profile": state.profile,
+                "url": page.url,
+                "title": title,
+                "status": status,
+                "dismissed_cookie_selectors": dismissed,
+            },
         )
 
 
@@ -160,6 +197,137 @@ class BrowserReadTool(BaseTool):
                 "characters": len(text),
                 "truncated": truncated,
             },
+        )
+
+
+@register_tool
+class BrowserExtractTool(BaseTool):
+    name = "browser_extract"
+    description = "Extract image URLs, links, metadata, and structured data from the current browser page without relying on visible text."
+    parameters = {
+        "kind": {"type": "string", "description": "Data to extract: all, images, links, structured, or metadata", "default": "all"},
+        "selector": {"type": "string", "description": "Optional CSS selector to scope extraction", "default": "document"},
+        "profile": {"type": "string", "description": "Persistent browser profile name", "default": DEFAULT_PROFILE},
+        "max_items": {"type": "integer", "description": "Maximum items per extracted collection", "default": 200},
+        "max_chars": {"type": "integer", "description": f"Maximum JSON characters to return, capped at {MAX_BROWSER_EXTRACT_CHARS}", "default": 30000},
+    }
+    permission_level = "allow"
+
+    async def execute(
+        self,
+        kind: str = "all",
+        selector: str = "document",
+        profile: str = DEFAULT_PROFILE,
+        max_items: int = 200,
+        max_chars: int = 30000,
+    ) -> ToolResult:
+        if kind not in {"all", "images", "links", "structured", "metadata"}:
+            return ToolResult(error="kind must be all, images, links, structured, or metadata")
+        if max_items < 1:
+            return ToolResult(error="max_items must be >= 1")
+        if max_items > 1000:
+            return ToolResult(error="max_items must be <= 1000")
+        if max_chars < 1:
+            return ToolResult(error="max_chars must be >= 1")
+        if max_chars > MAX_BROWSER_EXTRACT_CHARS:
+            return ToolResult(error=f"max_chars must be <= {MAX_BROWSER_EXTRACT_CHARS}")
+
+        page = _current_page(self, profile)
+        if page is None:
+            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+
+        try:
+            data = await page.evaluate(_BROWSER_EXTRACT_SCRIPT, {"kind": kind, "selector": selector or "document", "maxItems": max_items})
+            title = await page.title()
+        except Exception as exc:
+            return ToolResult(error=str(exc))
+
+        text, truncated = _json_text(data, max_chars)
+        return ToolResult(
+            content=text,
+            metadata={
+                "artifact_type": "browser_extract",
+                "profile": _safe_profile(profile),
+                "url": page.url,
+                "title": title,
+                "kind": kind,
+                "selector": selector or "document",
+                "truncated": truncated,
+            },
+        )
+
+
+@register_tool
+class BrowserExecuteTool(BaseTool):
+    name = "browser_execute"
+    description = "Run JavaScript in the current browser page context and return the serialized result."
+    parameters = {
+        "script": {"type": "string", "description": "JavaScript expression or function body accepted by Playwright page.evaluate"},
+        "arg": {"type": "object", "description": "Optional JSON-serializable argument passed to the script", "default": {}},
+        "profile": {"type": "string", "description": "Persistent browser profile name", "default": DEFAULT_PROFILE},
+        "timeout_ms": {"type": "integer", "description": "Execution timeout in milliseconds", "default": 5000},
+        "max_chars": {"type": "integer", "description": f"Maximum JSON characters to return, capped at {MAX_BROWSER_EXTRACT_CHARS}", "default": 30000},
+    }
+    required = ("script",)
+    permission_level = "ask"
+
+    async def execute(
+        self,
+        script: str,
+        arg: dict[str, Any] | None = None,
+        profile: str = DEFAULT_PROFILE,
+        timeout_ms: int = 5000,
+        max_chars: int = 30000,
+    ) -> ToolResult:
+        if not script.strip():
+            return ToolResult(error="script must not be empty")
+        if max_chars < 1:
+            return ToolResult(error="max_chars must be >= 1")
+        if max_chars > MAX_BROWSER_EXTRACT_CHARS:
+            return ToolResult(error=f"max_chars must be <= {MAX_BROWSER_EXTRACT_CHARS}")
+        try:
+            timeout = _timeout(timeout_ms, 5000)
+        except ValueError as exc:
+            return ToolResult(error=str(exc))
+        page = _current_page(self, profile)
+        if page is None:
+            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+        try:
+            result = await asyncio.wait_for(page.evaluate(script, arg or {}), timeout=timeout / 1000)
+        except TimeoutError:
+            return ToolResult(error=f"JavaScript execution timed out after {timeout} ms")
+        except Exception as exc:
+            return ToolResult(error=str(exc))
+
+        text, truncated = _json_text(result, max_chars)
+        return ToolResult(
+            content=text,
+            metadata={
+                "artifact_type": "browser_execute",
+                "profile": _safe_profile(profile),
+                "url": page.url,
+                "truncated": truncated,
+            },
+        )
+
+
+@register_tool
+class BrowserDismissCookiesTool(BaseTool):
+    name = "browser_dismiss_cookies"
+    description = "Try to dismiss common cookie consent popups on the current browser page."
+    parameters = {
+        "profile": {"type": "string", "description": "Persistent browser profile name", "default": DEFAULT_PROFILE},
+    }
+    permission_level = "allow"
+
+    async def execute(self, profile: str = DEFAULT_PROFILE) -> ToolResult:
+        page = _current_page(self, profile)
+        if page is None:
+            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+        dismissed = await _dismiss_cookie_banners(page)
+        return ToolResult(
+            content=f"Dismissed {len(dismissed)} cookie consent element(s).",
+            metadata={"artifact_type": "browser_action", "profile": _safe_profile(profile), "url": page.url, "action": "dismiss_cookies", "selectors": dismissed},
         )
 
 
@@ -408,6 +576,18 @@ def _current_page(tool: BaseTool, profile: str) -> Any | None:
     return state.page
 
 
+async def _dismiss_cookie_banners(page: Any) -> list[str]:
+    dismissed: list[str] = []
+    for selector in COOKIE_CONSENT_SELECTORS:
+        try:
+            await page.locator(selector).first.click(timeout=1000)
+            dismissed.append(selector)
+            break
+        except Exception:
+            continue
+    return dismissed
+
+
 def _domain_policy_error(url: str, allowed_domains: tuple[str, ...], denied_domains: tuple[str, ...]) -> str | None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -463,3 +643,77 @@ def _cap_text(text: str, max_chars: int) -> tuple[str, bool]:
     if len(text) <= max_chars:
         return text, False
     return text[:max_chars] + f"\n... truncated {len(text) - max_chars} characters ...", True
+
+
+def _json_text(value: Any, max_chars: int) -> tuple[str, bool]:
+    try:
+        text = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False, default=str)
+    except TypeError:
+        text = json.dumps(str(value), ensure_ascii=False)
+    if len(text) <= max_chars:
+        return text, False
+    return text[:max_chars] + f"\n... truncated {len(text) - max_chars} characters ...", True
+
+
+_BROWSER_EXTRACT_SCRIPT = """
+({ kind, selector, maxItems }) => {
+  const root = selector && selector !== "document" ? document.querySelector(selector) : document;
+  if (!root) {
+    throw new Error(`selector not found: ${selector}`);
+  }
+  const limit = (items) => Array.from(items).slice(0, maxItems);
+  const absolute = (value) => {
+    try {
+      return value ? new URL(value, document.baseURI).href : "";
+    } catch {
+      return value || "";
+    }
+  };
+  const result = {
+    url: location.href,
+    title: document.title,
+  };
+  if (kind === "all" || kind === "images") {
+    result.images = limit(root.querySelectorAll("img, source[srcset], picture source")).map((node) => ({
+      tag: node.tagName.toLowerCase(),
+      src: absolute(node.currentSrc || node.src || node.getAttribute("src") || ""),
+      srcset: node.getAttribute("srcset") || "",
+      alt: node.getAttribute("alt") || "",
+      width: Number(node.naturalWidth || node.width || 0),
+      height: Number(node.naturalHeight || node.height || 0),
+      loading: node.getAttribute("loading") || "",
+    }));
+  }
+  if (kind === "all" || kind === "links") {
+    result.links = limit(root.querySelectorAll("a[href]")).map((node) => ({
+      href: absolute(node.getAttribute("href") || ""),
+      text: (node.innerText || node.textContent || "").trim().slice(0, 500),
+      title: node.getAttribute("title") || "",
+      target: node.getAttribute("target") || "",
+      rel: node.getAttribute("rel") || "",
+    }));
+  }
+  if (kind === "all" || kind === "structured") {
+    result.structured = limit(root.querySelectorAll("script[type='application/ld+json']")).map((node) => {
+      const raw = node.textContent || "";
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return { raw };
+      }
+    });
+  }
+  if (kind === "all" || kind === "metadata") {
+    result.metadata = {
+      canonical: document.querySelector("link[rel='canonical']")?.href || "",
+      description: document.querySelector("meta[name='description']")?.content || "",
+      metas: limit(document.querySelectorAll("meta[name], meta[property]")).map((node) => ({
+        name: node.getAttribute("name") || "",
+        property: node.getAttribute("property") || "",
+        content: node.getAttribute("content") || "",
+      })),
+    };
+  }
+  return result;
+}
+"""

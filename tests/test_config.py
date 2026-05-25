@@ -57,6 +57,8 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert "Kroonen AI Inc. (https://kroonen.ai)" in config.agent.system_prompt
     assert "search_files" in config.agent.system_prompt
     assert "browser_download" in config.agent.system_prompt
+    assert "browser_execute" in config.agent.system_prompt
+    assert "http_request" in config.agent.system_prompt
     assert config.agent.system_prompt_extra == ""
     assert "curl | bash" in config.sandbox.blocked_patterns
     assert config.providers["openrouter"]["api_key_env"] == "OPENROUTER_API_KEY"

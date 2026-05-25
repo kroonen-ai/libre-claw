@@ -35,10 +35,19 @@ class PermissionManager:
             "git_status",
             "think",
             "browser_read",
+            "browser_extract",
             "browser_wait",
             "browser_screenshot",
+            "browser_dismiss_cookies",
         }:
             return "allow"
+
+        if self.config.auto_approve_read and call.name == "http_request":
+            method = str(call.arguments.get("method", "GET")).upper()
+            has_body = bool(call.arguments.get("body") or call.arguments.get("json_body"))
+            has_output = bool(call.arguments.get("output_path"))
+            if method in {"GET", "HEAD"} and not has_body and not has_output:
+                return "allow"
 
         if tool.permission_level in {"allow", "ask", "deny"}:
             return tool.permission_level

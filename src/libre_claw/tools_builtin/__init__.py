@@ -13,6 +13,7 @@ from libre_claw.core.tools import ToolContext, ToolRegistry, registered_tool_typ
 from libre_claw.tools_builtin import browser as _browser  # noqa: F401
 from libre_claw.tools_builtin import filesystem as _filesystem  # noqa: F401
 from libre_claw.tools_builtin import git as _git  # noqa: F401
+from libre_claw.tools_builtin import http as _http  # noqa: F401
 from libre_claw.tools_builtin import mcp as _mcp
 from libre_claw.tools_builtin import search as _search  # noqa: F401
 from libre_claw.tools_builtin import shell as _shell  # noqa: F401

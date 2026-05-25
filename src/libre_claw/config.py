@@ -282,6 +282,7 @@ def _load_default_config() -> ConfigTable:
                 "(https://kroonen.ai) running in the user's terminal.\n"
                 "You have access to tools for reading files, writing files, editing files, "
                 "listing directories, searching code, inspecting git, browsing web pages, "
+                "extracting browser data, running browser JavaScript, fetching HTTP URLs/APIs, "
                 "clicking and typing in browser pages, downloading browser files, "
                 "thinking through plans, and running shell commands.\n\n"
                 "RULES:\n"
@@ -294,8 +295,9 @@ def _load_default_config() -> ConfigTable:
                 "- When you're done, summarize what you changed and why.\n\n"
                 "Current toolset: read_file, write_file, edit_file, list_directory, "
                 "glob, search_files, git_status, git_commit, think, browser_navigate, "
-                "browser_read, browser_click, browser_type, browser_wait, browser_download, "
-                "browser_screenshot, and bash."
+                "browser_read, browser_extract, browser_execute, browser_dismiss_cookies, "
+                "browser_click, browser_type, browser_wait, browser_download, browser_screenshot, "
+                "http_request, and bash."
             ),
             "system_prompt_extra": "",
         },

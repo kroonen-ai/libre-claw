@@ -17,7 +17,10 @@ from libre_claw.tools_builtin import browser as browser_tools
 from libre_claw.tools_builtin import create_builtin_registry
 from libre_claw.tools_builtin.browser import (
     BrowserClickTool,
+    BrowserDismissCookiesTool,
     BrowserDownloadTool,
+    BrowserExecuteTool,
+    BrowserExtractTool,
     BrowserNavigateTool,
     BrowserReadTool,
     BrowserScreenshotTool,
@@ -27,6 +30,7 @@ from libre_claw.tools_builtin.browser import (
 )
 from libre_claw.tools_builtin.filesystem import EditFileTool, ListDirectoryTool, ReadFileTool, WriteFileTool
 from libre_claw.tools_builtin.git import GitCommitTool, GitStatusTool
+from libre_claw.tools_builtin.http import HTTPRequestTool
 from libre_claw.tools_builtin.search import GlobTool, SearchFilesTool
 from libre_claw.tools_builtin.shell import BashTool
 from libre_claw.tools_builtin.think import ThinkTool
@@ -96,11 +100,15 @@ def test_builtin_registry_exposes_production_toolset(tmp_path: Path) -> None:
         "think",
         "browser_navigate",
         "browser_read",
+        "browser_extract",
+        "browser_execute",
+        "browser_dismiss_cookies",
         "browser_click",
         "browser_type",
         "browser_wait",
         "browser_download",
         "browser_screenshot",
+        "http_request",
         "bash",
     }.issubset(names)
 
@@ -398,6 +406,65 @@ async def test_think_tool_has_no_side_effects(tmp_path: Path) -> None:
     assert result.metadata["side_effects"] is False
 
 
+async def test_http_request_get_returns_response(monkeypatch, tmp_path: Path) -> None:
+    response = FakeHTTPResponse(
+        url="https://api.example.test/data?query=libre",
+        content=b'{"ok": true}',
+        headers={"content-type": "application/json"},
+    )
+    client = FakeHTTPClient(response)
+    monkeypatch.setattr("libre_claw.tools_builtin.http.httpx.AsyncClient", lambda **kwargs: client)
+
+    result = await HTTPRequestTool(context(tmp_path)).execute(
+        url="https://api.example.test/data",
+        headers={"Accept": "application/json"},
+        params={"query": "libre"},
+    )
+
+    assert result.error is None
+    assert "status: 200 OK" in result.content
+    assert '{"ok": true}' in result.content
+    assert result.metadata["status_code"] == 200
+    assert client.last_request["params"] == {"query": "libre"}
+
+
+async def test_http_request_can_save_download(monkeypatch, tmp_path: Path) -> None:
+    response = FakeHTTPResponse(
+        url="https://cdn.example.test/image.png",
+        content=b"image-bytes",
+        headers={"content-type": "image/png"},
+    )
+    monkeypatch.setattr("libre_claw.tools_builtin.http.httpx.AsyncClient", lambda **kwargs: FakeHTTPClient(response))
+
+    result = await HTTPRequestTool(context(tmp_path)).execute(
+        url="https://cdn.example.test/image.png",
+        output_path="downloads/image.png",
+    )
+
+    saved = tmp_path / "downloads" / "image.png"
+    assert result.error is None
+    assert saved.read_bytes() == b"image-bytes"
+    assert result.metadata["saved_path"] == str(saved)
+
+
+async def test_http_request_validates_inputs_and_sandbox(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "libre_claw.tools_builtin.http.httpx.AsyncClient",
+        lambda **kwargs: FakeHTTPClient(FakeHTTPResponse(url="https://api.example.test")),
+    )
+    tool = HTTPRequestTool(context(tmp_path))
+
+    invalid_method = await tool.execute(url="https://api.example.test", method="TRACE")
+    body_conflict = await tool.execute(url="https://api.example.test", body="raw", json_body={"ok": True})
+    outside = await tool.execute(url="https://api.example.test", output_path=str(tmp_path.parent / "outside.bin"))
+
+    assert invalid_method.error is not None
+    assert "method must be one of" in invalid_method.error
+    assert body_conflict.error == "provide body or json_body, not both"
+    assert outside.error is not None
+    assert "outside the working directory" in outside.error
+
+
 async def test_browser_tools_gracefully_handle_missing_session_or_dependency(monkeypatch, tmp_path: Path) -> None:
     def missing_playwright(name: str):
         raise ModuleNotFoundError(name)
@@ -406,11 +473,17 @@ async def test_browser_tools_gracefully_handle_missing_session_or_dependency(mon
 
     navigate = await BrowserNavigateTool(context(tmp_path)).execute(url="https://example.com")
     read = await BrowserReadTool(context(tmp_path)).execute()
+    extract = await BrowserExtractTool(context(tmp_path)).execute()
+    execute = await BrowserExecuteTool(context(tmp_path)).execute(script="() => true")
+    dismiss = await BrowserDismissCookiesTool(context(tmp_path)).execute()
     screenshot = await BrowserScreenshotTool(context(tmp_path)).execute()
 
     assert navigate.error is not None
     assert "Playwright is not installed" in navigate.error or "Executable doesn't exist" in navigate.error
     assert read.error == "No browser page is open. Use browser_navigate first."
+    assert extract.error == "No browser page is open. Use browser_navigate first."
+    assert execute.error == "No browser page is open. Use browser_navigate first."
+    assert dismiss.error == "No browser page is open. Use browser_navigate first."
     assert screenshot.error == "No browser page is open. Use browser_navigate first."
 
 
@@ -440,6 +513,9 @@ async def test_browser_selector_actions_and_artifacts_use_shared_profile(tmp_pat
     ctx.shared_state["browser_states"] = {"default": state}
 
     read = await read_tool.execute(selector="main")
+    extracted = await BrowserExtractTool(ctx).execute(kind="images")
+    executed = await BrowserExecuteTool(ctx).execute(script="(arg) => ({ ok: true, arg })", arg={"x": 1})
+    dismissed = await BrowserDismissCookiesTool(ctx).execute()
     clicked = await BrowserClickTool(ctx).execute(selector="button.save")
     typed = await BrowserTypeTool(ctx).execute(selector="input[name=q]", text="hello", press_enter=True)
     waited = await BrowserWaitTool(ctx).execute(selector=".ready")
@@ -448,6 +524,9 @@ async def test_browser_selector_actions_and_artifacts_use_shared_profile(tmp_pat
     outside = await BrowserScreenshotTool(ctx).execute(path=str(tmp_path.parent / "outside.png"))
 
     assert "selector: main" in read.content
+    assert '"images"' in extracted.content
+    assert executed.metadata["artifact_type"] == "browser_execute"
+    assert dismissed.metadata["action"] == "dismiss_cookies"
     assert clicked.metadata["action"] == "click"
     assert typed.metadata["action"] == "type"
     assert waited.metadata["action"] == "wait"
@@ -459,17 +538,64 @@ async def test_browser_selector_actions_and_artifacts_use_shared_profile(tmp_pat
     assert "outside the working directory" in outside.error
 
 
+class FakeHTTPResponse:
+    def __init__(
+        self,
+        url: str,
+        content: bytes = b"",
+        headers: dict[str, str] | None = None,
+        status_code: int = 200,
+        reason_phrase: str = "OK",
+    ) -> None:
+        self.url = url
+        self.content = content
+        self.headers = headers or {}
+        self.status_code = status_code
+        self.reason_phrase = reason_phrase
+
+    @property
+    def text(self) -> str:
+        return self.content.decode("utf-8", "replace")
+
+
+class FakeHTTPClient:
+    def __init__(self, response: FakeHTTPResponse) -> None:
+        self.response = response
+        self.last_request: dict[str, object] = {}
+
+    async def __aenter__(self) -> "FakeHTTPClient":
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        del exc_type, exc, traceback
+
+    async def request(self, method: str, url: str, **kwargs: object) -> FakeHTTPResponse:
+        self.last_request = {"method": method, "url": url, **kwargs}
+        return self.response
+
+
 class FakePage:
     url = "https://kroonen.ai/app"
 
     def __init__(self) -> None:
         self.download = FakeDownload()
+        self.clicked_selectors: list[str] = []
 
     async def title(self) -> str:
         return "Fake Page"
 
     def locator(self, selector: str) -> "FakeLocator":
-        return FakeLocator(selector)
+        return FakeLocator(selector, self)
+
+    async def evaluate(self, script: str, arg: object | None = None) -> object:
+        if "querySelectorAll" in script:
+            return {
+                "url": self.url,
+                "title": "Fake Page",
+                "images": [{"src": "https://kroonen.ai/logo.png", "alt": "Libre Claw"}],
+                "links": [{"href": "https://kroonen.ai", "text": "Kroonen AI"}],
+            }
+        return {"ok": True, "arg": arg}
 
     async def screenshot(self, path: str, full_page: bool = True) -> None:
         del full_page
@@ -484,8 +610,9 @@ class FakePage:
 
 
 class FakeLocator:
-    def __init__(self, selector: str) -> None:
+    def __init__(self, selector: str, page: FakePage) -> None:
         self.selector = selector
+        self.page = page
 
     @property
     def first(self) -> "FakeLocator":
@@ -497,6 +624,7 @@ class FakeLocator:
 
     async def click(self, timeout: int) -> None:
         del timeout
+        self.page.clicked_selectors.append(self.selector)
 
     async def fill(self, text: str, timeout: int) -> None:
         del text, timeout

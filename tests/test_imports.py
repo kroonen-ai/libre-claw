@@ -41,6 +41,7 @@ def test_phase_one_modules_import() -> None:
         "libre_claw.tools_builtin.browser",
         "libre_claw.tools_builtin.filesystem",
         "libre_claw.tools_builtin.git",
+        "libre_claw.tools_builtin.http",
         "libre_claw.tools_builtin.mcp",
         "libre_claw.tools_builtin.search",
         "libre_claw.tools_builtin.shell",

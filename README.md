@@ -18,8 +18,9 @@ and run the Telegram daemon.
   Ollama endpoints.
 - Built-in tools: `read_file`, `write_file`, `edit_file`, `list_directory`,
   `glob`, `search_files`, `git_status`, `git_commit`, `think`,
-  `browser_navigate`, `browser_read`, `browser_click`, `browser_type`,
-  `browser_wait`, `browser_download`, `browser_screenshot`, and `bash`.
+  `browser_navigate`, `browser_read`, `browser_extract`, `browser_execute`,
+  `browser_dismiss_cookies`, `browser_click`, `browser_type`, `browser_wait`,
+  `browser_download`, `browser_screenshot`, `http_request`, and `bash`.
 - `/goal` supervised mode that keeps the agent working for up to a bounded
   number of turns until a separate judge model marks the objective complete.
 - Durable local runs with IDs, append-only event logs, run artifacts, and
@@ -34,6 +35,7 @@ and run the Telegram daemon.
 - Recurring local automations with `/schedule`, cron-like schedules, daemon
   execution, saved reports, and TUI/Telegram route metadata.
 - Browser/computer-use tools with persistent profiles, CSS selector actions,
+  page-data extraction, JavaScript execution, cookie-consent dismissal,
   downloads, screenshots, browser artifacts, and domain allow/deny policy.
 - OpenRouter growth analytics with app-attribution verification, recommended
   model presets, and persistent `/usage openrouter` rollups by model, run, and
@@ -594,14 +596,21 @@ Available browser tools:
 
 - `browser_navigate`: open an HTTP(S) URL in a named persistent profile.
 - `browser_read`: read visible text from `body` or a CSS selector.
+- `browser_extract`: extract image URLs, links, metadata, and JSON-LD
+  structured data from the current page without relying on visible text.
+- `browser_execute`: run JavaScript in the current page context and return the
+  serialized result. This requires approval.
+- `browser_dismiss_cookies`: retry common cookie-consent dismissal selectors on
+  the current page.
 - `browser_click`: click a CSS selector.
 - `browser_type`: type/fill text into a CSS selector, optionally pressing Enter.
 - `browser_wait`: wait for a selector state or page load state.
 - `browser_download`: click a selector that starts a download and save it.
 - `browser_screenshot`: capture the full page or a CSS selector.
 
-Browser state is kept per tool registry/run profile. The default profile is
-`default`, and login/session storage lives under:
+`browser_navigate` tries to dismiss common cookie banners after page load by
+default. Browser state is kept per tool registry/run profile. The default
+profile is `default`, and login/session storage lives under:
 
 ```text
 ~/.libre-claw/browser/profiles/<profile>/
@@ -633,6 +642,19 @@ headless = true
 
 Domain entries match the exact host and subdomains. Use `*.example.com` for a
 wildcard-style suffix rule.
+
+## HTTP Request Tool
+
+`http_request` gives the agent a direct HTTP path for APIs, image URLs, and
+downloads without going through `bash`.
+
+- Safe `GET` and `HEAD` requests with no body and no output file are
+  auto-approved when read tools are auto-approved.
+- `POST`, `PUT`, `PATCH`, `DELETE`, request bodies, and downloads require
+  approval.
+- `output_path` saves the response body inside the configured working directory
+  and is checked by the same sandbox path policy as file tools.
+- The browser domain allow/deny lists also apply to `http_request`.
 
 ## MCP Tools
 

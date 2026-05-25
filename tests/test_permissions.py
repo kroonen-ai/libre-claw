@@ -67,7 +67,28 @@ def test_read_tools_auto_allowed_by_config() -> None:
         "git_status",
         "think",
         "browser_read",
+        "browser_extract",
         "browser_wait",
         "browser_screenshot",
+        "browser_dismiss_cookies",
     ):
         assert manager.check(ToolCall(id=name, name=name), AskTool(context)) == "allow"
+
+
+def test_http_request_auto_allows_safe_reads_only() -> None:
+    context = ToolContext(working_directory=Path.cwd())
+    manager = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=True))
+
+    safe_get = ToolCall(id="get", name="http_request", arguments={"url": "https://example.com"})
+    safe_head = ToolCall(id="head", name="http_request", arguments={"url": "https://example.com", "method": "HEAD"})
+    post = ToolCall(id="post", name="http_request", arguments={"url": "https://example.com", "method": "POST"})
+    download = ToolCall(
+        id="download",
+        name="http_request",
+        arguments={"url": "https://example.com/file", "output_path": "file.bin"},
+    )
+
+    assert manager.check(safe_get, AskTool(context)) == "allow"
+    assert manager.check(safe_head, AskTool(context)) == "allow"
+    assert manager.check(post, AskTool(context)) == "ask"
+    assert manager.check(download, AskTool(context)) == "ask"
