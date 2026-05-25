@@ -87,6 +87,7 @@ def make_agent(
     max_tool_calls_per_turn: int = 50,
     system_prompt_extra: str = "",
     skill_provider: SkillProvider | None = None,
+    soul_provider=None,
 ) -> Agent:
     permissions = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=True))
     return Agent(
@@ -98,6 +99,7 @@ def make_agent(
         system_prompt="test system",
         system_prompt_extra=system_prompt_extra,
         skill_provider=skill_provider,
+        soul_provider=soul_provider,
     )
 
 
@@ -138,6 +140,18 @@ async def test_agent_appends_configured_system_prompt_extra() -> None:
 
     assert provider.received_system is not None
     assert provider.received_system.startswith("test system\n\nextra instructions")
+
+
+async def test_agent_injects_soul_persona_into_system_prompt() -> None:
+    provider = ScriptedProvider([[TextDelta("ok"), Done()]])
+    agent = make_agent(provider, soul_provider=lambda: ["Be electric but precise."])
+
+    await collect_events(agent, "Hi")
+
+    assert provider.received_system is not None
+    assert "Libre Claw soul/persona customization" in provider.received_system
+    assert "Be electric but precise." in provider.received_system
+    assert "never override safety rules" in provider.received_system
 
 
 async def test_agent_loads_relevant_skills_into_system_prompt() -> None:

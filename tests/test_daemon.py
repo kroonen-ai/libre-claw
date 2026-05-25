@@ -282,6 +282,30 @@ async def test_daemon_injects_project_skills(monkeypatch, tmp_path: Path) -> Non
     assert "Skill: Pytest Debug" in provider.system_prompts[0]
 
 
+async def test_daemon_injects_soul_files(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    soul_path = tmp_path / ".libre-claw" / "soul.md"
+    soul_path.parent.mkdir(parents=True)
+    soul_path.write_text("# Project Soul\n\nBe unmistakably Libre Claw.", encoding="utf-8")
+    provider = ScriptedProvider([[TextDelta("ok"), Done()]])
+    config = load_config()
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    started = await server.start_run(RequestStub(body={"message": "hello"}))  # type: ignore[arg-type]
+    await _wait_for_state(server, _response_payload(started)["run"]["run_id"], "done")
+
+    assert provider.system_prompts
+    assert provider.system_prompts[0] is not None
+    assert "Libre Claw soul/persona customization" in provider.system_prompts[0]
+    assert "Be unmistakably Libre Claw." in provider.system_prompts[0]
+
+
 async def test_daemon_automation_api_crud(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

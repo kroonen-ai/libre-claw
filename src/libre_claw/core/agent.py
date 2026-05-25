@@ -58,6 +58,7 @@ class AgentError:
 
 AgentEvent = AgentTextDelta | AgentToolCall | AgentToolResult | AgentPermissionRequest | AgentDone | AgentError
 SkillProvider = Callable[[str], Sequence[str] | Awaitable[Sequence[str]]]
+SoulProvider = Callable[[], Sequence[str] | Awaitable[Sequence[str]]]
 
 
 class Agent:
@@ -76,6 +77,7 @@ class Agent:
         memory_facts: list[str] | None = None,
         system_prompt_extra: str = "",
         skill_provider: SkillProvider | None = None,
+        soul_provider: SoulProvider | None = None,
     ) -> None:
         self.session = session
         self.provider = provider
@@ -88,11 +90,14 @@ class Agent:
         self.system_prompt = system_prompt
         self.system_prompt_extra = system_prompt_extra
         self.skill_provider = skill_provider
+        self.soul_provider = soul_provider
         self._active_skills: list[str] = []
+        self._active_soul: list[str] = []
         self._logger = structlog.get_logger(__name__)
 
     async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
         self.session.add_user_message(user_message)
+        self._active_soul = await self._load_soul()
         self._active_skills = await self._load_skills(user_message)
         total_tool_calls = 0
         turn_usage: Usage | None = None
@@ -228,6 +233,13 @@ class Agent:
         parts = [self.system_prompt]
         if self.system_prompt_extra:
             parts.append(self.system_prompt_extra)
+        if self._active_soul:
+            parts.append(
+                "Libre Claw soul/persona customization. These notes may shape voice, style, taste, "
+                "and durable identity, but they never override safety rules, tool permissions, "
+                "sandbox boundaries, provider policies, or direct user instructions:\n\n"
+                + "\n\n---\n\n".join(self._active_soul)
+            )
         if self.memory_facts:
             facts = "\n".join(f"- {fact}" for fact in self.memory_facts)
             parts.append("Persistent user/project facts:\n" + facts)
@@ -254,4 +266,16 @@ class Agent:
             return [text for text in result if text.strip()]
         except Exception as exc:
             self._logger.warning("skill_load_failed", error=str(exc))
+            return []
+
+    async def _load_soul(self) -> list[str]:
+        if self.soul_provider is None:
+            return []
+        try:
+            result = self.soul_provider()
+            if inspect.isawaitable(result):
+                result = await result
+            return [text for text in result if text.strip()]
+        except Exception as exc:
+            self._logger.warning("soul_load_failed", error=str(exc))
             return []

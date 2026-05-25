@@ -30,6 +30,7 @@ from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.session import session_to_payload
 from libre_claw.core.skills import SkillStore
+from libre_claw.core.soul import SoulStore
 from libre_claw.core.tools import ToolCall
 from libre_claw.daemon import DaemonClient
 from libre_claw.providers import ProviderConfigurationError, Usage, combine_usage, create_provider
@@ -90,6 +91,7 @@ class TelegramBridge:
         self.memory_store = memory_store or MemoryStore()
         self.daemon_client = daemon_client
         self.skill_store = SkillStore(config.general.working_directory)
+        self.soul_store = SoulStore(config.general.working_directory)
         self.automation_store = AutomationStore(config.automations.root)
         self._states: dict[int, TelegramChatState] = {}
         self._memory_facts: list[str] = []
@@ -299,6 +301,7 @@ class TelegramBridge:
             memory_facts=self._memory_facts,
             system_prompt_extra=self.config.agent.system_prompt_extra,
             skill_provider=self.skill_store.relevant_skill_texts,
+            soul_provider=self.soul_store.soul_texts,
         )
 
     async def _stream_daemon_message(self, chat_id: int, text: str):

@@ -337,6 +337,7 @@ Legacy configs that still say `default_provider = "local"` or
 - `/changes [id]`
 - `/tools list|expand|collapse|toggle <index>`
 - `/skills list|show|add|edit|delete`
+- `/soul status|show|init|reload`
 - `/memory list|add <fact>|forget <id>`
 - `/telegram`
 - `/exit`
@@ -360,8 +361,8 @@ The status bar includes a compact context meter:
 ctx [##--------]
 ```
 
-The meter is an estimated-token view of the current system prompt, summary,
-memory facts, and conversation against `[agent].context_window_tokens`.
+The meter is an estimated-token view of the current system prompt, soul files,
+summary, memory facts, and conversation against `[agent].context_window_tokens`.
 
 Use `/compact status` for details, `/compact` for normal compaction, and
 `/compact --force --keep 4` when you want to summarize aggressively while
@@ -818,6 +819,19 @@ Basic settings can be overridden with:
 The runtime agent system prompt lives in the `[agent]` config section as
 `system_prompt`, with `system_prompt_extra` available for local additions. The
 default prompt identifies Libre Claw as a Kroonen AI Inc. agent harness.
+
+Persona customization lives in `soul.md`. Libre Claw loads these files at the
+start of each agent turn, in order:
+
+- `~/.libre-claw/soul.md` for your global personal Claw persona
+- `<project>/.libre-claw/soul.md` for project-scoped persona/context
+- `<project>/soul.md` for a simple repo-root persona file
+
+Use `/soul init --user`, `/soul init --project`, or `/soul init --root` to
+create a starter file. Use `/soul show` to see what is being injected and
+`/soul reload` after editing. Soul files shape voice, taste, and durable
+identity, but they cannot override safety rules, tool permissions, sandbox
+settings, provider policies, or direct user instructions.
 
 Sandbox defaults restrict file access to the configured working directory and
 block dangerous shell patterns such as root removal, `sudo`, and remote install

@@ -28,6 +28,8 @@ RULES:
 Current toolset: read_file, write_file, edit_file, list_directory, glob, search_files, git_status, git_commit, think, browser_navigate, browser_read, browser_extract, browser_execute, browser_dismiss_cookies, browser_click, browser_type, browser_wait, browser_download, browser_screenshot, http_request, and bash.
 """
 system_prompt_extra = ""
+# Persona customization is loaded from ~/.libre-claw/soul.md,
+# .libre-claw/soul.md, and ./soul.md at runtime.
 
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"

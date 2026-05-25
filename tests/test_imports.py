@@ -24,6 +24,7 @@ def test_phase_one_modules_import() -> None:
         "libre_claw.core.runs",
         "libre_claw.core.sandbox",
         "libre_claw.core.skills",
+        "libre_claw.core.soul",
         "libre_claw.core.tools",
         "libre_claw.core.usage",
         "libre_claw.providers.anthropic",

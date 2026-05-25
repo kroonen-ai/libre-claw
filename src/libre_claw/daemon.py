@@ -34,6 +34,7 @@ from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, run_plan_text
 from libre_claw.core.skills import SkillStore
+from libre_claw.core.soul import SoulStore
 from libre_claw.core.tools import ToolRegistry
 from libre_claw.core.usage import (
     load_usage_records,
@@ -586,6 +587,7 @@ class DaemonServer:
         provider = self.provider_factory(config)
         facts = await self.memory_store.list_facts()
         skill_store = SkillStore(config.general.working_directory)
+        soul_store = SoulStore(config.general.working_directory)
         return Agent(
             session=session or Session(),
             provider=provider,
@@ -598,6 +600,7 @@ class DaemonServer:
             memory_facts=[fact.fact for fact in facts],
             system_prompt_extra=config.agent.system_prompt_extra,
             skill_provider=skill_store.relevant_skill_texts,
+            soul_provider=soul_store.soul_texts,
         )
 
 

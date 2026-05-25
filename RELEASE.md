@@ -55,6 +55,9 @@ First shippable Libre Claw release from Kroonen AI Inc.
   `.libre-claw/skills/`, AgentSkills-style `SKILL.md` discovery, `/skills`
   management commands, and relevant skill injection across TUI, Telegram, and
   daemon agent runs.
+- Soul/persona system with `~/.libre-claw/soul.md`, project
+  `.libre-claw/soul.md`, and project-root `soul.md` injection across TUI,
+  Telegram, and daemon agent runs, plus `/soul status|show|init|reload`.
 - File explorer hidden by default, with parent-directory navigation, agent
   working-directory sync, a visible `Hide` control, a left-side `Files` rail
   for restoring the sidebar, and `Ctrl+B` toggling.

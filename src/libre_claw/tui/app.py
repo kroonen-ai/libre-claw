@@ -67,6 +67,7 @@ from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, pe
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.session import ChatMessage, estimate_context_tokens
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
+from libre_claw.core.soul import SoulError, SoulStore
 from libre_claw.core.tools import ToolCall, ToolResult
 from libre_claw.core.usage import (
     load_usage_records,
@@ -192,6 +193,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/approvals", "/approvals", "Show blocked tool approvals"),
     SlashCommand("/changes", "/changes [id]", "Show what changed since your last review"),
     SlashCommand("/skills", "/skills list|add|edit|delete", "Manage Libre Claw skills"),
+    SlashCommand("/soul", "/soul status|show|init|reload", "Manage soul.md persona injection"),
     SlashCommand("/schedule", "/schedule list|add|pause|resume|delete|examples", "Manage recurring local runs"),
     SlashCommand("/memory", "/memory list|add <fact>|forget <id>", "Manage persistent memory facts"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
@@ -606,6 +608,7 @@ class LibreClawApp(App[None]):
         self.session = Session()
         self.memory_store = MemoryStore()
         self.skill_store = SkillStore(self.config.general.working_directory)
+        self.soul_store = SoulStore(self.config.general.working_directory)
         self.run_store = RunStore()
         self.automation_store = AutomationStore(self.config.automations.root)
         self.daemon_client = DaemonClient(daemon_base_url(self.config)) if self.config.tui.use_daemon else None
@@ -886,6 +889,9 @@ class LibreClawApp(App[None]):
             return
         if command == "/skills":
             await self._handle_skills_command(argument)
+            return
+        if command == "/soul":
+            self._handle_soul_command(argument)
             return
         if command == "/schedule":
             await self._handle_schedule_command(argument)
@@ -1836,6 +1842,32 @@ class LibreClawApp(App[None]):
 
         self._append_system(_skills_help_text())
 
+    def _handle_soul_command(self, argument: str) -> None:
+        tokens = argument.split()
+        action = tokens[0].lower() if tokens else "status"
+        if action in {"status", "paths"}:
+            self._append_system(self.soul_store.status_text())
+            return
+        if action == "show":
+            self._append_system(self.soul_store.combined_text())
+            return
+        if action == "reload":
+            self._rebuild_agent()
+            count = len(self.soul_store.load())
+            self._append_system(f"Reloaded {count} soul file{'s' if count != 1 else ''}.")
+            return
+        if action == "init":
+            scope = tokens[1] if len(tokens) > 1 else "--user"
+            try:
+                path = self.soul_store.ensure_template(scope)
+            except SoulError as exc:
+                self._append_system(str(exc))
+                return
+            self._rebuild_agent()
+            self._append_system(f"Soul template ready: {path}")
+            return
+        self._append_system("Usage: /soul status|show|reload|init --user|--project|--root")
+
     async def _handle_schedule_command(self, argument: str) -> None:
         try:
             parsed = _parse_schedule_command(argument)
@@ -2363,6 +2395,7 @@ class LibreClawApp(App[None]):
 
         self.config = _replace_general(self.config, working_directory=parent)
         self.skill_store = SkillStore(self.config.general.working_directory)
+        self.soul_store = SoulStore(self.config.general.working_directory)
         self.query_one("#file-tree", DirectoryTree).path = parent
         self.query_one("#sidebar-root", Static).update(self._sidebar_root_text())
         self._rebuild_agent()
@@ -2544,6 +2577,7 @@ class LibreClawApp(App[None]):
             memory_facts=self.memory_facts,
             system_prompt_extra=self.config.agent.system_prompt_extra,
             skill_provider=self.skill_store.relevant_skill_texts,
+            soul_provider=self.soul_store.soul_texts,
         )
 
     async def _initialize_memory(self) -> None:
@@ -2766,6 +2800,21 @@ class LibreClawApp(App[None]):
                 for suggestion in suggestions
                 if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
             ][:6]
+        if lowered.startswith("/soul "):
+            query = lowered.removeprefix("/soul ").strip()
+            suggestions = [
+                SlashCommand("/soul status", "/soul status", "Show loaded soul.md files"),
+                SlashCommand("/soul show", "/soul show", "Show active persona text"),
+                SlashCommand("/soul init --user", "/soul init --user", "Create ~/.libre-claw/soul.md"),
+                SlashCommand("/soul init --project", "/soul init --project", "Create .libre-claw/soul.md"),
+                SlashCommand("/soul init --root", "/soul init --root", "Create ./soul.md"),
+                SlashCommand("/soul reload", "/soul reload", "Reload persona files"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
         if lowered.startswith("/schedule "):
             query = lowered.removeprefix("/schedule ").strip()
             suggestions = [
@@ -2872,6 +2921,7 @@ class LibreClawApp(App[None]):
             for text in (
                 self.config.agent.system_prompt,
                 self.config.agent.system_prompt_extra,
+                *self.soul_store.soul_texts(),
                 *self.memory_facts,
             )
             if text
