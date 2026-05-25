@@ -26,6 +26,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.general.working_directory == tmp_path.resolve()
     assert config.tui.show_status_bar is True
     assert config.tui.show_file_tree is False
+    assert config.tui.use_daemon is False
     assert config.permissions.default_level == "ask"
     assert config.auth.keyring_service == "libre-claw"
     assert config.auth.token_ttl_seconds == 3600
@@ -39,6 +40,9 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.daemon.host == "127.0.0.1"
     assert config.daemon.port == 8766
     assert config.daemon.poll_interval == 0.5
+    assert config.mcp.enabled is False
+    assert config.mcp.allowlist == ()
+    assert config.mcp.permission_level == "ask"
     assert "Kroonen AI Inc. (https://kroonen.ai)" in config.agent.system_prompt
     assert "search_files" in config.agent.system_prompt
     assert "browser_screenshot" in config.agent.system_prompt

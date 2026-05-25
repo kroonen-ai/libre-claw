@@ -97,6 +97,7 @@ token_ttl_seconds = 3600
 show_file_tree = false
 show_status_bar = true
 vim_keybindings = false
+use_daemon = false # when true, the TUI starts and polls daemon-owned runs
 
 [telegram]
 enabled = false
@@ -119,3 +120,15 @@ judge_max_tokens = 1024
 host = "127.0.0.1"
 port = 8766
 poll_interval = 0.5
+
+[mcp]
+enabled = false
+allowlist = [] # expose only server.tool names listed here; empty means use each server's tools list
+permission_level = "ask" # allow | ask | deny for external MCP tools
+tool_timeout = 30
+
+[mcp.servers]
+# Example:
+# [mcp.servers.filesystem]
+# command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."]
+# tools = ["read_file", "list_directory"]

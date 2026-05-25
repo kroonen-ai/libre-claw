@@ -62,6 +62,7 @@ from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.session import ChatMessage, estimate_context_tokens
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
 from libre_claw.core.tools import ToolCall, ToolResult
+from libre_claw.daemon import DaemonClient, daemon_base_url
 from libre_claw.providers import LLMProvider, ProviderConfigurationError, Usage, combine_usage, create_provider
 from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
@@ -174,7 +175,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/skills", "/skills list|add|edit|delete", "Manage Libre Claw skills"),
     SlashCommand("/memory", "/memory list|add <fact>|forget <id>", "Manage persistent memory facts"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
-    SlashCommand("/tools", "/tools expand|collapse|toggle <index>", "Control tool call details"),
+    SlashCommand("/tools", "/tools list|expand|collapse|toggle <index>", "Inspect and control tool details"),
     SlashCommand("/exit", "/exit", "Exit Libre Claw"),
 )
 
@@ -586,6 +587,7 @@ class LibreClawApp(App[None]):
         self.memory_store = MemoryStore()
         self.skill_store = SkillStore(self.config.general.working_directory)
         self.run_store = RunStore()
+        self.daemon_client = DaemonClient(daemon_base_url(self.config)) if self.config.tui.use_daemon else None
         self.memory_facts: list[str] = []
         self.agent: Agent | None = None
         self.provider_error: str | None = None
@@ -597,6 +599,7 @@ class LibreClawApp(App[None]):
         self._slash_suggestions: list[SlashCommand] = []
         self._active_task: asyncio.Task[None] | None = None
         self._pending_permission: AgentPermissionRequest | None = None
+        self._pending_daemon_permission_run_id: str | None = None
         self._tool_entry_by_call_id: dict[str, int] = {}
         self._chat_entry_spans: dict[int, tuple[int, int]] = {}
         self._started_at = time.monotonic()
@@ -607,6 +610,7 @@ class LibreClawApp(App[None]):
         self._last_goal_decision: JudgeDecision | None = None
         self._active_run_id: str | None = None
         self._active_run_summary = ""
+        self._daemon_poll_after = 0
         self._artifact_run_id: str | None = None
         self._artifact_tab: ArtifactTab = "summary"
         self._artifact_visible = False
@@ -661,6 +665,8 @@ class LibreClawApp(App[None]):
         self.set_interval(1, self._update_status)
         await self._initialize_memory()
         self._append_system(f"Libre Claw v{__version__} ready. Type /help for commands.")
+        if self.daemon_client is not None:
+            self._append_system(f"TUI daemon mode enabled: {daemon_base_url(self.config)}")
         if self.provider_error is not None:
             self._append_system(self.provider_error)
 
@@ -764,6 +770,11 @@ class LibreClawApp(App[None]):
             return
 
         self._append_user(text)
+        if self.daemon_client is not None:
+            assistant_index = self._append_assistant("")
+            self._active_task = asyncio.create_task(self._stream_daemon_response(text, assistant_index))
+            return
+
         run = await self._start_run("chat", text)
         await self._record_run_event("user_message", {"content": text})
         if self.agent is None:
@@ -782,7 +793,7 @@ class LibreClawApp(App[None]):
         argument = parts[1].strip() if len(parts) > 1 else ""
 
         if command == "/exit":
-            self._cancel_active_generation()
+            self._cancel_active_generation(cancel_daemon_run=False)
             self.exit()
             return
         if command == "/clear":
@@ -875,7 +886,7 @@ class LibreClawApp(App[None]):
         self._cancel_active_generation()
 
     def action_quit_app(self) -> None:
-        self._cancel_active_generation(quiet=True)
+        self._cancel_active_generation(quiet=True, cancel_daemon_run=False)
         self.exit()
 
     def action_toggle_sidebar(self) -> None:
@@ -940,6 +951,122 @@ class LibreClawApp(App[None]):
             self._active_task = None
             await self._finish_active_run(run_state, summary=run_summary)
             self.query_one("#input", Input).focus()
+
+    async def _stream_daemon_response(self, user_message: str, assistant_index: int) -> None:
+        if self.daemon_client is None:
+            return
+
+        try:
+            started = await self.daemon_client.start_run(
+                user_message,
+                kind="chat",
+                provider=_canonical_tui_provider(self.config.general.default_provider),
+                model=_effective_model(self.config),
+            )
+            run = _object_payload(started.get("run"))
+            run_id = str(run.get("run_id", ""))
+            if not run_id:
+                raise RuntimeError("Daemon did not return a run id.")
+            self._active_run_id = run_id
+            self._daemon_poll_after = 0
+            self._append_system(f"Daemon run {run_id} started.")
+            await self._poll_daemon_run(run_id, assistant_index)
+        except asyncio.CancelledError:
+            self._append_system("Daemon polling stopped. The daemon run can continue in the background.")
+        except Exception as exc:
+            if assistant_index < len(self.transcript) and not self.transcript[assistant_index].content:
+                self.transcript.pop(assistant_index)
+                self._render_transcript()
+            self._append_system(f"Daemon run failed: {exc}")
+        finally:
+            self._pending_permission = None
+            self._pending_daemon_permission_run_id = None
+            self._hide_permission_prompt()
+            self._active_task = None
+            self.query_one("#input", Input).focus()
+
+    async def _poll_daemon_run(self, run_id: str, assistant_index: int) -> None:
+        if self.daemon_client is None:
+            return
+
+        while True:
+            payload = await self.daemon_client.get_events(run_id, after=self._daemon_poll_after)
+            events = payload.get("events", [])
+            if isinstance(events, list):
+                for raw_event in events:
+                    if not isinstance(raw_event, dict):
+                        continue
+                    self._daemon_poll_after = max(self._daemon_poll_after, int(raw_event.get("event_id", 0) or 0))
+                    self._handle_daemon_event(run_id, raw_event, assistant_index)
+
+            detail = await self.daemon_client.get_run(run_id)
+            run = _object_payload(detail.get("run"))
+            state = str(run.get("state", ""))
+            if state in {"done", "failed", "cancelled"}:
+                self._active_run_id = None
+                await self._refresh_artifact_panel_for_run_id(run_id)
+                return
+            await asyncio.sleep(max(0.1, self.config.daemon.poll_interval))
+
+    def _handle_daemon_event(self, run_id: str, raw_event: dict[str, Any], assistant_index: int) -> None:
+        data = _object_payload(raw_event.get("data"))
+        event_type = str(raw_event.get("type", ""))
+        if event_type in {"run_started", "user_message"}:
+            return
+        if event_type == "assistant_delta":
+            text = str(data.get("text", ""))
+            self._append_to_entry(assistant_index, text)
+            self._last_assistant_response = self.transcript[assistant_index].content
+            return
+        if event_type == "tool_call":
+            call = ToolCall(
+                id=str(data.get("id", "")),
+                name=str(data.get("name", "tool")),
+                arguments=_object_payload(data.get("arguments")),
+            )
+            self._append_tool_call(call)
+            return
+        if event_type == "permission_request":
+            call = ToolCall(
+                id=str(data.get("tool_call_id", "")),
+                name=str(data.get("name", "tool")),
+                arguments=_object_payload(data.get("arguments")),
+            )
+            future: asyncio.Future[PermissionResolution] = asyncio.get_running_loop().create_future()
+            self._pending_permission = AgentPermissionRequest(call=call, future=future)
+            self._pending_daemon_permission_run_id = run_id
+            self._show_permission_prompt(self._pending_permission)
+            return
+        if event_type == "tool_result":
+            call = ToolCall(
+                id=str(data.get("tool_call_id", "")),
+                name=str(data.get("name", "tool")),
+                arguments=_object_payload(data.get("arguments")),
+            )
+            result = ToolResult(
+                content=str(data.get("content", "")) if not data.get("is_error") else "",
+                error=str(data.get("content", "")) if data.get("is_error") else None,
+                metadata=_object_payload(data.get("metadata")),
+            )
+            self._append_tool_result(call, result)
+            return
+        if event_type == "usage":
+            usage = _usage_from_payload(data)
+            self.usage = combine_usage(self.usage, usage) or self.usage
+            self._update_status()
+            return
+        if event_type == "error":
+            self._append_system(str(data.get("message", "Daemon run error.")))
+            return
+        if event_type == "run_finished":
+            self._append_system(f"Daemon run {run_id} finished: {data.get('state', 'done')}")
+
+    async def _refresh_artifact_panel_for_run_id(self, run_id: str) -> None:
+        if not self._artifact_visible or self._artifact_run_id != run_id:
+            return
+        run = await self.run_store.load_run(run_id)
+        if run is not None:
+            await self._refresh_artifact_panel(run)
 
     async def _stream_goal_response(self, goal: str, assistant_index: int, judge_provider: LLMProvider) -> None:
         if self.agent is None:
@@ -1196,15 +1323,18 @@ class LibreClawApp(App[None]):
         self._active_run_id = None
         self._active_run_summary = ""
 
-    def _cancel_active_generation(self, quiet: bool = False) -> None:
+    def _cancel_active_generation(self, quiet: bool = False, *, cancel_daemon_run: bool = True) -> None:
         if self._pending_permission is not None and not self._pending_permission.future.done():
             self._pending_permission.future.set_result("deny")
             self._pending_permission = None
+            self._pending_daemon_permission_run_id = None
             self._hide_permission_prompt()
         if self._active_task is None or self._active_task.done():
             if not quiet:
                 self._append_system("No active generation to cancel.")
             return
+        if cancel_daemon_run and self.daemon_client is not None and self._active_run_id is not None:
+            self._track_run_background_task(self.daemon_client.cancel_run(self._active_run_id))
         self._active_task.cancel()
 
     def _handle_permission_input(self, text: str) -> None:
@@ -1269,8 +1399,16 @@ class LibreClawApp(App[None]):
 
         if not request.future.done():
             request.future.set_result(resolution)
+        daemon_run_id = self._pending_daemon_permission_run_id
         self._pending_permission = None
+        self._pending_daemon_permission_run_id = None
         self._hide_permission_prompt()
+        if daemon_run_id is not None and self.daemon_client is not None:
+            self._track_run_background_task(
+                self.daemon_client.resolve_permission(daemon_run_id, request.call.id, resolution)
+            )
+            self._append_system(f"Daemon permission response sent for {request.call.name}: {_permission_label(resolution)}")
+            return
         self._record_run_event_later(
             "permission_response",
             {"tool_call_id": request.call.id, "name": request.call.name, "resolution": resolution},
@@ -1677,6 +1815,13 @@ class LibreClawApp(App[None]):
         self._append_system(changes)
         _write_last_seen_event_id(run, _max_event_id(events))
         await self._show_artifact_panel(run, "summary")
+        if self.daemon_client is not None and run.state in {"running", "blocked"}:
+            self._daemon_poll_after = _max_event_id(events)
+            assistant_index = _last_assistant_index(self.transcript)
+            if assistant_index is None:
+                assistant_index = self._append_assistant("")
+            self._active_task = asyncio.create_task(self._poll_daemon_run(run.run_id, assistant_index))
+            self._append_system(f"Polling active daemon run {run.run_id}.")
         self._append_system(f"Loaded run {run.run_id} ({run.state}) from {run.path}.")
 
     async def _handle_artifacts_command(self, argument: str) -> None:
@@ -1822,10 +1967,14 @@ class LibreClawApp(App[None]):
     def _handle_tools_command(self, argument: str) -> None:
         parts = argument.split()
         if not parts:
-            self._append_system("Usage: /tools expand|collapse|toggle <index>")
+            self._append_system("Usage: /tools list|expand|collapse|toggle <index>")
             return
 
         action = parts[0].lower()
+        if action == "list":
+            self._append_system(self._tools_list_text())
+            return
+
         index = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
         tool_entries = [entry for entry in self.transcript if entry.role == "tool"]
 
@@ -1842,7 +1991,20 @@ class LibreClawApp(App[None]):
             self._render_transcript()
             return
 
-        self._append_system("Usage: /tools expand|collapse|toggle <index>")
+        self._append_system("Usage: /tools list|expand|collapse|toggle <index>")
+
+    def _tools_list_text(self) -> str:
+        try:
+            registry = create_builtin_registry(self.config, memory_store=self.memory_store)
+        except Exception as exc:
+            return f"Could not load tools: {exc}"
+        lines = ["Available tools:"]
+        for schema in registry.schemas():
+            name = str(schema.get("name", "tool"))
+            description = str(schema.get("description", ""))
+            marker = " (MCP)" if name.startswith("mcp__") else ""
+            lines.append(f"- {name}{marker}: {description}")
+        return "\n".join(lines)
 
     async def _handle_codex_command(self, argument: str) -> None:
         parts = argument.split()
@@ -2069,16 +2231,23 @@ class LibreClawApp(App[None]):
     def _rebuild_agent(self) -> None:
         self.agent = None
         self.provider_error = None
+        if self.daemon_client is not None:
+            return
         try:
             provider = create_provider(self.config)
         except ProviderConfigurationError as exc:
+            self.provider_error = str(exc)
+            return
+        try:
+            tool_registry = create_builtin_registry(self.config, memory_store=self.memory_store)
+        except Exception as exc:
             self.provider_error = str(exc)
             return
 
         self.agent = Agent(
             session=self.session,
             provider=provider,
-            tool_registry=create_builtin_registry(self.config, memory_store=self.memory_store),
+            tool_registry=tool_registry,
             permission_manager=PermissionManager(self.config.permissions),
             system_prompt=self.config.agent.system_prompt,
             max_tool_calls_per_turn=self.config.agent.max_tool_calls_per_turn,
@@ -2262,6 +2431,20 @@ class LibreClawApp(App[None]):
                 if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
             ][:6]
 
+        if lowered.startswith("/tools "):
+            query = lowered.removeprefix("/tools ").strip()
+            suggestions = [
+                SlashCommand("/tools list", "/tools list", "List exposed tools including MCP"),
+                SlashCommand("/tools expand", "/tools expand", "Expand all tool cards"),
+                SlashCommand("/tools collapse", "/tools collapse", "Collapse all tool cards"),
+                SlashCommand("/tools toggle ", "/tools toggle <index>", "Toggle one tool card"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+
         if lowered.startswith("/skills "):
             query = lowered.removeprefix("/skills ").strip()
             suggestions = [
@@ -2418,6 +2601,7 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         telegram=config.telegram,
         goal=config.goal,
         daemon=config.daemon,
+        mcp=config.mcp,
         providers=config.providers,
         source_paths=config.source_paths,
     )
@@ -2596,6 +2780,20 @@ def _usage_payload(usage: Usage) -> dict[str, Any]:
         "reasoning_tokens": usage.reasoning_tokens,
         "cost": usage.cost,
     }
+
+
+def _usage_from_payload(payload: dict[str, Any]) -> Usage:
+    return Usage(
+        input_tokens=int(payload.get("input_tokens", 0) or 0),
+        output_tokens=int(payload.get("output_tokens", 0) or 0),
+        cached_tokens=int(payload.get("cached_tokens", 0) or 0),
+        reasoning_tokens=int(payload.get("reasoning_tokens", 0) or 0),
+        cost=payload.get("cost") if isinstance(payload.get("cost"), int | float) else None,
+    )
+
+
+def _object_payload(value: object) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 async def _collect_run_artifacts(
@@ -2974,6 +3172,13 @@ def _transcript_from_run_events(events: list[RunEvent]) -> list[TranscriptEntry]
             entries.append(TranscriptEntry(role="system", content=_run_event_summary(event)))
 
     return entries
+
+
+def _last_assistant_index(entries: list[TranscriptEntry]) -> int | None:
+    for index in range(len(entries) - 1, -1, -1):
+        if entries[index].role == "assistant":
+            return index
+    return None
 
 
 def _run_event_summary(event: RunEvent) -> str:

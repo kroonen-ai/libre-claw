@@ -74,6 +74,7 @@ class TUIConfig:
     show_file_tree: bool
     show_status_bar: bool
     vim_keybindings: bool
+    use_daemon: bool
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,15 @@ class DaemonConfig:
 
 
 @dataclass(frozen=True)
+class MCPConfig:
+    enabled: bool
+    allowlist: tuple[str, ...]
+    permission_level: str
+    tool_timeout: int
+    servers: Mapping[str, Mapping[str, Any]]
+
+
+@dataclass(frozen=True)
 class LibreClawConfig:
     general: GeneralConfig
     agent: AgentConfig
@@ -115,6 +125,7 @@ class LibreClawConfig:
     telegram: TelegramConfig
     goal: GoalConfig
     daemon: DaemonConfig
+    mcp: MCPConfig
     providers: Mapping[str, Mapping[str, Any]]
     source_paths: tuple[Path, ...] = field(default_factory=tuple)
 
@@ -335,6 +346,7 @@ def _load_default_config() -> ConfigTable:
             "show_file_tree": False,
             "show_status_bar": True,
             "vim_keybindings": False,
+            "use_daemon": False,
         },
         "telegram": {
             "enabled": False,
@@ -357,6 +369,13 @@ def _load_default_config() -> ConfigTable:
             "host": "127.0.0.1",
             "port": 8766,
             "poll_interval": 0.5,
+        },
+        "mcp": {
+            "enabled": False,
+            "allowlist": [],
+            "permission_level": "ask",
+            "tool_timeout": 30,
+            "servers": {},
         },
     }
 
@@ -494,6 +513,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
     telegram = _section(data, "telegram")
     goal = _section(data, "goal")
     daemon = _section(data, "daemon")
+    mcp = _section(data, "mcp")
 
     return LibreClawConfig(
         general=GeneralConfig(
@@ -533,6 +553,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             show_file_tree=_bool(tui, "show_file_tree"),
             show_status_bar=_bool(tui, "show_status_bar"),
             vim_keybindings=_bool(tui, "vim_keybindings"),
+            use_daemon=_bool(tui, "use_daemon"),
         ),
         telegram=TelegramConfig(
             enabled=_bool(telegram, "enabled"),
@@ -556,6 +577,13 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             port=_int(daemon, "port"),
             poll_interval=_float(daemon, "poll_interval"),
         ),
+        mcp=MCPConfig(
+            enabled=_bool(mcp, "enabled"),
+            allowlist=tuple(_list(mcp, "allowlist", str)),
+            permission_level=_str(mcp, "permission_level"),
+            tool_timeout=_int(mcp, "tool_timeout"),
+            servers=_mcp_servers(mcp),
+        ),
         providers=_providers(data),
         source_paths=source_paths,
     )
@@ -573,6 +601,13 @@ def _providers(data: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
     value = data.get("providers", {})
     if not isinstance(value, Mapping):
         raise ConfigError("Missing or invalid [providers] config section")
+    return {str(name): dict(config) for name, config in value.items() if isinstance(config, Mapping)}
+
+
+def _mcp_servers(mcp: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
+    value = mcp.get("servers", {})
+    if not isinstance(value, Mapping):
+        raise ConfigError("Config value mcp.servers must be a table")
     return {str(name): dict(config) for name, config in value.items() if isinstance(config, Mapping)}
 
 

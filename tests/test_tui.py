@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 from rich.console import Console
@@ -47,6 +48,41 @@ from libre_claw.tui.app import (
 )
 
 
+class FakeDaemonClient:
+    def __init__(self) -> None:
+        self.cancelled: list[str] = []
+        self.resolutions: list[tuple[str, str, str]] = []
+        self._served = False
+
+    async def start_run(self, message: str, **payload):
+        del message, payload
+        return {"run": {"run_id": "run-daemon", "state": "queued"}}
+
+    async def get_events(self, run_id: str, after: int = 0):
+        del run_id, after
+        if self._served:
+            return {"events": []}
+        self._served = True
+        return {
+            "events": [
+                {"event_id": 1, "type": "assistant_delta", "data": {"text": "hello from daemon"}},
+                {"event_id": 2, "type": "run_finished", "data": {"state": "done"}},
+            ]
+        }
+
+    async def get_run(self, run_id: str):
+        del run_id
+        return {"run": {"run_id": "run-daemon", "state": "done"}}
+
+    async def cancel_run(self, run_id: str):
+        self.cancelled.append(run_id)
+        return {"run_id": run_id, "cancelled": True}
+
+    async def resolve_permission(self, run_id: str, tool_call_id: str, resolution: str):
+        self.resolutions.append((run_id, tool_call_id, resolution))
+        return {"run_id": run_id, "tool_call_id": tool_call_id, "resolution": resolution}
+
+
 def test_tui_can_start_without_anthropic_api_key(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -57,6 +93,20 @@ def test_tui_can_start_without_anthropic_api_key(monkeypatch, tmp_path: Path) ->
     assert app.agent is None
     assert app.provider_error is not None
     assert "ANTHROPIC_API_KEY" in app.provider_error
+
+
+def test_tui_daemon_mode_skips_local_provider_setup(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config = load_config()
+    config = replace(config, tui=replace(config.tui, use_daemon=True))
+
+    app = LibreClawApp(config=config)
+
+    assert app.daemon_client is not None
+    assert app.agent is None
+    assert app.provider_error is None
 
 
 def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
@@ -268,6 +318,23 @@ async def test_skills_commands_manage_user_and_project_skills(monkeypatch, tmp_p
     assert any("Updated project skill pytest-debug" in entry.content for entry in app.transcript)
     assert any("Skill deleted." in entry.content for entry in app.transcript)
     assert not (tmp_path / ".libre-claw" / "skills" / "pytest-debug.md").exists()
+
+
+async def test_tui_daemon_mode_streams_daemon_events(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = replace(config, tui=replace(config.tui, use_daemon=True))
+    app = LibreClawApp(config=config)
+    app.daemon_client = FakeDaemonClient()  # type: ignore[assignment]
+
+    async with app.run_test():
+        await app.handle_user_input("hello")
+        assert app._active_task is not None
+        await app._active_task
+
+    assert any(entry.role == "assistant" and entry.content == "hello from daemon" for entry in app.transcript)
+    assert any("Daemon run run-daemon started" in entry.content for entry in app.transcript)
 
 
 async def test_run_commands_list_inspect_resume_and_cancel(monkeypatch, tmp_path: Path) -> None:

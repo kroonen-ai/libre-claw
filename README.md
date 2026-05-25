@@ -28,6 +28,10 @@ and run the Telegram daemon.
   summaries.
 - Background daemon API for daemon-owned runs, event polling, cancel, and
   permission approval.
+- Optional TUI daemon mode so the TUI can start and poll daemon-owned runs
+  instead of owning execution itself.
+- MCP stdio integration for explicitly configured and allowlisted external
+  tools, surfaced through the normal tool registry and permission system.
 - User and project skills loaded from `~/.libre-claw/skills/` and
   `.libre-claw/skills/`, with AgentSkills-style `SKILL.md` discovery.
 - Interactive permission prompts for write/edit/shell actions.
@@ -291,7 +295,7 @@ Legacy configs that still say `default_provider = "local"` or
 - `/artifacts [plan|summary|verify|diff] [id]`
 - `/approvals`
 - `/changes [id]`
-- `/tools expand|collapse|toggle <index>`
+- `/tools list|expand|collapse|toggle <index>`
 - `/skills list|show|add|edit|delete`
 - `/memory list|add <fact>|forget <id>`
 - `/telegram`
@@ -437,6 +441,18 @@ block a run on tool approval without losing its event history. This is the
 backend connection point for TUI and Telegram surfaces to share the same active
 run process.
 
+The TUI can also connect to the daemon instead of owning the agent run:
+
+```toml
+[tui]
+use_daemon = true
+```
+
+In daemon mode, normal chat messages become daemon-owned runs. The TUI polls
+events into the same transcript, sends approval decisions back through the
+daemon API, and can exit without killing the background run. Use `/resume <id>`
+to reload and keep polling a running or blocked daemon run.
+
 For security, daemon `POST /runs` requests cannot override `working_directory`.
 Set the daemon working directory through config or `--working-directory` when
 starting Libre Claw.
@@ -453,6 +469,28 @@ use_daemon = true
 Run `libre-claw daemon` and `libre-claw telegram` together. Telegram inline
 approval buttons then resolve the same daemon run through the local API, so the
 run can continue even if another surface is watching it.
+
+## MCP Tools
+
+P4 adds a first MCP bridge for stdio MCP servers. Libre Claw only exposes tools
+that are explicitly configured on a server and optionally present in the global
+allowlist. Exposed names use the form `mcp__server__tool`.
+
+```toml
+[mcp]
+enabled = true
+allowlist = ["demo.echo"]
+permission_level = "ask"
+tool_timeout = 30
+
+[mcp.servers.demo]
+command = ["python", "/path/to/mcp_server.py"]
+tools = ["echo"]
+```
+
+Use `/tools list` to see built-ins plus exposed MCP tools. MCP calls go through
+the same permission system as other tools, and the model receives only the
+configured tool names for the current run.
 
 ## Skills
 

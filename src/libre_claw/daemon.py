@@ -245,6 +245,7 @@ class DaemonServer:
             telegram=self.config.telegram,
             goal=self.config.goal,
             daemon=self.config.daemon,
+            mcp=self.config.mcp,
             providers=self.config.providers,
             source_paths=self.config.source_paths,
         )
