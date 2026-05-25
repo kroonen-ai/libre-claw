@@ -210,9 +210,7 @@ async def test_daemon_blocks_and_resumes_on_permission_approval(monkeypatch, tmp
     run_id = _response_payload(started)["run"]["run_id"]
     permission = await _wait_for_event(server, run_id, "permission_request")
 
-    blocked = _response_payload(
-        await server.get_run(RequestStub(match_info={"run_id": run_id}))  # type: ignore[arg-type]
-    )
+    blocked = await _wait_for_state(server, run_id, "blocked")
     assert blocked["run"]["state"] == "blocked"
     assert blocked["pending_permissions"] == ["toolu_1"]
 
