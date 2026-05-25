@@ -437,6 +437,10 @@ block a run on tool approval without losing its event history. This is the
 backend connection point for TUI and Telegram surfaces to share the same active
 run process.
 
+For security, daemon `POST /runs` requests cannot override `working_directory`.
+Set the daemon working directory through config or `--working-directory` when
+starting Libre Claw.
+
 Telegram can also route work through the daemon instead of owning the run in
 the bot process:
 

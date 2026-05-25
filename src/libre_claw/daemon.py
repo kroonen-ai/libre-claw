@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Literal, cast
 
 import httpx
@@ -159,7 +158,10 @@ class DaemonServer:
         if kind not in {"chat", "goal"}:
             return _json_error("Field 'kind' must be 'chat' or 'goal'.")
 
-        run_config = self._config_for_payload(payload)
+        try:
+            run_config = self._config_for_payload(payload)
+        except ValueError as exc:
+            return _json_error(str(exc), status=403)
         run = await self.run_store.create_run(
             message,
             kind=cast(RunKind, kind),
@@ -225,11 +227,11 @@ class DaemonServer:
     def _config_for_payload(self, payload: Mapping[str, Any]) -> LibreClawConfig:
         provider = str(payload.get("provider") or self.config.general.default_provider)
         model = str(payload.get("model") or self.config.general.default_model)
-        working_directory = Path(str(payload.get("working_directory") or self.config.general.working_directory))
+        _reject_working_directory_override(self.config, payload)
         general = GeneralConfig(
             default_provider="ollama" if provider == "local" else provider,
             default_model=model,
-            working_directory=working_directory.expanduser().resolve(),
+            working_directory=self.config.general.working_directory,
             theme=self.config.general.theme,
             log_level=self.config.general.log_level,
         )
@@ -410,6 +412,21 @@ class DaemonClient:
 
 def daemon_base_url(config: LibreClawConfig, *, host: str | None = None, port: int | None = None) -> str:
     return f"http://{host or config.daemon.host}:{port or config.daemon.port}"
+
+
+def _reject_working_directory_override(config: LibreClawConfig, payload: Mapping[str, Any]) -> None:
+    """Reject request-scoped working-directory changes for daemon-owned runs."""
+    root = config.general.working_directory
+    requested = payload.get("working_directory")
+    if requested is None or requested == "":
+        return
+    requested_text = str(requested)
+    if requested_text == str(root):
+        return
+    raise ValueError(
+        "Daemon run payload cannot override working_directory. "
+        "Start the daemon with --working-directory or update config instead."
+    )
 
 
 def _json_error(message: str, *, status: int = 400) -> web.Response:

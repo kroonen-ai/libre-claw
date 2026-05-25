@@ -25,6 +25,8 @@ Initial shippable Libre Claw release.
 - Telegram can optionally route chat runs and inline approvals through the
   daemon with `[telegram].use_daemon = true`, so approvals resume the same
   durable daemon run.
+- Daemon run requests reject per-request `working_directory` overrides; the
+  daemon uses the trusted configured root only.
 - Skills system with global `~/.libre-claw/skills/`, project-local
   `.libre-claw/skills/`, AgentSkills-style `SKILL.md` discovery, `/skills`
   management commands, and relevant skill injection across TUI, Telegram, and

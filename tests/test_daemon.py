@@ -135,6 +135,27 @@ async def test_daemon_starts_background_run_and_persists_events(monkeypatch, tmp
     ]
 
 
+async def test_daemon_rejects_request_working_directory_override(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    response = await server.start_run(
+        RequestStub(body={"message": "hi", "working_directory": str(tmp_path / "outside")})  # type: ignore[arg-type]
+    )
+    payload = _response_payload(response)
+
+    assert response.status == 403
+    assert "cannot override working_directory" in payload["error"]
+    assert await server.run_store.list_runs() == []
+
+
 async def test_daemon_blocks_and_resumes_on_permission_approval(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
