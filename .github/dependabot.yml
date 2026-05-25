@@ -13,9 +13,6 @@ updates:
       timezone: America/New_York
     open-pull-requests-limit: 10
     target-branch: main
-    labels:
-      - dependencies
-      - python
     commit-message:
       prefix: deps
       include: scope
@@ -53,9 +50,6 @@ updates:
       timezone: America/New_York
     open-pull-requests-limit: 5
     target-branch: main
-    labels:
-      - dependencies
-      - github-actions
     commit-message:
       prefix: ci
       include: scope
