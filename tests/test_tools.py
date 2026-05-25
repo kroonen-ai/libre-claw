@@ -65,6 +65,22 @@ async def test_read_file_with_offset_and_limit(tmp_path: Path) -> None:
     result = await ReadFileTool(context(tmp_path)).execute(path="sample.txt", offset=1, limit=1)
 
     assert result.content == "1: b"
+    assert result.metadata["returned_lines"] == 1
+
+
+async def test_read_file_reports_truncation_and_can_hide_line_numbers(tmp_path: Path) -> None:
+    path = tmp_path / "sample.txt"
+    path.write_text("a\nb\nc\n", encoding="utf-8")
+
+    result = await ReadFileTool(context(tmp_path)).execute(
+        path="sample.txt",
+        offset=0,
+        limit=2,
+        show_line_numbers=False,
+    )
+
+    assert result.content == "a\nb"
+    assert result.metadata["truncated"] is True
 
 
 async def test_list_directory_with_depth(tmp_path: Path) -> None:
@@ -80,11 +96,39 @@ async def test_list_directory_with_depth(tmp_path: Path) -> None:
     assert "root.txt" in result.content
 
 
+async def test_list_directory_can_limit_entries_and_skip_hidden(tmp_path: Path) -> None:
+    (tmp_path / ".hidden").write_text("x", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("x", encoding="utf-8")
+
+    hidden = await ListDirectoryTool(context(tmp_path)).execute(path=".", include_hidden=False)
+    limited = await ListDirectoryTool(context(tmp_path)).execute(path=".", max_entries=1)
+
+    assert ".hidden" not in hidden.content
+    assert limited.metadata["truncated"] is True
+    assert "... truncated after 1 entries" in limited.content
+
+
 async def test_write_file(tmp_path: Path) -> None:
     result = await WriteFileTool(context(tmp_path)).execute(path="new/file.txt", content="hello")
 
     assert (tmp_path / "new" / "file.txt").read_text(encoding="utf-8") == "hello"
-    assert "Wrote 5 characters" in result.content
+    assert "Created" in result.content
+    assert result.metadata["changed"] is True
+    assert result.metadata["bytes_written"] == 5
+
+
+async def test_write_file_refuses_overwrite_and_detects_noop(tmp_path: Path) -> None:
+    path = tmp_path / "sample.txt"
+    path.write_text("hello", encoding="utf-8")
+
+    refused = await WriteFileTool(context(tmp_path)).execute(path="sample.txt", content="new", overwrite=False)
+    noop = await WriteFileTool(context(tmp_path)).execute(path="sample.txt", content="hello")
+
+    assert refused.error is not None
+    assert "overwrite is false" in refused.error
+    assert noop.error is None
+    assert noop.metadata["changed"] is False
 
 
 async def test_edit_file_exact_match(tmp_path: Path) -> None:
@@ -99,6 +143,9 @@ async def test_edit_file_exact_match(tmp_path: Path) -> None:
 
     assert path.read_text(encoding="utf-8") == "hello Libre Claw"
     assert result.error is None
+    assert "Replaced 1 occurrence" in result.content
+    assert "--- " in result.content
+    assert result.metadata["replacements"] == 1
 
 
 async def test_edit_file_missing_match_returns_error(tmp_path: Path) -> None:
@@ -114,6 +161,27 @@ async def test_edit_file_missing_match_returns_error(tmp_path: Path) -> None:
     assert result.error == "old_text was not found"
 
 
+async def test_edit_file_requires_precision_for_multiple_matches(tmp_path: Path) -> None:
+    path = tmp_path / "sample.txt"
+    path.write_text("same same same", encoding="utf-8")
+
+    ambiguous = await EditFileTool(context(tmp_path)).execute(
+        path="sample.txt",
+        old_text="same",
+        new_text="changed",
+    )
+    second = await EditFileTool(context(tmp_path)).execute(
+        path="sample.txt",
+        old_text="same",
+        new_text="changed",
+        occurrence=2,
+    )
+
+    assert ambiguous.error == "old_text matched 3 times; set occurrence or replace_all"
+    assert path.read_text(encoding="utf-8") == "same changed same"
+    assert second.metadata["matches"] == 3
+
+
 async def test_bash_success_failure_and_timeout(tmp_path: Path) -> None:
     tool = BashTool(context(tmp_path, timeout=1))
 
@@ -124,6 +192,19 @@ async def test_bash_success_failure_and_timeout(tmp_path: Path) -> None:
     assert "stdout:\nhello" in success.content
     assert failure.metadata["exit_code"] == 3
     assert timeout.error == "Command timed out after 1 seconds"
+
+
+async def test_bash_validates_and_truncates_output(tmp_path: Path) -> None:
+    tool = BashTool(context(tmp_path))
+
+    invalid_timeout = await tool.execute(command="printf hello", timeout=0)
+    invalid_limit = await tool.execute(command="printf hello", max_output_chars=0)
+    truncated = await tool.execute(command="printf abcdef", max_output_chars=3)
+
+    assert invalid_timeout.error == "timeout must be >= 1"
+    assert invalid_limit.error == "max_output_chars must be >= 1"
+    assert "abc\n... truncated 3 characters ..." in truncated.content
+    assert truncated.metadata["stdout_truncated"] is True
 
 
 async def test_bash_blocks_configured_patterns(tmp_path: Path) -> None:
