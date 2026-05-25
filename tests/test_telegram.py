@@ -319,9 +319,14 @@ async def test_telegram_bot_run_uses_polling_lifecycle(monkeypatch, tmp_path: Pa
             calls.append("stop_polling")
 
     class FakeBot:
-        async def set_my_commands(self, commands: list[object]) -> None:
+        async def set_my_commands(self, commands: list[object], scope: object | None = None) -> None:
+            del scope
             assert len(commands) >= 8
             calls.append("set_my_commands")
+
+        async def set_chat_menu_button(self, chat_id: int | None = None, menu_button: object | None = None) -> None:
+            del chat_id, menu_button
+            calls.append("set_chat_menu_button")
 
     class FakeApplication:
         def __init__(self) -> None:
@@ -375,6 +380,42 @@ async def test_telegram_bot_run_uses_polling_lifecycle(monkeypatch, tmp_path: Pa
     assert "wait_until_closed" not in calls
     assert calls[:5] == ["bridge_initialize", "builder", "token", "build", "add_handler"]
     assert calls[-5:] == ["start_polling", "wait", "stop_polling", "stop", "shutdown"]
+    assert calls.count("set_my_commands") >= 2
+    assert "set_chat_menu_button" in calls
+
+
+async def test_telegram_bot_syncs_commands_to_allowed_private_chats(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    calls: list[tuple[str, object | None, int | None]] = []
+
+    class FakeBot:
+        async def set_my_commands(self, commands: list[object], scope: object | None = None) -> None:
+            assert len(commands) >= 8
+            chat_id = getattr(scope, "chat_id", None)
+            calls.append(("commands", scope.__class__.__name__ if scope is not None else None, chat_id))
+
+        async def set_chat_menu_button(self, chat_id: int | None = None, menu_button: object | None = None) -> None:
+            assert menu_button is not None
+            calls.append(("menu", None, chat_id))
+
+    class FakeApplication:
+        bot = FakeBot()
+
+    bot = TelegramBot(load_config(), bridge=object())  # type: ignore[arg-type]
+    bot.auth = TelegramAuth(allowed_user_ids=frozenset({123, 456}))
+
+    await bot._sync_command_menu(FakeApplication())
+
+    command_scopes = [call for call in calls if call[0] == "commands"]
+    menu_chat_ids = [call[2] for call in calls if call[0] == "menu"]
+    assert any(call[1] == "BotCommandScopeDefault" for call in command_scopes)
+    assert any(call[1] == "BotCommandScopeAllPrivateChats" for call in command_scopes)
+    assert ("commands", "BotCommandScopeChat", 123) in command_scopes
+    assert ("commands", "BotCommandScopeChat", 456) in command_scopes
+    assert None in menu_chat_ids
+    assert 123 in menu_chat_ids
+    assert 456 in menu_chat_ids
 
 
 async def test_telegram_bridge_streams_text(monkeypatch, tmp_path: Path) -> None:

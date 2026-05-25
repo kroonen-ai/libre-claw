@@ -6,6 +6,8 @@ from __future__ import annotations
 import asyncio
 import os
 
+import structlog
+
 from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
 from libre_claw.config import LibreClawConfig
 from libre_claw.daemon import DaemonClient, daemon_base_url
@@ -14,10 +16,20 @@ from libre_claw.telegram.bridge import TelegramBridge
 from libre_claw.telegram.handlers import TelegramHandlers, telegram_command_specs
 
 try:
-    from telegram import BotCommand
+    from telegram import (
+        BotCommand,
+        BotCommandScopeAllPrivateChats,
+        BotCommandScopeChat,
+        BotCommandScopeDefault,
+        MenuButtonCommands,
+    )
     from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 except ImportError:  # pragma: no cover - dependency availability is tested by imports after install.
-    BotCommand = Application = CallbackQueryHandler = CommandHandler = MessageHandler = filters = None  # type: ignore[assignment]
+    BotCommand = BotCommandScopeAllPrivateChats = BotCommandScopeChat = BotCommandScopeDefault = MenuButtonCommands = None  # type: ignore[assignment]
+    Application = CallbackQueryHandler = CommandHandler = MessageHandler = filters = None  # type: ignore[assignment]
+
+
+LOGGER = structlog.get_logger(__name__)
 
 
 class TelegramBot:
@@ -62,10 +74,7 @@ class TelegramBot:
             raise RuntimeError("Telegram polling is unavailable for this application.")
 
         await application.initialize()
-        if BotCommand is not None:
-            await application.bot.set_my_commands(
-                [BotCommand(command, description) for command, description in telegram_command_specs()]
-            )
+        await self._sync_command_menu(application)
         app_started = False
         polling_started = False
         try:
@@ -93,3 +102,29 @@ class TelegramBot:
 
     async def _wait_until_stopped(self) -> None:
         await asyncio.Event().wait()
+
+    async def _sync_command_menu(self, application) -> None:
+        if BotCommand is None:
+            return
+        commands = [BotCommand(command, description) for command, description in telegram_command_specs()]
+        bot = application.bot
+        scopes = []
+        if BotCommandScopeDefault is not None:
+            scopes.append(BotCommandScopeDefault())
+        if BotCommandScopeAllPrivateChats is not None:
+            scopes.append(BotCommandScopeAllPrivateChats())
+        for scope in scopes:
+            await bot.set_my_commands(commands, scope=scope)
+        if not scopes:
+            await bot.set_my_commands(commands)
+        if MenuButtonCommands is not None:
+            await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        if BotCommandScopeChat is None:
+            return
+        for user_id in sorted(self.auth.allowed_user_ids):
+            try:
+                await bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id=user_id))
+                if MenuButtonCommands is not None:
+                    await bot.set_chat_menu_button(chat_id=user_id, menu_button=MenuButtonCommands())
+            except Exception as exc:
+                LOGGER.warning("telegram_command_scope_sync_failed", user_id=user_id, error=str(exc))
