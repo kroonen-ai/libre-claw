@@ -8,8 +8,10 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from libre_claw.config import AuthConfig
@@ -42,7 +44,7 @@ class TokenManager:
 
     @classmethod
     def from_config(cls, config: AuthConfig) -> TokenManager:
-        secret = os.getenv(config.jwt_secret_env) or _derive_local_secret(config)
+        secret = os.getenv(config.jwt_secret_env) or _load_or_create_local_secret(config)
         return cls(secret=secret, issuer=config.oauth_issuer, token_ttl_seconds=config.token_ttl_seconds)
 
     def issue(self, subject: str, scopes: tuple[str, ...] = ()) -> str:
@@ -143,6 +145,38 @@ def _b64_decode(value: str) -> bytes:
         raise TokenError("Token base64 segment is invalid.") from exc
 
 
-def _derive_local_secret(config: AuthConfig) -> str:
-    material = f"{config.oauth_issuer}|{config.oauth_client_id}|{config.fallback_keys_path}"
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+def _load_or_create_local_secret(config: AuthConfig) -> str:
+    secret_path = _local_secret_path(config)
+    try:
+        secret = secret_path.read_text(encoding="utf-8").strip()
+        if secret:
+            _harden_local_secret(secret_path)
+            return secret
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise TokenError(f"Could not read local JWT secret at {secret_path}: {exc}") from exc
+
+    secret = secrets.token_urlsafe(48)
+    try:
+        secret_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(secret + "\n")
+    except OSError as exc:
+        raise TokenError(f"Could not create local JWT secret at {secret_path}: {exc}") from exc
+    _harden_local_secret(secret_path)
+    return secret
+
+
+def _local_secret_path(config: AuthConfig) -> Path:
+    return config.fallback_keys_path.expanduser().with_name(".jwt-secret")
+
+
+def _harden_local_secret(secret_path: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        secret_path.chmod(0o600)
+    except OSError as exc:
+        raise TokenError(f"Could not lock down local JWT secret at {secret_path}: {exc}") from exc

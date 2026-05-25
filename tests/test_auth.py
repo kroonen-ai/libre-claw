@@ -5,13 +5,21 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 from pathlib import Path
 
 from cryptography.fernet import Fernet
 
 from libre_claw.auth.api_keys import ApiKeyStore, EncryptedKeyFile
-from libre_claw.auth.oauth import OAuthStateStore, _verify_pkce
-from libre_claw.auth.tokens import TokenManager
+from libre_claw.auth.oauth import (
+    OAuthStateStore,
+    _redirect_with_params,
+    _validate_configured_redirect_uri,
+    _validate_state,
+    _verify_pkce,
+)
+from libre_claw.auth.tokens import TokenManager, _local_secret_path
+from libre_claw.config import AuthConfig
 
 
 class FakeKeyring:
@@ -119,6 +127,30 @@ def test_token_manager_issues_and_verifies_jwt() -> None:
     assert claims.scopes == ("dashboard",)
 
 
+def test_token_manager_from_config_persists_random_local_secret(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("LIBRE_CLAW_TEST_JWT_SECRET", raising=False)
+    config = AuthConfig(
+        keyring_service="libre-claw",
+        fallback_keys_path=tmp_path / ".keys",
+        jwt_secret_env="LIBRE_CLAW_TEST_JWT_SECRET",
+        oauth_issuer="libre-claw",
+        oauth_client_id="libre-claw-local",
+        oauth_redirect_uri="http://127.0.0.1:8765/callback",
+        token_ttl_seconds=60,
+    )
+
+    manager = TokenManager.from_config(config)
+    token = manager.issue(subject="local-user")
+    second_manager = TokenManager.from_config(config)
+
+    assert second_manager.verify(token).subject == "local-user"
+    secret_path = _local_secret_path(config)
+    assert secret_path.exists()
+    assert len(secret_path.read_text(encoding="utf-8").strip()) >= 48
+    if os.name != "nt":
+        assert secret_path.stat().st_mode & 0o777 == 0o600
+
+
 def test_oauth_state_store_consumes_codes_once() -> None:
     store = OAuthStateStore()
     code = store.create(
@@ -130,6 +162,35 @@ def test_oauth_state_store_consumes_codes_once() -> None:
 
     assert store.consume(code) is not None
     assert store.consume(code) is None
+
+
+def test_oauth_redirect_uri_validation() -> None:
+    redirect_uri = "http://127.0.0.1:8765/callback"
+
+    assert _validate_configured_redirect_uri(redirect_uri) == redirect_uri
+
+
+def test_oauth_redirect_uri_validation_rejects_relative_url() -> None:
+    try:
+        _validate_configured_redirect_uri("//example.com/callback")
+    except ValueError as exc:
+        assert "absolute http(s)" in str(exc)
+    else:  # pragma: no cover - defensive assertion shape.
+        raise AssertionError("relative redirect URI should be rejected")
+
+
+def test_oauth_redirect_builder_uses_configured_base_and_encoded_query() -> None:
+    location = _redirect_with_params(
+        "http://127.0.0.1:8765/callback?existing=1",
+        {"code": "abc 123", "state": "safe_state-1"},
+    )
+
+    assert location == "http://127.0.0.1:8765/callback?existing=1&code=abc+123&state=safe_state-1"
+
+
+def test_oauth_state_validation_drops_unsafe_values() -> None:
+    assert _validate_state("safe_state-1") == "safe_state-1"
+    assert _validate_state("https://evil.example/callback") is None
 
 
 def test_pkce_s256_verification() -> None:

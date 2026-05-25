@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 import secrets
 import time
 from dataclasses import dataclass
 from typing import Final
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from aiohttp import web
 
@@ -23,6 +24,7 @@ except ImportError:  # pragma: no cover - dependency is installed in supported b
 
 
 SUPPORTED_CHALLENGE_METHODS: Final[set[str]] = {"plain", "S256"}
+SAFE_STATE_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9._~+/=-]{1,512}$")
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,7 @@ class OAuthServer:
         state_store: OAuthStateStore | None = None,
     ) -> None:
         self.config = config
+        self.redirect_uri = _validate_configured_redirect_uri(config.oauth_redirect_uri)
         self.token_manager = token_manager or TokenManager.from_config(config)
         self.state_store = state_store or OAuthStateStore()
 
@@ -88,8 +91,8 @@ class OAuthServer:
         if client_id != self.config.oauth_client_id:
             return _oauth_error("invalid_client", "Unknown OAuth client.")
 
-        redirect_uri = request.query.get("redirect_uri", self.config.oauth_redirect_uri)
-        if redirect_uri != self.config.oauth_redirect_uri:
+        requested_redirect_uri = request.query.get("redirect_uri", self.redirect_uri)
+        if requested_redirect_uri != self.redirect_uri:
             return _oauth_error("invalid_request", "Redirect URI does not match Libre Claw config.")
 
         code_challenge = request.query.get("code_challenge", "")
@@ -99,15 +102,15 @@ class OAuthServer:
 
         code = self.state_store.create(
             client_id=client_id,
-            redirect_uri=redirect_uri,
+            redirect_uri=self.redirect_uri,
             code_challenge=code_challenge,
             code_challenge_method=method,
         )
-        state = request.query.get("state")
+        state = _validate_state(request.query.get("state"))
         redirect_params = {"code": code}
         if state:
             redirect_params["state"] = state
-        raise web.HTTPFound(location=redirect_uri + "?" + urlencode(redirect_params))
+        raise web.HTTPFound(location=_redirect_with_params(self.redirect_uri, redirect_params))
 
     async def token(self, request: web.Request) -> web.Response:
         form = await request.post()
@@ -144,6 +147,29 @@ class OAuthServer:
 
 def _oauth_error(error: str, description: str, status: int = 400) -> web.Response:
     return web.json_response({"error": error, "error_description": description}, status=status)
+
+
+def _validate_configured_redirect_uri(redirect_uri: str) -> str:
+    parsed = urlsplit(redirect_uri)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        msg = "Configured OAuth redirect URI must be an absolute http(s) URL."
+        raise ValueError(msg)
+    return redirect_uri
+
+
+def _validate_state(state: str | None) -> str | None:
+    if state is None:
+        return None
+    if not SAFE_STATE_RE.fullmatch(state):
+        return None
+    return state
+
+
+def _redirect_with_params(redirect_uri: str, params: dict[str, str]) -> str:
+    parsed = urlsplit(redirect_uri)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update(params)
+    return urlunsplit(parsed._replace(query=urlencode(query)))
 
 
 def _verify_pkce(verifier: str, expected_challenge: str, method: str) -> bool:
