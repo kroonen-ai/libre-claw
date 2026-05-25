@@ -35,6 +35,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.goal.judge_model == ""
     assert config.goal.judge_temperature == 0.0
     assert config.goal.judge_max_tokens == 1024
+    assert config.telegram.use_daemon is False
     assert config.daemon.host == "127.0.0.1"
     assert config.daemon.port == 8766
     assert config.daemon.poll_interval == 0.5

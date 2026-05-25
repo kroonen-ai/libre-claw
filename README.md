@@ -23,6 +23,9 @@ and run the Telegram daemon.
   number of turns until a separate judge model marks the objective complete.
 - Durable local runs with IDs, append-only event logs, run artifacts, and
   `/runs`, `/run <id>`, `/resume <id>`, and `/cancel <id>` controls.
+- Human-review cockpit with run timeline replay, Plan/Summary/Verify/Diff
+  artifact panel, blocked approval inbox, and “what changed since I left”
+  summaries.
 - Background daemon API for daemon-owned runs, event polling, cancel, and
   permission approval.
 - User and project skills loaded from `~/.libre-claw/skills/` and
@@ -285,6 +288,9 @@ Legacy configs that still say `default_provider = "local"` or
 - `/runs [N]`
 - `/run <id>`
 - `/resume <id>`
+- `/artifacts [plan|summary|verify|diff] [id]`
+- `/approvals`
+- `/changes [id]`
 - `/tools expand|collapse|toggle <index>`
 - `/skills list|show|add|edit|delete`
 - `/memory list|add <fact>|forget <id>`
@@ -378,6 +384,8 @@ Each run stores:
 
 - `meta.json`
 - `events.jsonl`
+- `plan.md` with the first visible assistant plan before tool use, when one
+  was produced.
 - `summary.md` with the final assistant output or failure summary.
 - `verification.md` with final state, recent tool outcomes, git status, and
   artifact notes.
@@ -389,6 +397,15 @@ counts, `/resume <id>` to reload a run transcript into the TUI, and
 `/cancel <id>` to mark a run cancelled. The diff artifact intentionally does
 not embed untracked files; they are listed in `verification.md` through git
 status so the user can decide how to handle them.
+
+P1 review controls:
+
+- `/artifacts summary <id>` opens the artifact panel. Switch tabs with the
+  Plan, Summary, Verify, and Diff buttons.
+- `/approvals` lists currently blocked run approvals from the durable run log
+  plus the active local prompt, if any.
+- `/changes <id>` shows new run events since your last review and records the
+  current event id as seen.
 
 ## Background Daemon
 
@@ -419,6 +436,19 @@ The daemon owns active run tasks, writes to the same durable run store, and can
 block a run on tool approval without losing its event history. This is the
 backend connection point for TUI and Telegram surfaces to share the same active
 run process.
+
+Telegram can also route work through the daemon instead of owning the run in
+the bot process:
+
+```toml
+[telegram]
+enabled = true
+use_daemon = true
+```
+
+Run `libre-claw daemon` and `libre-claw telegram` together. Telegram inline
+approval buttons then resolve the same daemon run through the local API, so the
+run can continue even if another surface is watching it.
 
 ## Skills
 

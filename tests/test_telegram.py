@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
+from typing import Any
 
 from libre_claw.config import load_config
 from libre_claw.core.session import ChatMessage
@@ -54,6 +55,41 @@ class FakeToolProvider(LLMProvider):
             return
         yield TextDelta("done")
         yield Done()
+
+
+class FakeDaemonClient:
+    def __init__(self) -> None:
+        self.resolutions: list[tuple[str, str, str]] = []
+        self._events_served = False
+
+    async def start_run(self, message: str, **payload: Any) -> dict[str, Any]:
+        del message, payload
+        return {"run": {"run_id": "run-1", "state": "queued"}}
+
+    async def get_events(self, run_id: str, after: int = 0) -> dict[str, Any]:
+        del run_id, after
+        if self._events_served:
+            return {"events": []}
+        self._events_served = True
+        return {
+            "events": [
+                {"event_id": 1, "type": "assistant_delta", "data": {"text": "hi"}},
+                {
+                    "event_id": 2,
+                    "type": "permission_request",
+                    "data": {"tool_call_id": "toolu_1", "name": "bash", "arguments": {"command": "date"}},
+                },
+                {"event_id": 3, "type": "run_finished", "data": {"state": "done"}},
+            ]
+        }
+
+    async def get_run(self, run_id: str) -> dict[str, Any]:
+        del run_id
+        return {"run": {"run_id": "run-1", "state": "done"}}
+
+    async def resolve_permission(self, run_id: str, tool_call_id: str, resolution: str) -> dict[str, Any]:
+        self.resolutions.append((run_id, tool_call_id, resolution))
+        return {"run_id": run_id, "tool_call_id": tool_call_id, "resolution": resolution}
 
 
 def test_telegram_auth_allowlist() -> None:
@@ -115,3 +151,21 @@ async def test_telegram_bridge_prompts_and_resolves_permission(monkeypatch, tmp_
     assert any(isinstance(event, TelegramToolNotice) for event in events)
     assert any(isinstance(event, TelegramPermissionPrompt) for event in events)
     assert isinstance(events[-1], TelegramDone)
+
+
+async def test_telegram_bridge_can_use_daemon_runs_for_approvals(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    daemon = FakeDaemonClient()
+    bridge = TelegramBridge(config, daemon_client=daemon)  # type: ignore[arg-type]
+    await bridge.initialize()
+
+    events = [event async for event in bridge.stream_message(1, "hello")]
+    prompt = next(event for event in events if isinstance(event, TelegramPermissionPrompt))
+    resolved = await bridge.resolve_permission_async(prompt.prompt_id, "allow_once")
+
+    assert any(isinstance(event, TelegramText) and event.text == "hi" for event in events)
+    assert prompt.prompt_id == "daemon:run-1:toolu_1"
+    assert resolved is True
+    assert daemon.resolutions == [("run-1", "toolu_1", "allow_once")]

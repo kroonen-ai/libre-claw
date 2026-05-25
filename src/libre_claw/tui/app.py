@@ -57,6 +57,7 @@ from libre_claw.core import (
 )
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
+from libre_claw.core.review import RUN_ARTIFACT_NAMES, pending_approvals, run_changes_text, run_plan_text
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.session import ChatMessage, estimate_context_tokens
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
@@ -67,6 +68,7 @@ from libre_claw.tools_builtin import create_builtin_registry
 
 
 TranscriptRole = Literal["user", "assistant", "system", "tool", "permission", "file"]
+ArtifactTab = Literal["plan", "summary", "verify", "diff"]
 
 
 @dataclass
@@ -166,6 +168,9 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/runs", "/runs [N]", "List durable agent runs"),
     SlashCommand("/run", "/run <id>", "Inspect a durable run"),
     SlashCommand("/resume", "/resume <id>", "Load a durable run transcript"),
+    SlashCommand("/artifacts", "/artifacts [plan|summary|verify|diff] [id]", "Open the run artifact panel"),
+    SlashCommand("/approvals", "/approvals", "Show blocked tool approvals"),
+    SlashCommand("/changes", "/changes [id]", "Show what changed since your last review"),
     SlashCommand("/skills", "/skills list|add|edit|delete", "Manage Libre Claw skills"),
     SlashCommand("/memory", "/memory list|add <fact>|forget <id>", "Manage persistent memory facts"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
@@ -467,6 +472,45 @@ class LibreClawApp(App[None]):
         color: #101418;
     }
 
+    #artifact-panel {
+        height: 16;
+        border-top: solid #0070F3;
+        background: #0f151c;
+        padding: 0 1;
+    }
+
+    #artifact-panel.hidden {
+        display: none;
+    }
+
+    #artifact-tabs {
+        height: 3;
+        padding-top: 1;
+    }
+
+    #artifact-tabs Button {
+        margin-right: 1;
+        min-width: 10;
+    }
+
+    #artifact-title {
+        height: 1;
+        color: #dbeafe;
+        text-style: bold;
+    }
+
+    #artifact-content {
+        height: 1fr;
+        background: #0f151c;
+        border: none;
+    }
+
+    Screen.light #artifact-panel,
+    Screen.light #artifact-content {
+        background: #f8fbff;
+        color: #101418;
+    }
+
     #workspace,
     #sidebar-rail,
     #sidebar,
@@ -475,6 +519,8 @@ class LibreClawApp(App[None]):
     #palette,
     #suggestions,
     #permission-panel,
+    #artifact-panel,
+    #artifact-content,
     #chat,
     #input {
         scrollbar-color: #0070F3;
@@ -496,6 +542,8 @@ class LibreClawApp(App[None]):
     Screen.light #palette,
     Screen.light #suggestions,
     Screen.light #permission-panel,
+    Screen.light #artifact-panel,
+    Screen.light #artifact-content,
     Screen.light #chat,
     Screen.light #input {
         scrollbar-color: #0070F3;
@@ -559,6 +607,9 @@ class LibreClawApp(App[None]):
         self._last_goal_decision: JudgeDecision | None = None
         self._active_run_id: str | None = None
         self._active_run_summary = ""
+        self._artifact_run_id: str | None = None
+        self._artifact_tab: ArtifactTab = "summary"
+        self._artifact_visible = False
         self._run_background_tasks: set[asyncio.Task[Any]] = set()
 
         self._rebuild_agent()
@@ -589,6 +640,15 @@ class LibreClawApp(App[None]):
                         yield Button("Deny", id="permission-deny", variant="error", compact=True)
                         yield Button("Always Tool", id="permission-always-tool", compact=True)
                         yield Button("Always Command", id="permission-always-call", compact=True)
+                with Vertical(id="artifact-panel", classes="hidden"):
+                    with Horizontal(id="artifact-tabs"):
+                        yield Button("Plan", id="artifact-plan", compact=True)
+                        yield Button("Summary", id="artifact-summary", compact=True)
+                        yield Button("Verify", id="artifact-verify", compact=True)
+                        yield Button("Diff", id="artifact-diff", compact=True)
+                        yield Button("Close", id="artifact-close", compact=True)
+                    yield Static("", id="artifact-title")
+                    yield RichLog(id="artifact-content", wrap=True, highlight=True, markup=True)
                 yield Input(placeholder=self._input_placeholder(), id="input")
 
     async def on_mount(self) -> None:
@@ -654,6 +714,10 @@ class LibreClawApp(App[None]):
         if button_id == "sidebar-up":
             event.stop()
             self._go_up_directory()
+            return
+        if button_id is not None and button_id.startswith("artifact-"):
+            event.stop()
+            self._handle_artifact_button(button_id)
             return
 
         mapping: dict[str | None, PermissionResolution] = {
@@ -765,6 +829,15 @@ class LibreClawApp(App[None]):
             return
         if command == "/resume":
             await self._handle_resume_command(argument)
+            return
+        if command == "/artifacts":
+            await self._handle_artifacts_command(argument)
+            return
+        if command == "/approvals":
+            await self._handle_approvals_command(argument)
+            return
+        if command == "/changes":
+            await self._handle_changes_command(argument)
             return
         if command == "/skills":
             await self._handle_skills_command(argument)
@@ -1114,6 +1187,7 @@ class LibreClawApp(App[None]):
         await self.run_store.finish_run(
             run_id,
             cast(RunState, state),
+            plan=run_plan_text(events),
             summary=summary_text,
             verification=verification,
             diff=diff,
@@ -1579,6 +1653,7 @@ class LibreClawApp(App[None]):
             return
         events = await self.run_store.load_events(run.run_id)
         self._append_system(_run_detail_text(run, events))
+        await self._show_artifact_panel(run, "summary")
 
     async def _handle_resume_command(self, argument: str) -> None:
         if self._active_task is not None and not self._active_task.done():
@@ -1593,11 +1668,109 @@ class LibreClawApp(App[None]):
             self._append_system(f"No durable run found for: {argument}")
             return
         events = await self.run_store.load_events(run.run_id)
+        last_seen = _read_last_seen_event_id(run)
+        changes = run_changes_text(run, events, last_seen)
         self.transcript = _transcript_from_run_events(events)
         self._tool_entry_by_call_id.clear()
         self._active_run_id = run.run_id if run.state in {"running", "blocked"} else None
         self._render_transcript()
+        self._append_system(changes)
+        _write_last_seen_event_id(run, _max_event_id(events))
+        await self._show_artifact_panel(run, "summary")
         self._append_system(f"Loaded run {run.run_id} ({run.state}) from {run.path}.")
+
+    async def _handle_artifacts_command(self, argument: str) -> None:
+        tab, run_query = _parse_artifact_command(argument)
+        run_id = await self._resolve_optional_run_id(run_query)
+        if run_id is None:
+            self._append_system("Usage: /artifacts [plan|summary|verify|diff] [run-id]")
+            return
+        run = await self.run_store.load_run(run_id)
+        if run is None:
+            self._append_system(f"No durable run found for: {run_id}")
+            return
+        await self._show_artifact_panel(run, tab)
+
+    async def _handle_approvals_command(self, argument: str) -> None:
+        del argument
+        lines: list[str] = []
+        if self._pending_permission is not None:
+            call = self._pending_permission.call
+            lines.append(
+                f"active local prompt: {call.name} {call.id} {self._format_arguments(call.arguments)}"
+            )
+
+        for run in await self.run_store.list_runs(limit=100):
+            if run.state != "blocked":
+                continue
+            for item in pending_approvals(run, await self.run_store.load_events(run.run_id)):
+                lines.append(
+                    f"{item.run_id} {item.tool_call_id} {item.tool_name} "
+                    f"{json.dumps(item.arguments, sort_keys=True, default=str)}"
+                )
+
+        if not lines:
+            self._append_system("No blocked approvals.")
+            return
+        self._append_system("Blocked approval inbox:\n" + "\n".join(lines))
+
+    async def _handle_changes_command(self, argument: str) -> None:
+        run_id = await self._resolve_optional_run_id(argument)
+        if run_id is None:
+            self._append_system("Usage: /changes [run-id]")
+            return
+        run = await self.run_store.load_run(run_id)
+        if run is None:
+            self._append_system(f"No durable run found for: {run_id}")
+            return
+        events = await self.run_store.load_events(run.run_id)
+        last_seen = _read_last_seen_event_id(run)
+        self._append_system(run_changes_text(run, events, last_seen))
+        _write_last_seen_event_id(run, _max_event_id(events))
+
+    async def _show_artifact_panel(self, run: RunRecord, tab: ArtifactTab) -> None:
+        self._artifact_run_id = run.run_id
+        self._artifact_tab = tab
+        self._artifact_visible = True
+        panel = self.query_one("#artifact-panel", Vertical)
+        panel.remove_class("hidden")
+        await self._refresh_artifact_panel(run)
+
+    async def _refresh_artifact_panel(self, run: RunRecord | None = None) -> None:
+        run_id = self._artifact_run_id
+        if not self._artifact_visible or run_id is None:
+            return
+        run = run or await self.run_store.load_run(run_id)
+        if run is None:
+            self._hide_artifact_panel()
+            return
+
+        title = self.query_one("#artifact-title", Static)
+        content = self.query_one("#artifact-content", RichLog)
+        text = await asyncio.to_thread(_read_artifact_text, run, self._artifact_tab)
+        title.update(f"{run.run_id} [{run.state}] {self._artifact_tab}")
+        content.clear()
+        if self._artifact_tab == "diff":
+            content.write(Syntax(text or "No diff artifact.", "diff"))
+        else:
+            content.write(Markdown(text or f"No {self._artifact_tab} artifact."))
+
+    def _handle_artifact_button(self, button_id: str) -> None:
+        if button_id == "artifact-close":
+            self._hide_artifact_panel()
+            return
+        tab = button_id.removeprefix("artifact-")
+        if tab not in {"plan", "summary", "verify", "diff"}:
+            return
+        self._artifact_tab = cast(ArtifactTab, tab)
+        if self._artifact_run_id is not None:
+            asyncio.create_task(self._refresh_artifact_panel())
+
+    def _hide_artifact_panel(self) -> None:
+        self._artifact_visible = False
+        self.query_one("#artifact-panel", Vertical).add_class("hidden")
+        self.query_one("#artifact-title", Static).update("")
+        self.query_one("#artifact-content", RichLog).clear()
 
     async def _cancel_run_command(self, argument: str) -> None:
         run_id = await self._resolve_run_id(argument)
@@ -1612,13 +1785,16 @@ class LibreClawApp(App[None]):
             self._append_system(f"No durable run found for: {argument}")
             return
         summary_path = run.path / "summary.md"
+        plan_path = run.path / "plan.md"
         diff_path = run.path / "diff.patch"
+        plan = await asyncio.to_thread(plan_path.read_text, encoding="utf-8") if plan_path.exists() else ""
         summary = await asyncio.to_thread(summary_path.read_text, encoding="utf-8") if summary_path.exists() else ""
         diff = await asyncio.to_thread(diff_path.read_text, encoding="utf-8") if diff_path.exists() else ""
         await self.run_store.append_event(run.run_id, "cancelled", {"reason": "Cancelled by user command."})
         await self.run_store.finish_run(
             run.run_id,
             "cancelled",
+            plan=plan,
             summary=summary,
             verification="Run cancelled by user command.\n",
             diff=diff,
@@ -1634,6 +1810,14 @@ class LibreClawApp(App[None]):
             return exact.run_id
         matches = [run.run_id for run in await self.run_store.list_runs(limit=100) if run.run_id.startswith(query)]
         return matches[0] if len(matches) == 1 else None
+
+    async def _resolve_optional_run_id(self, value: str) -> str | None:
+        if value.strip():
+            return await self._resolve_run_id(value)
+        if self._active_run_id is not None:
+            return self._active_run_id
+        runs = await self.run_store.list_runs(limit=1)
+        return runs[0].run_id if runs else None
 
     def _handle_tools_command(self, argument: str) -> None:
         parts = argument.split()
@@ -2057,6 +2241,20 @@ class LibreClawApp(App[None]):
                 SlashCommand("/goal status", "/goal status", "Show active goal progress"),
                 SlashCommand("/goal stop", "/goal stop", "Cancel active goal mode"),
                 SlashCommand("/goal max 20", "/goal max 20", "Set max turns for this session"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+
+        if lowered.startswith("/artifacts "):
+            query = lowered.removeprefix("/artifacts ").strip()
+            suggestions = [
+                SlashCommand("/artifacts plan", "/artifacts plan [id]", "Show run plan"),
+                SlashCommand("/artifacts summary", "/artifacts summary [id]", "Show run summary"),
+                SlashCommand("/artifacts verify", "/artifacts verify [id]", "Show verification notes"),
+                SlashCommand("/artifacts diff", "/artifacts diff [id]", "Show captured diff"),
             ]
             return [
                 suggestion
@@ -2644,7 +2842,7 @@ def _run_detail_text(run: RunRecord, events: list[RunEvent]) -> str:
 
 def _run_artifact_summary(run: RunRecord) -> str:
     parts: list[str] = []
-    for name in ("events.jsonl", "summary.md", "verification.md", "diff.patch"):
+    for name in RUN_ARTIFACT_NAMES:
         path = run.path / name
         try:
             size = path.stat().st_size
@@ -2653,6 +2851,58 @@ def _run_artifact_summary(run: RunRecord) -> str:
         else:
             parts.append(f"{name}={size}B")
     return ", ".join(parts)
+
+
+def _parse_artifact_command(argument: str) -> tuple[ArtifactTab, str]:
+    tokens = argument.split()
+    if not tokens:
+        return "summary", ""
+    first = tokens[0].lower()
+    aliases: dict[str, ArtifactTab] = {
+        "plan": "plan",
+        "summary": "summary",
+        "verify": "verify",
+        "verification": "verify",
+        "diff": "diff",
+    }
+    if first in aliases:
+        return aliases[first], " ".join(tokens[1:])
+    return "summary", argument.strip()
+
+
+def _read_artifact_text(run: RunRecord, tab: ArtifactTab) -> str:
+    name = {
+        "plan": "plan.md",
+        "summary": "summary.md",
+        "verify": "verification.md",
+        "diff": "diff.patch",
+    }[tab]
+    path = run.path / name
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _max_event_id(events: list[RunEvent]) -> int:
+    return max((event.event_id for event in events), default=0)
+
+
+def _read_last_seen_event_id(run: RunRecord) -> int:
+    path = run.path / "last_seen.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    try:
+        return int(payload.get("event_id", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _write_last_seen_event_id(run: RunRecord, event_id: int) -> None:
+    path = run.path / "last_seen.json"
+    path.write_text(json.dumps({"event_id": event_id}, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _transcript_from_run_events(events: list[RunEvent]) -> list[TranscriptEntry]:
@@ -2692,13 +2942,28 @@ def _transcript_from_run_events(events: list[RunEvent]) -> list[TranscriptEntry]
         if event.type == "tool_result":
             call_id = str(event.data.get("tool_call_id", ""))
             index = tool_index_by_call_id.get(call_id)
-            title = f"{event.data.get('name', 'tool')} {'error' if event.data.get('is_error') else 'result'}"
+            result_metadata = event.data.get("metadata", {})
+            if not isinstance(result_metadata, dict):
+                result_metadata = {}
+            arguments = event.data.get("arguments", {})
+            if not isinstance(arguments, dict):
+                arguments = {}
+            title = _tool_timeline_title(
+                str(event.data.get("name", "tool")),
+                is_error=bool(event.data.get("is_error")),
+                metadata=result_metadata,
+            )
             entry = TranscriptEntry(
                 role="tool",
                 content=str(event.data.get("content", "")),
                 title=title,
                 collapsed=True,
-                metadata={"status": "error" if event.data.get("is_error") else "result", "tool": event.data.get("name", "tool")},
+                metadata={
+                    "status": "error" if event.data.get("is_error") else "result",
+                    "tool": event.data.get("name", "tool"),
+                    "metadata": result_metadata,
+                    "arguments": arguments,
+                },
             )
             if index is None or index >= len(entries):
                 entries.append(entry)
@@ -2823,6 +3088,18 @@ def _tool_style(status: str) -> str:
     if status == "pending":
         return "#0070F3"
     return "#8B5CF6"
+
+
+def _tool_timeline_title(name: str, *, is_error: bool, metadata: dict[str, Any]) -> str:
+    status = "error" if is_error else "result"
+    bits = [name, status]
+    exit_code = metadata.get("exit_code")
+    duration_ms = metadata.get("duration_ms")
+    if exit_code is not None:
+        bits.append(f"exit={exit_code}")
+    if duration_ms is not None:
+        bits.append(f"{duration_ms}ms")
+    return " ".join(str(bit) for bit in bits)
 
 
 def _tool_preview(entry: TranscriptEntry, max_length: int = 120) -> str:

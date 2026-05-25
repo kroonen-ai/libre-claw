@@ -14,11 +14,17 @@ Initial shippable Libre Claw release.
 - Durable local runs with unique run IDs, run states, append-only event logs,
   run artifacts, and `/runs`, `/run <id>`, `/resume <id>`, and `/cancel <id>`
   controls.
+- Human-review cockpit follow-up with `plan.md`, a TUI Plan/Summary/Verify/Diff
+  artifact panel, `/artifacts`, `/approvals`, `/changes`, richer run timeline
+  tool cards, and last-seen event tracking.
 - Run artifacts now include the launch working directory, final tool-result
   verification notes, artifact sizes in `/run`, and tracked-file git diffs when
   a run finishes inside a git repository.
 - Local background daemon API with `libre-claw daemon`, daemon-owned active
   runs, event polling, cancellation, and permission approval endpoints.
+- Telegram can optionally route chat runs and inline approvals through the
+  daemon with `[telegram].use_daemon = true`, so approvals resume the same
+  durable daemon run.
 - Skills system with global `~/.libre-claw/skills/`, project-local
   `.libre-claw/skills/`, AgentSkills-style `SKILL.md` discovery, `/skills`
   management commands, and relevant skill injection across TUI, Telegram, and

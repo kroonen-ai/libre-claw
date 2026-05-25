@@ -56,7 +56,7 @@ class TelegramHandlers:
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
-        cancelled = self.bridge.cancel(update.effective_chat.id)
+        cancelled = await self.bridge.cancel_async(update.effective_chat.id)
         await update.effective_message.reply_text("Cancelled." if cancelled else "No active generation.")
 
     async def model(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -139,12 +139,12 @@ class TelegramHandlers:
         data = query.data or ""
         if data.startswith("perm:yes:"):
             prompt_id = data.removeprefix("perm:yes:")
-            resolved = self.bridge.resolve_permission(prompt_id, "allow_once")
+            resolved = await self.bridge.resolve_permission_async(prompt_id, "allow_once")
             await query.answer("Approved." if resolved else "Prompt expired.")
             return
         if data.startswith("perm:no:"):
             prompt_id = data.removeprefix("perm:no:")
-            resolved = self.bridge.resolve_permission(prompt_id, "deny")
+            resolved = await self.bridge.resolve_permission_async(prompt_id, "deny")
             await query.answer("Denied." if resolved else "Prompt expired.")
 
     async def _authorized(self, update: Update) -> bool:

@@ -79,6 +79,7 @@ class TUIConfig:
 @dataclass(frozen=True)
 class TelegramConfig:
     enabled: bool
+    use_daemon: bool
     bot_token_env: str
     allowed_user_ids: tuple[int, ...]
     max_message_length: int
@@ -337,6 +338,7 @@ def _load_default_config() -> ConfigTable:
         },
         "telegram": {
             "enabled": False,
+            "use_daemon": False,
             "bot_token_env": "TELEGRAM_BOT_TOKEN",
             "allowed_user_ids": [123456789],
             "max_message_length": 4000,
@@ -534,6 +536,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
         ),
         telegram=TelegramConfig(
             enabled=_bool(telegram, "enabled"),
+            use_daemon=_bool(telegram, "use_daemon"),
             bot_token_env=_str(telegram, "bot_token_env"),
             allowed_user_ids=tuple(_list(telegram, "allowed_user_ids", int)),
             max_message_length=_int(telegram, "max_message_length"),

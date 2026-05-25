@@ -78,12 +78,13 @@ class RunStore:
         run_id: str,
         state: RunState,
         *,
+        plan: str = "",
         summary: str = "",
         verification: str = "",
         diff: str = "",
     ) -> RunRecord:
         async with self._lock:
-            return await asyncio.to_thread(self._finish_run_sync, run_id, state, summary, verification, diff)
+            return await asyncio.to_thread(self._finish_run_sync, run_id, state, plan, summary, verification, diff)
 
     async def list_runs(self, limit: int = 20) -> list[RunRecord]:
         return await asyncio.to_thread(self._list_runs_sync, limit)
@@ -122,6 +123,7 @@ class RunStore:
         )
         _write_json(path / "meta.json", _record_to_json(record))
         (path / "events.jsonl").touch()
+        _write_text(path / "plan.md", "")
         _write_text(path / "summary.md", "")
         _write_text(path / "verification.md", "")
         _write_text(path / "diff.patch", "")
@@ -158,11 +160,13 @@ class RunStore:
         self,
         run_id: str,
         state: RunState,
+        plan: str,
         summary: str,
         verification: str,
         diff: str,
     ) -> RunRecord:
         record = self._update_state_sync(run_id, state)
+        _write_text(record.path / "plan.md", plan)
         _write_text(record.path / "summary.md", summary)
         _write_text(record.path / "verification.md", verification or f"Run finished with state: {state}\n")
         _write_text(record.path / "diff.patch", diff)

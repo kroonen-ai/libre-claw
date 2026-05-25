@@ -123,6 +123,7 @@ async def test_daemon_starts_background_run_and_persists_events(monkeypatch, tmp
     )
 
     assert detail["run"]["working_directory"] == str(tmp_path)
+    assert detail["artifacts"]["plan.md"]["exists"] is True
     assert detail["artifacts"]["summary.md"]["size"] == 5
     assert [event["type"] for event in events["events"]] == [
         "run_started",

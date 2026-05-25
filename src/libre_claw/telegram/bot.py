@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 
 from libre_claw.config import LibreClawConfig
+from libre_claw.daemon import DaemonClient, daemon_base_url
 from libre_claw.telegram.auth import TelegramAuth
 from libre_claw.telegram.bridge import TelegramBridge
 from libre_claw.telegram.handlers import TelegramHandlers
@@ -19,7 +20,8 @@ except ImportError:  # pragma: no cover - dependency availability is tested by i
 class TelegramBot:
     def __init__(self, config: LibreClawConfig, bridge: TelegramBridge | None = None) -> None:
         self.config = config
-        self.bridge = bridge or TelegramBridge(config)
+        daemon_client = DaemonClient(daemon_base_url(config)) if config.telegram.use_daemon else None
+        self.bridge = bridge or TelegramBridge(config, daemon_client=daemon_client)
         self.auth = TelegramAuth.from_config(config.telegram)
 
     async def run(self) -> None:

@@ -100,6 +100,7 @@ vim_keybindings = false
 
 [telegram]
 enabled = false
+use_daemon = false # when true, Telegram starts/runs tasks through libre-claw daemon
 bot_token_env = "TELEGRAM_BOT_TOKEN"
 allowed_user_ids = [123456789]
 max_message_length = 4000

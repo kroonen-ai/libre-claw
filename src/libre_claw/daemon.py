@@ -29,6 +29,7 @@ from libre_claw.core import (
 )
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
+from libre_claw.core.review import RUN_ARTIFACT_NAMES, run_plan_text
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.tools import ToolRegistry
 from libre_claw.providers import LLMProvider, Usage, create_provider
@@ -187,6 +188,7 @@ class DaemonServer:
         await self.run_store.finish_run(
             run_id,
             "cancelled",
+            plan=_read_artifact(run, "plan.md"),
             summary=_read_artifact(run, "summary.md"),
             verification="Run cancelled through daemon API.\n",
             diff=_read_artifact(run, "diff.patch"),
@@ -322,6 +324,7 @@ class DaemonServer:
             await self.run_store.finish_run(
                 run.run_id,
                 state,
+                plan=run_plan_text(await self.run_store.load_events(run.run_id)),
                 summary="".join(assistant_chunks),
                 verification=f"Daemon run finished with state: {state}\n",
                 diff="",
@@ -449,7 +452,7 @@ def _event_payload(event: RunEvent) -> dict[str, Any]:
 
 def _artifact_payload(run: RunRecord) -> dict[str, dict[str, Any]]:
     payload: dict[str, dict[str, Any]] = {}
-    for name in ("events.jsonl", "summary.md", "verification.md", "diff.patch"):
+    for name in RUN_ARTIFACT_NAMES:
         path = run.path / name
         try:
             stat = path.stat()

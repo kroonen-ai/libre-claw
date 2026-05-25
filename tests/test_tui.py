@@ -295,6 +295,60 @@ async def test_run_commands_list_inspect_resume_and_cancel(monkeypatch, tmp_path
     assert any(entry.role == "assistant" and entry.content == "hi" for entry in app.transcript)
 
 
+async def test_artifact_panel_and_changes_command(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+    app.run_store = RunStore(tmp_path / "runs")
+    run = await app.run_store.create_run("artifact run", kind="chat", provider="openrouter", model="openrouter/auto")
+    await app.run_store.append_event(run.run_id, "user_message", {"content": "hello"})
+    await app.run_store.append_event(run.run_id, "assistant_delta", {"text": "I will check it."})
+    await app.run_store.finish_run(
+        run.run_id,
+        "done",
+        plan="I will check it.\n",
+        summary="Done.\n",
+        verification="Verified.\n",
+        diff="diff --git a/a b/a\n",
+    )
+
+    async with app.run_test():
+        await app._handle_command(f"/artifacts diff {run.run_id}")
+        await app._handle_command(f"/changes {run.run_id}")
+
+    assert app._artifact_visible is True
+    assert app._artifact_tab == "diff"
+    assert (run.path / "last_seen.json").exists()
+    assert any("Changes for" in entry.content for entry in app.transcript if entry.role == "system")
+
+
+async def test_approvals_command_lists_blocked_runs(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+    app.run_store = RunStore(tmp_path / "runs")
+    run = await app.run_store.create_run(
+        "blocked run",
+        kind="chat",
+        provider="openrouter",
+        model="openrouter/auto",
+        state="blocked",
+    )
+    await app.run_store.append_event(
+        run.run_id,
+        "permission_request",
+        {"tool_call_id": "toolu_1", "name": "bash", "arguments": {"command": "date"}},
+    )
+
+    async with app.run_test():
+        await app._handle_command("/approvals")
+
+    assert any("Blocked approval inbox" in entry.content for entry in app.transcript)
+    assert any("toolu_1" in entry.content for entry in app.transcript)
+
+
 async def test_transcript_from_run_events_reconstructs_tool_entries(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "runs")
     run = await store.create_run("tools", kind="chat", provider="openai", model="gpt-5.5")
