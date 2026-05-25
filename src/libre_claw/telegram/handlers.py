@@ -19,12 +19,16 @@ from libre_claw.telegram.bridge import (
 )
 
 TELEGRAM_HARD_MESSAGE_LIMIT = 4096
+TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
+TELEGRAM_CONTINUED_SUFFIX = "\n\n...[continued]"
 
 try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+    from telegram.error import BadRequest
     from telegram.ext import ContextTypes
 except ImportError:  # pragma: no cover - dependency availability is checked in integration.
     InlineKeyboardButton = InlineKeyboardMarkup = Update = ContextTypes = None  # type: ignore[assignment]
+    BadRequest = None  # type: ignore[assignment]
 
 
 class TelegramHandlers:
@@ -116,7 +120,7 @@ class TelegramHandlers:
                         accumulated += event.text
                         should_update = len(accumulated) % 100 == 0 or time.monotonic() - last_update >= self.bridge.config.telegram.stream_update_interval
                         if should_update:
-                            await placeholder.edit_text(_truncate(accumulated, self.bridge.config.telegram.max_message_length))
+                            await _edit_text_preview(placeholder, accumulated, self.bridge.config.telegram.max_message_length)
                             last_update = time.monotonic()
                         continue
                     if isinstance(event, TelegramToolNotice):
@@ -139,15 +143,30 @@ class TelegramHandlers:
                         continue
                     if isinstance(event, TelegramDone):
                         if accumulated:
-                            await placeholder.edit_text(_truncate(accumulated, self.bridge.config.telegram.max_message_length))
+                            await _finish_text_response(
+                                placeholder,
+                                update.effective_message,
+                                accumulated,
+                                self.bridge.config.telegram.max_message_length,
+                            )
                         else:
-                            await placeholder.edit_text("Done.")
+                            await _edit_text_preview(placeholder, "Done.", self.bridge.config.telegram.max_message_length)
                         continue
                     if isinstance(event, TelegramError):
-                        await placeholder.edit_text(_truncate(event.text, self.bridge.config.telegram.max_message_length))
+                        await _finish_text_response(
+                            placeholder,
+                            update.effective_message,
+                            event.text,
+                            self.bridge.config.telegram.max_message_length,
+                        )
                         continue
             except Exception as exc:
-                await placeholder.edit_text(_truncate(f"Telegram bridge error: {exc}", self.bridge.config.telegram.max_message_length))
+                await _finish_text_response(
+                    placeholder,
+                    update.effective_message,
+                    f"Telegram bridge error: {exc}",
+                    self.bridge.config.telegram.max_message_length,
+                )
 
         task = asyncio.create_task(runner())
         self.bridge.state_for(chat_id).task = task
@@ -198,8 +217,37 @@ def _truncate(text: str, limit: int) -> str:
     return text[: max(0, limit - 20)] + "\n...[truncated]"
 
 
+def _stream_preview(text: str, configured_limit: int) -> str:
+    limit = _telegram_message_limit(configured_limit)
+    if len(text) <= limit:
+        return text or " "
+    available = max(1, limit - len(TELEGRAM_CONTINUED_SUFFIX))
+    return text[:available].rstrip() + TELEGRAM_CONTINUED_SUFFIX
+
+
 def _telegram_message_limit(configured_limit: int) -> int:
-    return max(1, min(configured_limit, TELEGRAM_HARD_MESSAGE_LIMIT))
+    return max(1, min(configured_limit, TELEGRAM_HARD_MESSAGE_LIMIT, TELEGRAM_SAFE_MESSAGE_LIMIT))
+
+
+async def _edit_text_preview(message: Any, text: str, configured_limit: int) -> None:
+    preview = _stream_preview(text, configured_limit)
+    try:
+        await message.edit_text(preview)
+    except Exception as exc:
+        if _is_telegram_error(exc, "message is not modified"):
+            return
+        if _is_telegram_error(exc, "message is too long"):
+            await message.edit_text(_truncate(preview, configured_limit))
+            return
+        raise
+
+
+async def _finish_text_response(message: Any, reply_to: Any, text: str, configured_limit: int) -> None:
+    chunks = _message_chunks(text, configured_limit)
+    first = chunks[0] if chunks else " "
+    await _edit_text_preview(message, first, configured_limit)
+    for chunk in chunks[1:]:
+        await _reply_text_chunks(reply_to, chunk, configured_limit)
 
 
 async def _reply_text_chunks(
@@ -212,7 +260,20 @@ async def _reply_text_chunks(
     chunks = _message_chunks(text, configured_limit)
     for index, chunk in enumerate(chunks):
         markup = reply_markup if index == len(chunks) - 1 else None
-        await message.reply_text(chunk, reply_markup=markup)
+        await _reply_text_chunk(message, chunk, configured_limit, reply_markup=markup)
+
+
+async def _reply_text_chunk(message: Any, chunk: str, configured_limit: int, *, reply_markup: Any | None = None) -> None:
+    try:
+        await message.reply_text(chunk, reply_markup=reply_markup)
+    except Exception as exc:
+        if not _is_telegram_error(exc, "message is too long") or len(chunk) <= 1:
+            raise
+        smaller_limit = max(1, min(_telegram_message_limit(configured_limit) // 2, len(chunk) - 1))
+        smaller_chunks = _message_chunks(chunk, smaller_limit)
+        for index, smaller_chunk in enumerate(smaller_chunks):
+            markup = reply_markup if index == len(smaller_chunks) - 1 else None
+            await _reply_text_chunk(message, smaller_chunk, smaller_limit, reply_markup=markup)
 
 
 def _message_chunks(text: str, configured_limit: int) -> list[str]:
@@ -223,11 +284,19 @@ def _message_chunks(text: str, configured_limit: int) -> list[str]:
         chunk = remaining[:limit]
         cut = max(chunk.rfind("\n"), chunk.rfind(" "))
         if cut < max(1, limit // 2):
-            cut = limit
-        chunks.append(remaining[:cut].rstrip() or remaining[:limit])
-        remaining = remaining[cut:].lstrip()
+            split_at = limit
+        else:
+            split_at = cut + 1
+        chunks.append(remaining[:split_at] or remaining[:limit])
+        remaining = remaining[split_at:]
     chunks.append(remaining or " ")
     return chunks
+
+
+def _is_telegram_error(exc: Exception, message: str) -> bool:
+    if BadRequest is not None and isinstance(exc, BadRequest):
+        return message in str(exc).lower()
+    return exc.__class__.__name__ == "BadRequest" and message in str(exc).lower()
 
 
 def _unauthorized_text(user_id: int | None, username: str | None) -> str:

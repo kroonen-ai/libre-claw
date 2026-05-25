@@ -19,7 +19,15 @@ from libre_claw.telegram.bridge import (
     TelegramText,
     TelegramToolNotice,
 )
-from libre_claw.telegram.handlers import _message_chunks, _telegram_help_text, _unauthorized_text, telegram_command_specs
+from libre_claw.telegram.handlers import (
+    _finish_text_response,
+    _message_chunks,
+    _reply_text_chunks,
+    _stream_preview,
+    _telegram_help_text,
+    _unauthorized_text,
+    telegram_command_specs,
+)
 
 
 class FakeProvider(LLMProvider):
@@ -131,6 +139,70 @@ def test_telegram_message_chunks_respect_config_and_hard_limits() -> None:
     assert len(chunks) == 2
     assert all(0 < len(chunk) <= 4096 for chunk in chunks)
     assert "".join(chunks) == "a" * 4500
+
+
+def test_telegram_message_chunks_preserve_boundary_whitespace() -> None:
+    text = ("word " * 1000) + "\nnext"
+    chunks = _message_chunks(text, configured_limit=120)
+
+    assert all(0 < len(chunk) <= 120 for chunk in chunks)
+    assert "".join(chunks) == text
+
+
+def test_telegram_stream_preview_keeps_live_edits_under_safe_limit() -> None:
+    preview = _stream_preview("a" * 4500, configured_limit=5000)
+
+    assert len(preview) < 4096
+    assert preview.endswith("...[continued]")
+
+
+async def test_telegram_finish_text_response_sends_all_final_chunks() -> None:
+    class EditableMessage:
+        def __init__(self) -> None:
+            self.edits: list[str] = []
+
+        async def edit_text(self, text: str) -> None:
+            self.edits.append(text)
+
+    class ReplyMessage:
+        def __init__(self) -> None:
+            self.replies: list[str] = []
+
+        async def reply_text(self, text: str, reply_markup: object | None = None) -> None:
+            del reply_markup
+            self.replies.append(text)
+
+    placeholder = EditableMessage()
+    reply_to = ReplyMessage()
+    text = "a" * 4200
+
+    await _finish_text_response(placeholder, reply_to, text, configured_limit=5000)
+
+    assert len(placeholder.edits) == 1
+    assert len(placeholder.edits[0]) < 4096
+    assert reply_to.replies
+    assert placeholder.edits[0] + "".join(reply_to.replies) == text
+
+
+async def test_telegram_reply_text_chunks_retries_smaller_on_telegram_limit() -> None:
+    class BadRequest(Exception):
+        pass
+
+    class ReplyMessage:
+        def __init__(self) -> None:
+            self.replies: list[str] = []
+
+        async def reply_text(self, text: str, reply_markup: object | None = None) -> None:
+            del reply_markup
+            if len(text) > 5:
+                raise BadRequest("Message is too long")
+            self.replies.append(text)
+
+    message = ReplyMessage()
+
+    await _reply_text_chunks(message, "abcdefghij", configured_limit=10)
+
+    assert message.replies == ["abcde", "fghij"]
 
 
 def test_telegram_command_specs_drive_bot_menu() -> None:
