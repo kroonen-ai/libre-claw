@@ -26,6 +26,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DirectoryTree, Input, RichLog, Static
 
 from libre_claw import __version__
+from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
 from libre_claw.auth.codex import CodexCliError, CodexCommandResult, codex_logout, codex_status, stream_codex_command
 from libre_claw.config import (
     ConfigError,
@@ -124,6 +125,11 @@ class CompactOptions:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class PendingProviderKeySetup:
+    provider: str
+
+
 @dataclass
 class StreamRenderBuffer:
     interval: float
@@ -173,6 +179,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/usage", "/usage openrouter|attribution|presets", "Show provider usage analytics"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
     SlashCommand("/provider", "/provider anthropic|openai|openrouter|ollama|codex", "Switch provider for new turns"),
+    SlashCommand("/setup", "/setup status|provider|key|model|openrouter|ollama-cloud|codex", "First-run provider and key setup"),
     SlashCommand("/codex", "/codex login|status|logout|use [model]", "Manage Codex/ChatGPT login"),
     SlashCommand("/save", "/save [name]", "Save the current session"),
     SlashCommand("/load", "/load <name>", "Load a saved session"),
@@ -613,6 +620,7 @@ class LibreClawApp(App[None]):
         self._slash_suggestions: list[SlashCommand] = []
         self._active_task: asyncio.Task[None] | None = None
         self._pending_permission: AgentPermissionRequest | None = None
+        self._pending_key_setup: PendingProviderKeySetup | None = None
         self._pending_daemon_permission_run_id: str | None = None
         self._tool_entry_by_call_id: dict[str, int] = {}
         self._chat_entry_spans: dict[int, tuple[int, int]] = {}
@@ -684,6 +692,7 @@ class LibreClawApp(App[None]):
             self._append_system(f"TUI daemon mode enabled: {daemon_base_url(self.config)}")
         if self.provider_error is not None:
             self._append_system(self.provider_error)
+            self._append_system(_setup_first_run_hint())
 
     async def on_unmount(self) -> None:
         if self._active_task is not None and not self._active_task.done():
@@ -772,6 +781,10 @@ class LibreClawApp(App[None]):
             await self._handle_palette_input(text)
             return
 
+        if self._pending_key_setup is not None:
+            await self._handle_pending_key_input(text)
+            return
+
         if self._pending_permission is not None and not text.startswith("/"):
             self._handle_permission_input(text)
             return
@@ -834,6 +847,9 @@ class LibreClawApp(App[None]):
             return
         if command == "/provider":
             self._set_provider(argument)
+            return
+        if command == "/setup":
+            await self._handle_setup_command(argument)
             return
         if command == "/codex":
             await self._handle_codex_command(argument)
@@ -1398,6 +1414,47 @@ class LibreClawApp(App[None]):
 
         self._resolve_pending_permission(resolution)
 
+    async def _handle_pending_key_input(self, text: str) -> None:
+        pending = self._pending_key_setup
+        if pending is None:
+            return
+
+        if text.strip().lower() in {"/cancel", "cancel"}:
+            self._cancel_key_setup()
+            self._append_system("Provider key setup cancelled.")
+            return
+
+        store = ApiKeyStore.from_config(self.config.auth)
+        try:
+            location = await asyncio.to_thread(store.set_api_key, pending.provider, text)
+        except KeyStorageError as exc:
+            self._append_system(f"Could not store {pending.provider} API key: {exc}")
+            self._end_key_setup()
+            return
+
+        provider = pending.provider
+        self._end_key_setup()
+        self._rebuild_agent()
+        self._update_status()
+        suffix = " Provider is ready." if self.provider_error is None else f" {self.provider_error}"
+        self._append_system(f"Stored {provider} API key in {location.replace('_', ' ')}.{suffix}")
+
+    def _begin_key_setup(self, provider: str) -> None:
+        self._pending_key_setup = PendingProviderKeySetup(provider=provider)
+        input_widget = self.query_one("#input", Input)
+        input_widget.password = True
+        input_widget.placeholder = f"Paste {provider} API key. It will not be shown. Type /cancel to abort."
+        input_widget.focus()
+
+    def _end_key_setup(self) -> None:
+        self._pending_key_setup = None
+        input_widget = self.query_one("#input", Input)
+        input_widget.password = False
+        input_widget.placeholder = self._input_placeholder()
+
+    def _cancel_key_setup(self) -> None:
+        self._end_key_setup()
+
     def _show_permission_prompt(self, request: AgentPermissionRequest) -> None:
         panel = self.query_one("#permission-panel", Vertical)
         title = self.query_one("#permission-title", Static)
@@ -1561,6 +1618,89 @@ class LibreClawApp(App[None]):
             self._append_system(self.provider_error)
         else:
             self._append_system(f"Provider set to {provider}.")
+
+    async def _handle_setup_command(self, argument: str) -> None:
+        parts = argument.split(maxsplit=2)
+        action = parts[0].lower() if parts else "status"
+        value = parts[1].strip() if len(parts) > 1 else ""
+        rest = parts[2].strip() if len(parts) > 2 else ""
+
+        if action in {"status", "check"}:
+            self._append_system(await self._setup_status_text())
+            return
+
+        if action in {"help", ""}:
+            self._append_system(_setup_help_text())
+            return
+
+        if action == "provider":
+            if not value:
+                self._append_system(_provider_help_text(self.config))
+                return
+            self._set_provider(value)
+            return
+
+        if action == "model":
+            self._set_model(" ".join(part for part in (value, rest) if part))
+            return
+
+        if action == "key":
+            provider = _canonical_tui_provider(value)
+            if provider not in {"anthropic", "openai", "openrouter", "ollama"}:
+                self._append_system("Usage: /setup key anthropic|openai|openrouter|ollama")
+                return
+            self._append_system(f"Ready for {provider} API key. Paste it into the input box; it will be hidden.")
+            self._begin_key_setup(provider)
+            return
+
+        if action == "codex":
+            await self._handle_codex_command("login")
+            return
+
+        if action == "openrouter":
+            self._set_model("openrouter:qwen/qwen3.7-max --global")
+            self._append_system("Next: run `/setup key openrouter` if the OpenRouter key is not stored yet.")
+            return
+
+        if action == "ollama-cloud":
+            self._set_model("ollama:kimi-k2.6:cloud --global")
+            self._append_system("Next: run `/setup key ollama` and configure [providers.ollama].base_url for Ollama Cloud.")
+            return
+
+        self._append_system(_setup_help_text())
+
+    async def _setup_status_text(self) -> str:
+        store = ApiKeyStore.from_config(self.config.auth)
+        providers = [
+            (name, _provider_api_key_env(provider_config))
+            for name, provider_config in self.config.providers.items()
+            if name in {"anthropic", "openai", "openrouter", "ollama"}
+        ]
+        try:
+            statuses = await asyncio.to_thread(store.key_status, providers)
+        except KeyStorageError as exc:
+            statuses = {"error": str(exc)}
+        codex = await codex_status()
+        lines = [
+            "Libre Claw setup status:",
+            f"- Provider: {_canonical_tui_provider(self.config.general.default_provider)}",
+            f"- Model: {_effective_model(self.config)}",
+            f"- Working directory: {self.config.general.working_directory}",
+            "- Keys:",
+        ]
+        lines.extend(f"  - {name}: {source}" for name, source in sorted(statuses.items()))
+        lines.append(f"  - codex: {'logged_in' if codex.logged_in else 'missing'}")
+        lines.extend(
+            [
+                "",
+                "Next steps:",
+                "- /setup provider openrouter",
+                "- /setup key openrouter",
+                "- /model openrouter:qwen/qwen3.7-max --global",
+                "- /setup codex",
+            ]
+        )
+        return "\n".join(lines)
 
     def _save_session(self, name: str) -> None:
         session_name = name or datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -2538,6 +2678,23 @@ class LibreClawApp(App[None]):
                 if query in suggestion.name.lower() or query in suggestion.description.lower()
             ][:6]
 
+        if lowered.startswith("/setup "):
+            query = lowered.removeprefix("/setup ").strip()
+            suggestions = [
+                SlashCommand("/setup status", "/setup status", "Show provider and key readiness"),
+                SlashCommand("/setup provider openrouter", "/setup provider openrouter", "Switch to OpenRouter"),
+                SlashCommand("/setup key openrouter", "/setup key openrouter", "Store OpenRouter key inside the TUI"),
+                SlashCommand("/setup key anthropic", "/setup key anthropic", "Store Anthropic key inside the TUI"),
+                SlashCommand("/setup key openai", "/setup key openai", "Store OpenAI key inside the TUI"),
+                SlashCommand("/setup key ollama", "/setup key ollama", "Store Ollama Cloud key inside the TUI"),
+                SlashCommand("/setup codex", "/setup codex", "Start Codex/ChatGPT login"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+
         if lowered.startswith("/codex "):
             query = lowered.removeprefix("/codex ").strip()
             suggestions = [
@@ -2768,6 +2925,8 @@ class LibreClawApp(App[None]):
     def _input_placeholder(self) -> str:
         if self.palette_open:
             return "Command palette query..."
+        if self._pending_key_setup is not None:
+            return f"Paste {self._pending_key_setup.provider} API key. It is hidden. Type /cancel to abort."
         if self._pending_permission is not None:
             return "Permission prompt active: click a choice or press y/n/a/!"
         if self._goal_description is not None:
@@ -2886,6 +3045,38 @@ def _provider_help_text(config: LibreClawConfig) -> str:
         "For Codex/ChatGPT auth, run `/codex login` then `/provider codex`.",
     ]
     return "\n".join(lines)
+
+
+def _setup_help_text() -> str:
+    return "\n".join(
+        [
+            "Libre Claw first-run setup:",
+            "/setup status",
+            "/setup provider anthropic|openai|openrouter|ollama|codex",
+            "/setup key anthropic|openai|openrouter|ollama",
+            "/setup model <provider>:<model> [--global]",
+            "/setup openrouter",
+            "/setup ollama-cloud",
+            "/setup codex",
+            "",
+            "API keys entered through `/setup key` are hidden and stored through the same keyring/encrypted-file path as `libre-claw auth set-key`.",
+        ]
+    )
+
+
+def _setup_first_run_hint() -> str:
+    return (
+        "First-run setup is available inside the TUI. Try `/setup status`, "
+        "`/setup provider openrouter`, or `/setup key openrouter`."
+    )
+
+
+def _provider_api_key_env(provider_config: object) -> str | None:
+    if isinstance(provider_config, dict):
+        value = provider_config.get("api_key_env")
+        if isinstance(value, str):
+            return value
+    return None
 
 
 def _goal_help_text(config: LibreClawConfig, session_max_turns: int) -> str:

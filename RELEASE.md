@@ -64,6 +64,9 @@ First shippable Libre Claw release from Kroonen AI Inc.
   verification, an analytics link to
   `https://openrouter.ai/apps?url=https://kroonen.ai`, and recommended
   OpenRouter model presets.
+- Competitive polish pass with a one-command installer, first-run `/setup`
+  wizard, provider/key setup inside the TUI, quickstart docs, demo scripts,
+  public roadmap, and security documentation.
 - Cumulative session token tracking in the status bar, TUI `/cost`, and
   Telegram `/cost`. OpenRouter requests usage accounting so provider-reported
   cost, cached tokens, and reasoning tokens appear when OpenRouter returns

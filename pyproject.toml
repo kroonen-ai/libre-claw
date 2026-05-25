@@ -70,11 +70,15 @@ packages = ["src/libre_claw"]
 [tool.hatch.build.targets.sdist]
 include = [
     "/CHANGELOG.md",
+    "/docs",
     "/LICENSE",
     "/README.md",
     "/RELEASE.md",
+    "/ROADMAP.md",
+    "/SECURITY.md",
     "/config",
     "/pyproject.toml",
+    "/scripts",
     "/src",
     "/tests",
 ]

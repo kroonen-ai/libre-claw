@@ -10,6 +10,8 @@ from pathlib import Path
 
 from rich.console import Console
 
+from libre_claw.auth.api_keys import ApiKeyLookup
+from libre_claw.auth.codex import CodexStatus
 from libre_claw.config import load_config
 from libre_claw.core.automations import AutomationStore
 from libre_claw.core.agent import (
@@ -83,6 +85,23 @@ class FakeDaemonClient:
     async def resolve_permission(self, run_id: str, tool_call_id: str, resolution: str):
         self.resolutions.append((run_id, tool_call_id, resolution))
         return {"run_id": run_id, "tool_call_id": tool_call_id, "resolution": resolution}
+
+
+class FakeApiKeyStore:
+    def __init__(self) -> None:
+        self.keys: dict[str, str] = {}
+
+    def set_api_key(self, provider: str, api_key: str) -> str:
+        self.keys[provider] = api_key
+        return "encrypted_file"
+
+    def get_api_key(self, provider: str, env_var: str | None = None) -> ApiKeyLookup:
+        del env_var
+        value = self.keys.get(provider)
+        return ApiKeyLookup(value=value, source="encrypted_file" if value else "missing")
+
+    def key_status(self, providers: list[tuple[str, str | None]]) -> dict[str, str]:
+        return {provider: "encrypted_file" if provider in self.keys else "missing" for provider, _env in providers}
 
 
 def test_tui_can_start_without_anthropic_api_key(monkeypatch, tmp_path: Path) -> None:
@@ -481,6 +500,33 @@ async def test_usage_command_reports_openrouter_run_rollups(monkeypatch, tmp_pat
     assert "tui:chat" in system_text
     assert "https://openrouter.ai/apps?url=https://kroonen.ai" in system_text
     assert "/model openrouter:qwen/qwen3.7-max --global" in system_text
+
+
+async def test_setup_key_flow_hides_and_stores_provider_key(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    fake_store = FakeApiKeyStore()
+    monkeypatch.setattr("libre_claw.tui.app.ApiKeyStore.from_config", lambda _auth: fake_store)
+    monkeypatch.setattr(
+        "libre_claw.tui.app.codex_status",
+        lambda: asyncio.sleep(0, result=CodexStatus(available=True, logged_in=False, detail="missing")),
+    )
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        await app._handle_command("/setup key openrouter")
+        input_widget = app.query_one("#input")
+        assert input_widget.password is True
+        await app.handle_user_input("sk-or-secret")
+        assert input_widget.password is False
+        await app._handle_command("/setup status")
+
+    assert fake_store.keys == {"openrouter": "sk-or-secret"}
+    system_text = "\n".join(entry.content for entry in app.transcript if entry.role == "system")
+    assert "Stored openrouter API key" in system_text
+    assert "openrouter: encrypted_file" in system_text
+    assert "sk-or-secret" not in system_text
 
 
 async def test_transcript_from_run_events_reconstructs_tool_entries(tmp_path: Path) -> None:

@@ -38,6 +38,8 @@ and run the Telegram daemon.
 - OpenRouter growth analytics with app-attribution verification, recommended
   model presets, and persistent `/usage openrouter` rollups by model, run, and
   user surface.
+- Competitive polish: one-command install script, first-run `/setup` wizard,
+  public roadmap, demo scripts, and a security page.
 - MCP stdio integration for explicitly configured and allowlisted external
   tools, surfaced through the normal tool registry and permission system.
 - User and project skills loaded from `~/.libre-claw/skills/` and
@@ -58,6 +60,19 @@ and run the Telegram daemon.
 - Optional: Playwright installed if you want headless browser tools.
 
 ## Install From This Repo
+
+One-command install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kroonen-ai/libre-claw/main/scripts/install.sh | sh
+```
+
+For private/self-hosted remotes:
+
+```bash
+LIBRE_CLAW_REPO_URL=https://git.kroonen.ai/kroonen-ai/libre-claw.git \
+  curl -fsSL https://raw.githubusercontent.com/kroonen-ai/libre-claw/main/scripts/install.sh | sh
+```
 
 Use a virtual environment. This avoids macOS/Homebrew's
 `externally-managed-environment` pip error.
@@ -141,6 +156,9 @@ libre-claw
 Inside the TUI:
 
 ```text
+/setup status
+/setup provider openrouter
+/setup key openrouter
 /model openrouter:openrouter/auto
 ```
 
@@ -301,6 +319,7 @@ Legacy configs that still say `default_provider = "local"` or
 - `/usage openrouter|attribution|presets`
 - `/model [provider:]<name>|list [--global]`
 - `/provider anthropic|openai|openrouter|ollama|codex`
+- `/setup status|provider|key|model|openrouter|ollama-cloud|codex`
 - `/codex login|status|logout|use [model]`
 - `/save [name]`
 - `/load <name>`
@@ -391,6 +410,24 @@ OpenRouter-specific helpers:
 - `/usage openrouter presets` prints recommended `/model openrouter:...`
   commands for higher-value coding, goal, and scheduled-check workflows.
 - Analytics link: https://openrouter.ai/apps?url=https://kroonen.ai
+
+## First-Run Setup
+
+The TUI includes a first-run setup flow:
+
+```text
+/setup status
+/setup provider openrouter
+/setup key openrouter
+/setup model openrouter:qwen/qwen3.7-max --global
+```
+
+`/setup key` hides the input and stores the key through the same environment,
+keyring, or encrypted fallback path as the CLI `auth set-key` command. It does
+not print the key into the transcript.
+
+Use `/setup codex` for Codex/ChatGPT login through the supported Codex CLI
+flow.
 
 ## Tool Permissions
 
@@ -749,6 +786,13 @@ base_url = "https://ollama.com"
 api_format = "ollama"
 api_key_env = "OLLAMA_API_KEY"
 ```
+
+## More Docs
+
+- [Getting started in 5 minutes](docs/GETTING_STARTED.md)
+- [Security](SECURITY.md)
+- [Roadmap](ROADMAP.md)
+- [Demo scripts](docs/DEMOS.md)
 
 ## Development
 

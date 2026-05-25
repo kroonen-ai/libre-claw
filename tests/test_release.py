@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import subprocess
 from pathlib import Path
 
 from libre_claw import __version__
@@ -40,6 +41,18 @@ def test_packaged_release_notes_match_repo_release() -> None:
 
     assert packaged_release_text() == release_text
     assert (ROOT / "src" / "libre_claw" / "RELEASE.md").read_text(encoding="utf-8") == release_text
+
+
+def test_competitive_polish_docs_and_installer_exist() -> None:
+    assert (ROOT / "docs" / "GETTING_STARTED.md").exists()
+    assert (ROOT / "docs" / "DEMOS.md").exists()
+    assert (ROOT / "ROADMAP.md").exists()
+    assert (ROOT / "SECURITY.md").exists()
+    assert "curl -fsSL" in (ROOT / "docs" / "GETTING_STARTED.md").read_text(encoding="utf-8")
+    assert "/setup key openrouter" in (ROOT / "README.md").read_text(encoding="utf-8")
+
+    result = subprocess.run(["sh", "-n", str(ROOT / "scripts" / "install.sh")], check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_license_is_apache_with_kroonen_attribution() -> None:
