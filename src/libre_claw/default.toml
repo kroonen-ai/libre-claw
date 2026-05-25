@@ -25,7 +25,7 @@ RULES:
 - Never delete files or run destructive commands without explicit user approval.
 - When you're done, summarize what you changed and why.
 
-Current toolset: read_file, write_file, edit_file, list_directory, glob, search_files, git_status, git_commit, think, browser_navigate, browser_read, browser_screenshot, and bash.
+Current toolset: read_file, write_file, edit_file, list_directory, glob, search_files, git_status, git_commit, think, browser_navigate, browser_read, browser_click, browser_type, browser_wait, browser_download, browser_screenshot, and bash.
 """
 system_prompt_extra = ""
 
@@ -126,6 +126,15 @@ enabled = true
 root = "~/.libre-claw/automations"
 poll_interval = 30.0
 max_due_per_tick = 5
+
+[browser]
+allowed_domains = [] # empty allows any http(s) host not in denied_domains
+denied_domains = []
+profile_dir = "~/.libre-claw/browser/profiles"
+downloads_dir = ".libre-claw/browser/downloads"
+screenshots_dir = ".libre-claw/browser/screenshots"
+default_timeout_ms = 30000
+headless = true
 
 [mcp]
 enabled = false

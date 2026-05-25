@@ -32,7 +32,7 @@ from libre_claw.core import (
 )
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
-from libre_claw.core.review import RUN_ARTIFACT_NAMES, run_plan_text
+from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, run_plan_text
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.tools import ToolRegistry
 from libre_claw.providers import LLMProvider, Usage, create_provider
@@ -209,11 +209,12 @@ class DaemonServer:
         await self.run_store.finish_run(
             run_id,
             "cancelled",
-            plan=_read_artifact(run, "plan.md"),
-            summary=_read_artifact(run, "summary.md"),
-            verification="Run cancelled through daemon API.\n",
-            diff=_read_artifact(run, "diff.patch"),
-        )
+                plan=_read_artifact(run, "plan.md"),
+                summary=_read_artifact(run, "summary.md"),
+                verification="Run cancelled through daemon API.\n",
+                diff=_read_artifact(run, "diff.patch"),
+                browser=_read_artifact(run, "browser.md"),
+            )
         return web.json_response({"run_id": run_id, "cancelled": True, "active": False})
 
     async def resolve_permission(self, request: web.Request) -> web.Response:
@@ -320,6 +321,7 @@ class DaemonServer:
             goal=self.config.goal,
             daemon=self.config.daemon,
             automations=self.config.automations,
+            browser=self.config.browser,
             mcp=self.config.mcp,
             providers=self.config.providers,
             source_paths=self.config.source_paths,
@@ -406,6 +408,7 @@ class DaemonServer:
                 summary="".join(assistant_chunks),
                 verification=f"Daemon run finished with state: {state}\n",
                 diff="",
+                browser=browser_artifact_text(await self.run_store.load_events(run.run_id)),
             )
             await self.run_store.append_event(run.run_id, "run_finished", {"state": state})
 
@@ -487,6 +490,7 @@ class DaemonServer:
             goal=self.config.goal,
             daemon=self.config.daemon,
             automations=self.config.automations,
+            browser=self.config.browser,
             mcp=self.config.mcp,
             providers=self.config.providers,
             source_paths=self.config.source_paths,
@@ -514,6 +518,7 @@ class DaemonServer:
             summary=message,
             verification=f"Automation {automation.automation_id} failed before run start.\n",
             diff="",
+            browser="",
         )
 
     async def _create_agent(self, config: LibreClawConfig) -> Agent:
@@ -725,6 +730,7 @@ def _usage_payload(usage: Usage) -> dict[str, Any]:
 def _write_automation_report(automation: AutomationRecord, run: RunRecord, report_path: Path) -> None:
     summary = _read_artifact(run, "summary.md").strip()
     verification = _read_artifact(run, "verification.md").strip()
+    browser = _read_artifact(run, "browser.md").strip()
     diff_path = run.path / "diff.patch"
     try:
         diff_size = diff_path.stat().st_size
@@ -747,6 +753,10 @@ def _write_automation_report(automation: AutomationRecord, run: RunRecord, repor
         "## Verification",
         "",
         verification or "No verification artifact was produced.",
+        "",
+        "## Browser",
+        "",
+        browser or "No browser artifacts were recorded.",
         "",
         "## Artifacts",
         "",

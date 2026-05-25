@@ -509,12 +509,13 @@ async def test_collect_run_artifacts_captures_git_diff(tmp_path: Path) -> None:
     subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, check=True, capture_output=True)
     tracked.write_text("after\n", encoding="utf-8")
 
-    verification, diff = await _collect_run_artifacts(tmp_path, "done", [])
+    verification, diff, browser = await _collect_run_artifacts(tmp_path, "done", [])
 
     assert "Git status at finish:" in verification
     assert " M tracked.txt" in verification
     assert "diff --git" in diff
     assert "+after" in diff
+    assert "No browser artifacts" in browser
 
 
 def test_assistant_label_uses_purple_accent(monkeypatch, tmp_path: Path) -> None:

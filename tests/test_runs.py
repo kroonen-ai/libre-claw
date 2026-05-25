@@ -26,6 +26,7 @@ async def test_run_store_creates_events_and_artifacts(tmp_path: Path) -> None:
         summary="All done.",
         verification="Tests passed.\n",
         diff="diff --git a/file b/file\n",
+        browser="# Browser\n",
     )
 
     loaded = await store.load_run(run.run_id)
@@ -44,6 +45,7 @@ async def test_run_store_creates_events_and_artifacts(tmp_path: Path) -> None:
     assert (run.path / "summary.md").read_text(encoding="utf-8") == "All done."
     assert (run.path / "verification.md").read_text(encoding="utf-8") == "Tests passed.\n"
     assert (run.path / "diff.patch").read_text(encoding="utf-8").startswith("diff --git")
+    assert (run.path / "browser.md").read_text(encoding="utf-8") == "# Browser\n"
 
 
 async def test_run_store_lists_newest_first(tmp_path: Path) -> None:

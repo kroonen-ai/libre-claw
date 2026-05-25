@@ -39,6 +39,7 @@ __all__ = [
     "SkillStore",
     "automation_examples",
     "automation_is_due",
+    "browser_artifact_text",
     "pending_approvals",
     "mcp_tool_specs",
     "next_scheduled_at",
@@ -76,7 +77,7 @@ from libre_claw.core.goal import (
     JudgeDecision,
 )
 from libre_claw.core.mcp import MCPError, MCPProxyTool, MCPToolSpec, mcp_tool_specs
-from libre_claw.core.review import PendingApproval, pending_approvals, run_changes_text, run_plan_text
+from libre_claw.core.review import PendingApproval, browser_artifact_text, pending_approvals, run_changes_text, run_plan_text
 from libre_claw.core.runs import RunEvent, RunRecord, RunState, RunStore
 from libre_claw.core.session import Session
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore

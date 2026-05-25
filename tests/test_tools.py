@@ -15,7 +15,16 @@ import pytest
 from libre_claw.core.tools import BaseTool, ToolCall, ToolContext, ToolRegistry, ToolRegistryError, ToolResult
 from libre_claw.tools_builtin import browser as browser_tools
 from libre_claw.tools_builtin import create_builtin_registry
-from libre_claw.tools_builtin.browser import BrowserNavigateTool, BrowserReadTool, BrowserScreenshotTool
+from libre_claw.tools_builtin.browser import (
+    BrowserClickTool,
+    BrowserDownloadTool,
+    BrowserNavigateTool,
+    BrowserReadTool,
+    BrowserScreenshotTool,
+    BrowserState,
+    BrowserTypeTool,
+    BrowserWaitTool,
+)
 from libre_claw.tools_builtin.filesystem import EditFileTool, ListDirectoryTool, ReadFileTool, WriteFileTool
 from libre_claw.tools_builtin.git import GitCommitTool, GitStatusTool
 from libre_claw.tools_builtin.search import GlobTool, SearchFilesTool
@@ -87,6 +96,10 @@ def test_builtin_registry_exposes_production_toolset(tmp_path: Path) -> None:
         "think",
         "browser_navigate",
         "browser_read",
+        "browser_click",
+        "browser_type",
+        "browser_wait",
+        "browser_download",
         "browser_screenshot",
         "bash",
     }.issubset(names)
@@ -386,8 +399,6 @@ async def test_think_tool_has_no_side_effects(tmp_path: Path) -> None:
 
 
 async def test_browser_tools_gracefully_handle_missing_session_or_dependency(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(browser_tools._BROWSER_STATE, "page", None)
-
     def missing_playwright(name: str):
         raise ModuleNotFoundError(name)
 
@@ -401,6 +412,131 @@ async def test_browser_tools_gracefully_handle_missing_session_or_dependency(mon
     assert "Playwright is not installed" in navigate.error or "Executable doesn't exist" in navigate.error
     assert read.error == "No browser page is open. Use browser_navigate first."
     assert screenshot.error == "No browser page is open. Use browser_navigate first."
+
+
+async def test_browser_policy_blocks_denied_domains(tmp_path: Path) -> None:
+    ctx = context(tmp_path)
+    ctx = ToolContext(
+        working_directory=ctx.working_directory,
+        restrict_to_working_dir=ctx.restrict_to_working_dir,
+        command_timeout=ctx.command_timeout,
+        allow_sudo=ctx.allow_sudo,
+        blocked_patterns=ctx.blocked_patterns,
+        browser_denied_domains=("example.com",),
+    )
+
+    result = await BrowserNavigateTool(ctx).execute(url="https://example.com")
+
+    assert result.error is not None
+    assert "denied" in result.error
+
+
+async def test_browser_selector_actions_and_artifacts_use_shared_profile(tmp_path: Path) -> None:
+    ctx = context(tmp_path)
+    page = FakePage()
+    read_tool = BrowserReadTool(ctx)
+    state = BrowserState(read_tool, "default")
+    state.page = page
+    ctx.shared_state["browser_states"] = {"default": state}
+
+    read = await read_tool.execute(selector="main")
+    clicked = await BrowserClickTool(ctx).execute(selector="button.save")
+    typed = await BrowserTypeTool(ctx).execute(selector="input[name=q]", text="hello", press_enter=True)
+    waited = await BrowserWaitTool(ctx).execute(selector=".ready")
+    screenshot = await BrowserScreenshotTool(ctx).execute(selector="main")
+    download = await BrowserDownloadTool(ctx).execute(selector="a.download")
+    outside = await BrowserScreenshotTool(ctx).execute(path=str(tmp_path.parent / "outside.png"))
+
+    assert "selector: main" in read.content
+    assert clicked.metadata["action"] == "click"
+    assert typed.metadata["action"] == "type"
+    assert waited.metadata["action"] == "wait"
+    assert screenshot.metadata["artifact_type"] == "browser_screenshot"
+    assert Path(str(screenshot.metadata["path"])).exists()
+    assert download.metadata["artifact_type"] == "browser_download"
+    assert Path(str(download.metadata["path"])).exists()
+    assert outside.error is not None
+    assert "outside the working directory" in outside.error
+
+
+class FakePage:
+    url = "https://kroonen.ai/app"
+
+    def __init__(self) -> None:
+        self.download = FakeDownload()
+
+    async def title(self) -> str:
+        return "Fake Page"
+
+    def locator(self, selector: str) -> "FakeLocator":
+        return FakeLocator(selector)
+
+    async def screenshot(self, path: str, full_page: bool = True) -> None:
+        del full_page
+        Path(path).write_bytes(b"png")
+
+    def expect_download(self, timeout: int) -> "FakeDownloadContext":
+        del timeout
+        return FakeDownloadContext(self.download)
+
+    async def wait_for_load_state(self, state: str, timeout: int) -> None:
+        del state, timeout
+
+
+class FakeLocator:
+    def __init__(self, selector: str) -> None:
+        self.selector = selector
+
+    @property
+    def first(self) -> "FakeLocator":
+        return self
+
+    async def inner_text(self, timeout: int) -> str:
+        del timeout
+        return f"text for {self.selector}"
+
+    async def click(self, timeout: int) -> None:
+        del timeout
+
+    async def fill(self, text: str, timeout: int) -> None:
+        del text, timeout
+
+    async def type(self, text: str, timeout: int) -> None:
+        del text, timeout
+
+    async def press(self, key: str, timeout: int) -> None:
+        del key, timeout
+
+    async def wait_for(self, state: str, timeout: int) -> None:
+        del state, timeout
+
+    async def screenshot(self, path: str) -> None:
+        Path(path).write_bytes(b"png")
+
+
+class FakeDownload:
+    suggested_filename = "artifact.txt"
+
+    async def save_as(self, path: str) -> None:
+        Path(path).write_text("downloaded", encoding="utf-8")
+
+
+class FakeDownloadContext:
+    def __init__(self, download: FakeDownload) -> None:
+        self._download = download
+
+    @property
+    def value(self):
+        async def _download() -> FakeDownload:
+            return self._download
+
+        return _download()
+
+    async def __aenter__(self) -> "FakeDownloadContext":
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        del exc_type, exc, traceback
 
 
 async def test_file_tools_restrict_paths_to_working_directory(tmp_path: Path) -> None:

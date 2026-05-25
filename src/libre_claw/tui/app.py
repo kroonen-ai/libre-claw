@@ -62,7 +62,7 @@ from libre_claw.core import (
 )
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
-from libre_claw.core.review import RUN_ARTIFACT_NAMES, pending_approvals, run_changes_text, run_plan_text
+from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, pending_approvals, run_changes_text, run_plan_text
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.session import ChatMessage, estimate_context_tokens
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
@@ -74,7 +74,7 @@ from libre_claw.tools_builtin import create_builtin_registry
 
 
 TranscriptRole = Literal["user", "assistant", "system", "tool", "permission", "file"]
-ArtifactTab = Literal["plan", "summary", "verify", "diff"]
+ArtifactTab = Literal["plan", "summary", "verify", "diff", "browser"]
 
 
 @dataclass
@@ -657,6 +657,7 @@ class LibreClawApp(App[None]):
                         yield Button("Summary", id="artifact-summary", compact=True)
                         yield Button("Verify", id="artifact-verify", compact=True)
                         yield Button("Diff", id="artifact-diff", compact=True)
+                        yield Button("Browser", id="artifact-browser", compact=True)
                         yield Button("Close", id="artifact-close", compact=True)
                     yield Static("", id="artifact-title")
                     yield RichLog(id="artifact-content", wrap=True, highlight=True, markup=True)
@@ -1319,7 +1320,7 @@ class LibreClawApp(App[None]):
             if run is not None and run.working_directory
             else self.config.general.working_directory
         )
-        verification, diff = await _collect_run_artifacts(working_directory, state, events)
+        verification, diff, browser = await _collect_run_artifacts(working_directory, state, events)
         summary_text = summary or self._active_run_summary
         await self.run_store.finish_run(
             run_id,
@@ -1328,6 +1329,7 @@ class LibreClawApp(App[None]):
             summary=summary_text,
             verification=verification,
             diff=diff,
+            browser=browser,
         )
         await self.run_store.append_event(run_id, "run_finished", {"state": state})
         self._active_run_id = None
@@ -1939,7 +1941,7 @@ class LibreClawApp(App[None]):
         tab, run_query = _parse_artifact_command(argument)
         run_id = await self._resolve_optional_run_id(run_query)
         if run_id is None:
-            self._append_system("Usage: /artifacts [plan|summary|verify|diff] [run-id]")
+            self._append_system("Usage: /artifacts [plan|summary|verify|diff|browser] [run-id]")
             return
         run = await self.run_store.load_run(run_id)
         if run is None:
@@ -2016,7 +2018,7 @@ class LibreClawApp(App[None]):
             self._hide_artifact_panel()
             return
         tab = button_id.removeprefix("artifact-")
-        if tab not in {"plan", "summary", "verify", "diff"}:
+        if tab not in {"plan", "summary", "verify", "diff", "browser"}:
             return
         self._artifact_tab = cast(ArtifactTab, tab)
         if self._artifact_run_id is not None:
@@ -2043,9 +2045,11 @@ class LibreClawApp(App[None]):
         summary_path = run.path / "summary.md"
         plan_path = run.path / "plan.md"
         diff_path = run.path / "diff.patch"
+        browser_path = run.path / "browser.md"
         plan = await asyncio.to_thread(plan_path.read_text, encoding="utf-8") if plan_path.exists() else ""
         summary = await asyncio.to_thread(summary_path.read_text, encoding="utf-8") if summary_path.exists() else ""
         diff = await asyncio.to_thread(diff_path.read_text, encoding="utf-8") if diff_path.exists() else ""
+        browser = await asyncio.to_thread(browser_path.read_text, encoding="utf-8") if browser_path.exists() else ""
         await self.run_store.append_event(run.run_id, "cancelled", {"reason": "Cancelled by user command."})
         await self.run_store.finish_run(
             run.run_id,
@@ -2054,6 +2058,7 @@ class LibreClawApp(App[None]):
             summary=summary,
             verification="Run cancelled by user command.\n",
             diff=diff,
+            browser=browser,
         )
         self._append_system(f"Run {run.run_id} marked cancelled.")
 
@@ -2535,6 +2540,7 @@ class LibreClawApp(App[None]):
                 SlashCommand("/artifacts summary", "/artifacts summary [id]", "Show run summary"),
                 SlashCommand("/artifacts verify", "/artifacts verify [id]", "Show verification notes"),
                 SlashCommand("/artifacts diff", "/artifacts diff [id]", "Show captured diff"),
+                SlashCommand("/artifacts browser", "/artifacts browser [id]", "Show browser screenshots/downloads"),
             ]
             return [
                 suggestion
@@ -2732,6 +2738,7 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         goal=config.goal,
         daemon=config.daemon,
         automations=config.automations,
+        browser=config.browser,
         mcp=config.mcp,
         providers=config.providers,
         source_paths=config.source_paths,
@@ -3048,7 +3055,8 @@ async def _collect_run_artifacts(
     working_directory: Path,
     state: str,
     events: list[RunEvent],
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
+    browser = browser_artifact_text(events)
     status_capture = await _run_git_command(
         working_directory,
         ("status", "--short"),
@@ -3063,7 +3071,7 @@ async def _collect_run_artifacts(
             git_error=status_capture.stderr.strip() or "git status failed",
             diff_truncated=False,
         )
-        return verification, ""
+        return verification, "", browser
 
     diff_capture = await _run_git_command(
         working_directory,
@@ -3090,7 +3098,7 @@ async def _collect_run_artifacts(
         git_error=diff_error,
         diff_truncated=diff_capture.stdout_truncated,
     )
-    return verification, diff
+    return verification, diff, browser
 
 
 def _run_verification_text(
@@ -3310,6 +3318,8 @@ def _parse_artifact_command(argument: str) -> tuple[ArtifactTab, str]:
         "verify": "verify",
         "verification": "verify",
         "diff": "diff",
+        "browser": "browser",
+        "screenshots": "browser",
     }
     if first in aliases:
         return aliases[first], " ".join(tokens[1:])
@@ -3322,6 +3332,7 @@ def _read_artifact_text(run: RunRecord, tab: ArtifactTab) -> str:
         "summary": "summary.md",
         "verify": "verification.md",
         "diff": "diff.patch",
+        "browser": "browser.md",
     }[tab]
     path = run.path / name
     try:

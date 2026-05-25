@@ -39,6 +39,10 @@ First shippable Libre Claw release from Kroonen AI Inc.
   reports, and route metadata for TUI, Telegram, or report workflows.
 - `/schedule examples` ships ready-made daily repo health check, weekly
   dependency review, and morning brief automation prompts.
+- Browser/computer-use upgrade with persistent Playwright profiles,
+  `browser_click`, `browser_type`, `browser_wait`, and `browser_download`,
+  selector-aware reads/screenshots, safe `[browser]` domain allow/deny rules,
+  saved downloads/screenshots, and `/artifacts browser` screenshot previews.
 - MCP stdio bridge with `[mcp]` config, explicit server/tool allowlisting,
   `mcp__server__tool` wrappers, `/tools list` visibility, and normal Libre Claw
   permission policies for external tools.
@@ -68,10 +72,12 @@ First shippable Libre Claw release from Kroonen AI Inc.
   TOML.
 - Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, `glob`,
   `search_files`, `git_status`, `git_commit`, `think`, `browser_navigate`,
-  `browser_read`, `browser_screenshot`, and `bash` tools, with bounded
+  `browser_read`, `browser_click`, `browser_type`, `browser_wait`,
+  `browser_download`, `browser_screenshot`, and `bash` tools, with bounded
   reads/listing/search, atomic writes/edits, occurrence targeting, diffs,
-  git inspection/commit support, browser scaffolding with graceful dependency
-  errors, scratchpad thinking, and bounded shell output.
+  git inspection/commit support, persistent browser profiles, browser artifact
+  capture with graceful dependency errors, scratchpad thinking, and bounded
+  shell output.
 - Interactive TUI permission panel with approve, deny, always allow tool, and
   always allow exact command options. Dangerous sandbox-blocked commands show a
   warning and require one-time approval or denial.

@@ -18,12 +18,13 @@ and run the Telegram daemon.
   Ollama endpoints.
 - Built-in tools: `read_file`, `write_file`, `edit_file`, `list_directory`,
   `glob`, `search_files`, `git_status`, `git_commit`, `think`,
-  `browser_navigate`, `browser_read`, `browser_screenshot`, and `bash`.
+  `browser_navigate`, `browser_read`, `browser_click`, `browser_type`,
+  `browser_wait`, `browser_download`, `browser_screenshot`, and `bash`.
 - `/goal` supervised mode that keeps the agent working for up to a bounded
   number of turns until a separate judge model marks the objective complete.
 - Durable local runs with IDs, append-only event logs, run artifacts, and
   `/runs`, `/run <id>`, `/resume <id>`, and `/cancel <id>` controls.
-- Human-review cockpit with run timeline replay, Plan/Summary/Verify/Diff
+- Human-review cockpit with run timeline replay, Plan/Summary/Verify/Diff/Browser
   artifact panel, blocked approval inbox, and “what changed since I left”
   summaries.
 - Background daemon API for daemon-owned runs, event polling, cancel, and
@@ -32,6 +33,8 @@ and run the Telegram daemon.
   instead of owning execution itself.
 - Recurring local automations with `/schedule`, cron-like schedules, daemon
   execution, saved reports, and TUI/Telegram route metadata.
+- Browser/computer-use tools with persistent profiles, CSS selector actions,
+  downloads, screenshots, browser artifacts, and domain allow/deny policy.
 - MCP stdio integration for explicitly configured and allowlisted external
   tools, surfaced through the normal tool registry and permission system.
 - User and project skills loaded from `~/.libre-claw/skills/` and
@@ -294,7 +297,7 @@ Legacy configs that still say `default_provider = "local"` or
 - `/runs [N]`
 - `/run <id>`
 - `/resume <id>`
-- `/artifacts [plan|summary|verify|diff] [id]`
+- `/artifacts [plan|summary|verify|diff|browser] [id]`
 - `/approvals`
 - `/changes [id]`
 - `/tools list|expand|collapse|toggle <index>`
@@ -365,8 +368,9 @@ session total.
 
 ## Tool Permissions
 
-Read/list/search/status/think tools run without prompting. File writes, file
-edits, git commits, browser navigation, and shell commands ask first.
+Read/list/search/status/think/browser-read/browser-wait/screenshot tools run
+without prompting. File writes, file edits, git commits, browser navigation,
+browser click/type/download actions, and shell commands ask first.
 
 Permission prompts render as an interactive panel with:
 
@@ -407,7 +411,7 @@ status so the user can decide how to handle them.
 P1 review controls:
 
 - `/artifacts summary <id>` opens the artifact panel. Switch tabs with the
-  Plan, Summary, Verify, and Diff buttons.
+  Plan, Summary, Verify, Diff, and Browser buttons.
 - `/approvals` lists currently blocked run approvals from the durable run log
   plus the active local prompt, if any.
 - `/changes <id>` shows new run events since your last review and records the
@@ -512,6 +516,60 @@ The bundled examples cover:
 - Daily repo health check.
 - Weekly dependency review.
 - Morning brief.
+
+## Browser / Computer Use
+
+P6 upgrades browser tools from a single transient page into persistent
+Playwright profiles. Install the optional extra first:
+
+```bash
+python -m pip install -e ".[browser]"
+python -m playwright install chromium
+```
+
+Available browser tools:
+
+- `browser_navigate`: open an HTTP(S) URL in a named persistent profile.
+- `browser_read`: read visible text from `body` or a CSS selector.
+- `browser_click`: click a CSS selector.
+- `browser_type`: type/fill text into a CSS selector, optionally pressing Enter.
+- `browser_wait`: wait for a selector state or page load state.
+- `browser_download`: click a selector that starts a download and save it.
+- `browser_screenshot`: capture the full page or a CSS selector.
+
+Browser state is kept per tool registry/run profile. The default profile is
+`default`, and login/session storage lives under:
+
+```text
+~/.libre-claw/browser/profiles/<profile>/
+```
+
+Screenshots and downloads are saved inside the working directory by default:
+
+```text
+.libre-claw/browser/screenshots/
+.libre-claw/browser/downloads/
+```
+
+When a run finishes, browser screenshots and downloads are summarized in
+`browser.md`. Use `/artifacts browser <run-id>` to inspect those paths and
+Markdown screenshot previews.
+
+Safe domain policy is configured in TOML:
+
+```toml
+[browser]
+allowed_domains = []      # empty means allow any HTTP(S) host not denied
+denied_domains = []
+profile_dir = "~/.libre-claw/browser/profiles"
+downloads_dir = ".libre-claw/browser/downloads"
+screenshots_dir = ".libre-claw/browser/screenshots"
+default_timeout_ms = 30000
+headless = true
+```
+
+Domain entries match the exact host and subdomains. Use `*.example.com` for a
+wildcard-style suffix rule.
 
 ## MCP Tools
 

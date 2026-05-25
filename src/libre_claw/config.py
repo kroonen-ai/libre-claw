@@ -114,6 +114,17 @@ class AutomationsConfig:
 
 
 @dataclass(frozen=True)
+class BrowserConfig:
+    allowed_domains: tuple[str, ...]
+    denied_domains: tuple[str, ...]
+    profile_dir: Path
+    downloads_dir: Path
+    screenshots_dir: Path
+    default_timeout_ms: int
+    headless: bool
+
+
+@dataclass(frozen=True)
 class MCPConfig:
     enabled: bool
     allowlist: tuple[str, ...]
@@ -134,6 +145,7 @@ class LibreClawConfig:
     goal: GoalConfig
     daemon: DaemonConfig
     automations: AutomationsConfig
+    browser: BrowserConfig
     mcp: MCPConfig
     providers: Mapping[str, Mapping[str, Any]]
     source_paths: tuple[Path, ...] = field(default_factory=tuple)
@@ -270,6 +282,7 @@ def _load_default_config() -> ConfigTable:
                 "(https://kroonen.ai) running in the user's terminal.\n"
                 "You have access to tools for reading files, writing files, editing files, "
                 "listing directories, searching code, inspecting git, browsing web pages, "
+                "clicking and typing in browser pages, downloading browser files, "
                 "thinking through plans, and running shell commands.\n\n"
                 "RULES:\n"
                 "- Always read before editing. Understand the codebase before making changes.\n"
@@ -281,7 +294,8 @@ def _load_default_config() -> ConfigTable:
                 "- When you're done, summarize what you changed and why.\n\n"
                 "Current toolset: read_file, write_file, edit_file, list_directory, "
                 "glob, search_files, git_status, git_commit, think, browser_navigate, "
-                "browser_read, browser_screenshot, and bash."
+                "browser_read, browser_click, browser_type, browser_wait, browser_download, "
+                "browser_screenshot, and bash."
             ),
             "system_prompt_extra": "",
         },
@@ -384,6 +398,15 @@ def _load_default_config() -> ConfigTable:
             "root": "~/.libre-claw/automations",
             "poll_interval": 30.0,
             "max_due_per_tick": 5,
+        },
+        "browser": {
+            "allowed_domains": [],
+            "denied_domains": [],
+            "profile_dir": "~/.libre-claw/browser/profiles",
+            "downloads_dir": ".libre-claw/browser/downloads",
+            "screenshots_dir": ".libre-claw/browser/screenshots",
+            "default_timeout_ms": 30000,
+            "headless": True,
         },
         "mcp": {
             "enabled": False,
@@ -529,6 +552,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
     goal = _section(data, "goal")
     daemon = _section(data, "daemon")
     automations = _section(data, "automations")
+    browser = _section(data, "browser")
     mcp = _section(data, "mcp")
 
     return LibreClawConfig(
@@ -598,6 +622,15 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             root=_path(automations, "root"),
             poll_interval=_float(automations, "poll_interval"),
             max_due_per_tick=_int(automations, "max_due_per_tick"),
+        ),
+        browser=BrowserConfig(
+            allowed_domains=tuple(_list(browser, "allowed_domains", str)),
+            denied_domains=tuple(_list(browser, "denied_domains", str)),
+            profile_dir=_path(browser, "profile_dir"),
+            downloads_dir=_path(browser, "downloads_dir"),
+            screenshots_dir=_path(browser, "screenshots_dir"),
+            default_timeout_ms=_int(browser, "default_timeout_ms"),
+            headless=_bool(browser, "headless"),
         ),
         mcp=MCPConfig(
             enabled=_bool(mcp, "enabled"),

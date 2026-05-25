@@ -27,6 +27,14 @@ class ToolContext:
     allow_sudo: bool = False
     blocked_patterns: tuple[str, ...] = ()
     memory_store: "MemoryStore | None" = None
+    browser_allowed_domains: tuple[str, ...] = ()
+    browser_denied_domains: tuple[str, ...] = ()
+    browser_profile_dir: Path = Path("~/.libre-claw/browser/profiles")
+    browser_downloads_dir: Path = Path(".libre-claw/browser/downloads")
+    browser_screenshots_dir: Path = Path(".libre-claw/browser/screenshots")
+    browser_default_timeout_ms: int = 30000
+    browser_headless: bool = True
+    shared_state: dict[str, Any] = field(default_factory=dict)
 
     def sandbox_policy(self) -> SandboxPolicy:
         return SandboxPolicy(

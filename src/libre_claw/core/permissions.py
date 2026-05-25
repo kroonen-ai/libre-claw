@@ -35,6 +35,7 @@ class PermissionManager:
             "git_status",
             "think",
             "browser_read",
+            "browser_wait",
             "browser_screenshot",
         }:
             return "allow"

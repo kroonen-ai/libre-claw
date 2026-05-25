@@ -82,9 +82,10 @@ class RunStore:
         summary: str = "",
         verification: str = "",
         diff: str = "",
+        browser: str = "",
     ) -> RunRecord:
         async with self._lock:
-            return await asyncio.to_thread(self._finish_run_sync, run_id, state, plan, summary, verification, diff)
+            return await asyncio.to_thread(self._finish_run_sync, run_id, state, plan, summary, verification, diff, browser)
 
     async def list_runs(self, limit: int = 20) -> list[RunRecord]:
         return await asyncio.to_thread(self._list_runs_sync, limit)
@@ -127,6 +128,7 @@ class RunStore:
         _write_text(path / "summary.md", "")
         _write_text(path / "verification.md", "")
         _write_text(path / "diff.patch", "")
+        _write_text(path / "browser.md", "")
         return record
 
     def _append_event_sync(self, run_id: str, event_type: str, data: dict[str, Any]) -> RunEvent:
@@ -164,12 +166,14 @@ class RunStore:
         summary: str,
         verification: str,
         diff: str,
+        browser: str,
     ) -> RunRecord:
         record = self._update_state_sync(run_id, state)
         _write_text(record.path / "plan.md", plan)
         _write_text(record.path / "summary.md", summary)
         _write_text(record.path / "verification.md", verification or f"Run finished with state: {state}\n")
         _write_text(record.path / "diff.patch", diff)
+        _write_text(record.path / "browser.md", browser)
         return record
 
     def _list_runs_sync(self, limit: int) -> list[RunRecord]:

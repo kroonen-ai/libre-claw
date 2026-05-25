@@ -27,6 +27,13 @@ def create_builtin_registry(config: LibreClawConfig, memory_store: MemoryStore |
         allow_sudo=config.sandbox.allow_sudo,
         blocked_patterns=config.sandbox.blocked_patterns,
         memory_store=memory_store,
+        browser_allowed_domains=config.browser.allowed_domains,
+        browser_denied_domains=config.browser.denied_domains,
+        browser_profile_dir=config.browser.profile_dir,
+        browser_downloads_dir=config.browser.downloads_dir,
+        browser_screenshots_dir=config.browser.screenshots_dir,
+        browser_default_timeout_ms=config.browser.default_timeout_ms,
+        browser_headless=config.browser.headless,
     )
     tools = [tool_type(context) for tool_type in registered_tool_types()]
     tools.extend(_mcp.mcp_tools(config, context))

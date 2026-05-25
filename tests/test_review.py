@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from libre_claw.core.review import pending_approvals, run_changes_text, run_plan_text
+from libre_claw.core.review import browser_artifact_text, pending_approvals, run_changes_text, run_plan_text
 from libre_claw.core.runs import RunEvent, RunRecord
 
 
@@ -46,3 +46,26 @@ def test_run_changes_text_summarizes_new_events(tmp_path: Path) -> None:
 
     assert "New events: 1" in text
     assert "tool result: bash ok" in text
+
+
+def test_browser_artifact_text_includes_screenshot_preview() -> None:
+    event = RunEvent(
+        1,
+        "t1",
+        "tool_result",
+        {
+            "name": "browser_screenshot",
+            "metadata": {
+                "artifact_type": "browser_screenshot",
+                "profile": "default",
+                "url": "https://kroonen.ai",
+                "path": "/tmp/screen.png",
+                "size_bytes": 10,
+            },
+        },
+    )
+
+    text = browser_artifact_text([event])
+
+    assert "browser_screenshot" in text
+    assert "![browser screenshot](/tmp/screen.png)" in text

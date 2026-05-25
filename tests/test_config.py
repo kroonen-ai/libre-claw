@@ -44,12 +44,19 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.automations.root == tmp_path / ".libre-claw" / "automations"
     assert config.automations.poll_interval == 30.0
     assert config.automations.max_due_per_tick == 5
+    assert config.browser.allowed_domains == ()
+    assert config.browser.denied_domains == ()
+    assert config.browser.profile_dir == tmp_path / ".libre-claw" / "browser" / "profiles"
+    assert config.browser.downloads_dir == tmp_path / ".libre-claw" / "browser" / "downloads"
+    assert config.browser.screenshots_dir == tmp_path / ".libre-claw" / "browser" / "screenshots"
+    assert config.browser.default_timeout_ms == 30000
+    assert config.browser.headless is True
     assert config.mcp.enabled is False
     assert config.mcp.allowlist == ()
     assert config.mcp.permission_level == "ask"
     assert "Kroonen AI Inc. (https://kroonen.ai)" in config.agent.system_prompt
     assert "search_files" in config.agent.system_prompt
-    assert "browser_screenshot" in config.agent.system_prompt
+    assert "browser_download" in config.agent.system_prompt
     assert config.agent.system_prompt_extra == ""
     assert "curl | bash" in config.sandbox.blocked_patterns
     assert config.providers["openrouter"]["api_key_env"] == "OPENROUTER_API_KEY"

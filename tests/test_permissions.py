@@ -67,6 +67,7 @@ def test_read_tools_auto_allowed_by_config() -> None:
         "git_status",
         "think",
         "browser_read",
+        "browser_wait",
         "browser_screenshot",
     ):
         assert manager.check(ToolCall(id=name, name=name), AskTool(context)) == "allow"

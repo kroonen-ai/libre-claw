@@ -9,7 +9,7 @@ from typing import Any
 from libre_claw.core.runs import RunEvent, RunRecord
 
 
-RUN_ARTIFACT_NAMES = ("events.jsonl", "plan.md", "summary.md", "verification.md", "diff.patch")
+RUN_ARTIFACT_NAMES = ("events.jsonl", "plan.md", "summary.md", "verification.md", "diff.patch", "browser.md")
 
 
 @dataclass(frozen=True)
@@ -81,6 +81,51 @@ def run_changes_text(run: RunRecord, events: list[RunEvent], after_event_id: int
     if omitted > 0:
         lines.append(f"- ... {omitted} earlier new event(s) omitted.")
     return "\n".join(lines)
+
+
+def browser_artifact_text(events: list[RunEvent]) -> str:
+    browser_results = [
+        event
+        for event in events
+        if event.type == "tool_result"
+        and isinstance(event.data.get("metadata"), dict)
+        and str(event.data["metadata"].get("artifact_type", "")).startswith("browser_")
+    ]
+    if not browser_results:
+        return "No browser artifacts were recorded for this run.\n"
+
+    lines = ["# Browser Artifacts", ""]
+    for event in browser_results:
+        metadata = event.data["metadata"]
+        artifact_type = str(metadata.get("artifact_type", "browser"))
+        url = str(metadata.get("url", ""))
+        profile = str(metadata.get("profile", "default"))
+        selector = str(metadata.get("selector", ""))
+        lines.extend(
+            [
+                f"## {artifact_type} #{event.event_id}",
+                "",
+                f"- Tool: `{event.data.get('name', 'browser')}`",
+                f"- Profile: `{profile}`",
+            ]
+        )
+        if url:
+            lines.append(f"- URL: {url}")
+        if selector:
+            lines.append(f"- Selector: `{selector}`")
+        path = metadata.get("path")
+        if isinstance(path, str) and path:
+            lines.append(f"- Path: `{path}`")
+            if artifact_type == "browser_screenshot":
+                lines.extend(["", f"![browser screenshot]({path})"])
+        suggested = metadata.get("suggested_filename")
+        if isinstance(suggested, str) and suggested:
+            lines.append(f"- Suggested filename: `{suggested}`")
+        size_bytes = metadata.get("size_bytes")
+        if isinstance(size_bytes, int):
+            lines.append(f"- Size: {size_bytes} bytes")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _first_request(events: list[RunEvent]) -> str:
