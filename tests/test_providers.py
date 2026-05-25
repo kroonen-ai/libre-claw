@@ -13,7 +13,10 @@ from libre_claw.providers import ProviderConfigurationError, create_provider
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.codex import CodexProvider
-from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
+from libre_claw.providers.ollama_catalog import (
+    OLLAMA_CLOUD_MODEL_PRESETS,
+    OLLAMA_MODEL_PRESETS,
+)
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider
 from libre_claw.providers.openrouter import OpenRouterProvider
@@ -32,13 +35,51 @@ class FakeApiKeyStore:
 
 def test_ollama_cloud_presets_include_current_library_names() -> None:
     preset_names = {preset.model for preset in OLLAMA_MODEL_PRESETS}
+    cloud_names = {preset.model for preset in OLLAMA_CLOUD_MODEL_PRESETS}
+    expected_cloud_names = {
+        "kimi-k2.6:cloud",
+        "qwen3.5:cloud",
+        "qwen3.5:397b-cloud",
+        "gemma4:31b-cloud",
+        "glm-5.1:cloud",
+        "minimax-m2.7:cloud",
+        "nemotron-3-super:cloud",
+        "glm-5:cloud",
+        "minimax-m2.5:cloud",
+        "glm-4.7:cloud",
+        "gemini-3-flash-preview:cloud",
+        "minimax-m2.1:cloud",
+        "qwen3-coder-next:cloud",
+        "deepseek-v3.2:cloud",
+        "ministral-3:cloud",
+        "devstral-small-2:cloud",
+        "deepseek-v4-flash:cloud",
+        "deepseek-v4-pro:cloud",
+        "qwen3-next:cloud",
+        "nemotron-3-nano:cloud",
+        "rnj-1:cloud",
+        "kimi-k2.5:cloud",
+        "devstral-2:cloud",
+        "mistral-large-3:cloud",
+        "gpt-oss:120b",
+        "gpt-oss:20b",
+        "gpt-oss:120b-cloud",
+        "gpt-oss:20b-cloud",
+        "qwen3-vl:cloud",
+        "qwen3-coder:cloud",
+        "kimi-k2-thinking:cloud",
+        "minimax-m2:cloud",
+        "glm-4.6:cloud",
+        "deepseek-v3.1:cloud",
+        "cogito-2.1:cloud",
+        "kimi-k2:cloud",
+        "gemma3:27b-cloud",
+    }
 
-    assert "kimi-k2.6:cloud" in preset_names
-    assert "deepseek-v4-flash:cloud" in preset_names
-    assert "deepseek-v4-pro:cloud" in preset_names
-    assert "glm-5.1:cloud" in preset_names
-    assert "minimax-m2.7:cloud" in preset_names
-    assert "gpt-oss:120b" in preset_names
+    assert expected_cloud_names <= preset_names
+    assert expected_cloud_names <= cloud_names
+    assert "qwen3.6:27b" not in cloud_names
+    assert len(preset_names) == len(OLLAMA_MODEL_PRESETS)
 
 
 def test_codex_oauth_presets_include_current_cli_model_names() -> None:

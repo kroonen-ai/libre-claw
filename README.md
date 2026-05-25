@@ -208,20 +208,25 @@ api_format = "ollama"
 api_key_env = "OLLAMA_API_KEY"
 ```
 
-Useful current Ollama Cloud names from the official model library:
+Useful current Ollama Cloud names from the official model library are available
+as `/model` presets in the TUI and Telegram:
 
 | Model | Use |
 | --- | --- |
-| `kimi-k2.6:cloud` | Kimi K2.6, 256K context, vision/tool/thinking model |
-| `deepseek-v4-flash:cloud` | DeepSeek V4 Flash, 1M context |
-| `deepseek-v4-pro:cloud` | DeepSeek V4 Pro, 1M context |
-| `glm-5.1:cloud` | GLM 5.1 coding/agentic model |
-| `minimax-m2.7:cloud` | MiniMax M2.7 coding/productivity model |
-| `qwen3.5:cloud` | Qwen3.5 Cloud |
-| `gemma4:31b-cloud` | Gemma 4 31B Cloud |
-| `nemotron-3-super:cloud` | NVIDIA Nemotron 3 Super Cloud |
-| `gpt-oss:120b` | Direct Ollama Cloud API example from Ollama docs |
-| `gpt-oss:20b` | Smaller GPT OSS API model |
+| `kimi-k2.6:cloud` | Moonshot Kimi K2.6 multimodal agentic model |
+| `qwen3.5:cloud`, `qwen3.5:397b-cloud` | Qwen 3.5 cloud aliases |
+| `gemma4:31b-cloud` | Gemma 4 31B cloud model |
+| `glm-5.1:cloud`, `glm-5:cloud`, `glm-4.7:cloud`, `glm-4.6:cloud` | GLM agentic/coding cloud models |
+| `minimax-m2.7:cloud`, `minimax-m2.5:cloud`, `minimax-m2.1:cloud`, `minimax-m2:cloud` | MiniMax M2 family |
+| `deepseek-v4-flash:cloud`, `deepseek-v4-pro:cloud`, `deepseek-v3.2:cloud`, `deepseek-v3.1:cloud` | DeepSeek cloud models |
+| `qwen3-coder-next:cloud`, `qwen3-coder:cloud`, `qwen3-next:cloud`, `qwen3-vl:cloud` | Qwen coding, next, and vision-language aliases |
+| `nemotron-3-super:cloud`, `nemotron-3-nano:cloud` | NVIDIA Nemotron 3 cloud models |
+| `kimi-k2.5:cloud`, `kimi-k2-thinking:cloud`, `kimi-k2:cloud` | Kimi K2 family |
+| `ministral-3:cloud`, `devstral-small-2:cloud`, `devstral-2:cloud`, `mistral-large-3:cloud` | Mistral coding and general cloud models |
+| `gemini-3-flash-preview:cloud` | Gemini 3 Flash preview through Ollama Cloud |
+| `rnj-1:cloud`, `cogito-2.1:cloud`, `gemma3:27b-cloud` | Additional cloud-capable aliases |
+| `gpt-oss:120b`, `gpt-oss:20b` | Direct Ollama Cloud API examples from Ollama docs |
+| `gpt-oss:120b-cloud`, `gpt-oss:20b-cloud` | Local daemon cloud aliases for GPT OSS |
 
 To get the authoritative list for your account:
 
