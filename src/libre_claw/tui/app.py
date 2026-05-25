@@ -2120,6 +2120,7 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         tui=config.tui,
         telegram=config.telegram,
         goal=config.goal,
+        daemon=config.daemon,
         providers=config.providers,
         source_paths=config.source_paths,
     )

@@ -20,6 +20,7 @@ from libre_claw.config import (
     packaged_default_config_text,
     user_config_path,
 )
+from libre_claw.daemon import DaemonServer
 from libre_claw.telegram.bot import TelegramBot
 from libre_claw.tui.app import LibreClawApp
 
@@ -83,6 +84,21 @@ def telegram_command(ctx: click.Context) -> None:
 
     try:
         asyncio.run(bot.run())
+    except RuntimeError as exc:
+        _raise_click_error(str(exc))
+
+
+@main.command("daemon")
+@click.option("--host", help="Host interface for the local daemon API.")
+@click.option("--port", type=int, help="Port for the local daemon API.")
+@click.pass_context
+def daemon_command(ctx: click.Context, host: str | None, port: int | None) -> None:
+    """Run the local background runner daemon."""
+    config = _load_context_config(ctx)
+    server = DaemonServer(config)
+    click.echo(f"Libre Claw daemon listening on http://{host or config.daemon.host}:{port or config.daemon.port}")
+    try:
+        asyncio.run(server.run(host=host, port=port))
     except RuntimeError as exc:
         _raise_click_error(str(exc))
 

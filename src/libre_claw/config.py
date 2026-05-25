@@ -97,6 +97,13 @@ class GoalConfig:
 
 
 @dataclass(frozen=True)
+class DaemonConfig:
+    host: str
+    port: int
+    poll_interval: float
+
+
+@dataclass(frozen=True)
 class LibreClawConfig:
     general: GeneralConfig
     agent: AgentConfig
@@ -106,6 +113,7 @@ class LibreClawConfig:
     tui: TUIConfig
     telegram: TelegramConfig
     goal: GoalConfig
+    daemon: DaemonConfig
     providers: Mapping[str, Mapping[str, Any]]
     source_paths: tuple[Path, ...] = field(default_factory=tuple)
 
@@ -343,6 +351,11 @@ def _load_default_config() -> ConfigTable:
             "judge_temperature": 0.0,
             "judge_max_tokens": 1024,
         },
+        "daemon": {
+            "host": "127.0.0.1",
+            "port": 8766,
+            "poll_interval": 0.5,
+        },
     }
 
 
@@ -478,6 +491,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
     tui = _section(data, "tui")
     telegram = _section(data, "telegram")
     goal = _section(data, "goal")
+    daemon = _section(data, "daemon")
 
     return LibreClawConfig(
         general=GeneralConfig(
@@ -533,6 +547,11 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             judge_model=_str(goal, "judge_model"),
             judge_temperature=_float(goal, "judge_temperature"),
             judge_max_tokens=_int(goal, "judge_max_tokens"),
+        ),
+        daemon=DaemonConfig(
+            host=_str(daemon, "host"),
+            port=_int(daemon, "port"),
+            poll_interval=_float(daemon, "poll_interval"),
         ),
         providers=_providers(data),
         source_paths=source_paths,

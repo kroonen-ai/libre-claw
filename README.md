@@ -23,6 +23,8 @@ and run the Telegram daemon.
   number of turns until a separate judge model marks the objective complete.
 - Durable local runs with IDs, append-only event logs, run artifacts, and
   `/runs`, `/run <id>`, `/resume <id>`, and `/cancel <id>` controls.
+- Background daemon API for daemon-owned runs, event polling, cancel, and
+  permission approval.
 - Interactive permission prompts for write/edit/shell actions.
 - File explorer, hidden on startup, whose root can move up and down with the user.
 - SQLite-backed memory, saved sessions, and context compaction.
@@ -384,6 +386,36 @@ counts, `/resume <id>` to reload a run transcript into the TUI, and
 `/cancel <id>` to mark a run cancelled. The diff artifact intentionally does
 not embed untracked files; they are listed in `verification.md` through git
 status so the user can decide how to handle them.
+
+## Background Daemon
+
+P2 adds the local runner daemon:
+
+```bash
+libre-claw daemon
+```
+
+By default it listens on:
+
+```text
+http://127.0.0.1:8766
+```
+
+Useful API endpoints:
+
+- `GET /health`
+- `GET /runs?limit=20`
+- `POST /runs` with `{"message": "..."}`
+- `GET /runs/<run-id>`
+- `GET /runs/<run-id>/events?after=<event-id>`
+- `POST /runs/<run-id>/cancel`
+- `POST /runs/<run-id>/permissions/<tool-call-id>` with
+  `{"resolution": "allow_once"}`
+
+The daemon owns active run tasks, writes to the same durable run store, and can
+block a run on tool approval without losing its event history. This is the
+backend connection point for TUI and Telegram surfaces to share the same active
+run process.
 
 ## File Explorer
 

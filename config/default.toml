@@ -113,3 +113,8 @@ judge_provider = "current" # current | anthropic | openai | openrouter | ollama 
 judge_model = "" # empty means use the selected judge provider default/current model
 judge_temperature = 0.0
 judge_max_tokens = 1024
+
+[daemon]
+host = "127.0.0.1"
+port = 8766
+poll_interval = 0.5

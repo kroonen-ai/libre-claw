@@ -52,9 +52,18 @@ class RunStore:
         provider: str,
         model: str,
         working_directory: str | Path | None = None,
+        state: RunState = "running",
     ) -> RunRecord:
         async with self._lock:
-            return await asyncio.to_thread(self._create_run_sync, title, kind, provider, model, working_directory)
+            return await asyncio.to_thread(
+                self._create_run_sync,
+                title,
+                kind,
+                provider,
+                model,
+                working_directory,
+                state,
+            )
 
     async def append_event(self, run_id: str, event_type: str, data: dict[str, Any] | None = None) -> RunEvent:
         async with self._lock:
@@ -92,6 +101,7 @@ class RunStore:
         provider: str,
         model: str,
         working_directory: str | Path | None,
+        state: RunState,
     ) -> RunRecord:
         self.root.mkdir(parents=True, exist_ok=True)
         now = _now()
@@ -100,7 +110,7 @@ class RunStore:
         path.mkdir(parents=True, exist_ok=False)
         record = RunRecord(
             run_id=run_id,
-            state="running",
+            state=state,
             title=_clean_title(title),
             kind=kind,
             provider=provider,
@@ -227,11 +237,14 @@ def _clean_title(title: str) -> str:
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    _write_text(path, json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
 
 
 def _write_text(path: Path, text: str) -> None:
-    path.write_text(text, encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    tmp_path.write_text(text, encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def _record_to_json(record: RunRecord) -> dict[str, Any]:
