@@ -11,7 +11,7 @@ from typing import Any
 
 import structlog
 
-from libre_claw.auth.codex import codex_status, run_codex_command
+from libre_claw.auth.codex import CodexCommandResult, CodexCommandEvent, codex_status, stream_codex_command
 from libre_claw.core.session import ChatMessage
 from libre_claw.providers.base import Done, LLMProvider, ProviderError, StreamEvent, TextDelta, ToolSchema
 
@@ -72,22 +72,35 @@ class CodexProvider(LLMProvider):
             "-",
         ]
         try:
-            result = await run_codex_command(args, input_text=prompt, timeout=self.timeout)
+            emitted = False
+            result: CodexCommandResult | None = None
+            async with asyncio.timeout(self.timeout):
+                async for event in stream_codex_command(args, input_text=prompt):
+                    if isinstance(event, CodexCommandResult):
+                        result = event
+                        continue
+                    if event.stream == "stderr":
+                        continue
+                    for text in _extract_codex_text(event.text):
+                        emitted = True
+                        yield TextDelta(text)
         except asyncio.CancelledError:
             raise
+        except TimeoutError:
+            yield ProviderError(f"Codex provider timed out after {self.timeout} seconds.")
+            return
         except Exception as exc:
             self._logger.warning("codex_provider_failed", error=str(exc))
             yield ProviderError(f"Codex provider request failed: {exc}")
             return
 
+        if result is None:
+            yield ProviderError("Codex provider ended without an exit status.")
+            return
+
         if result.exit_code != 0:
             yield ProviderError(f"Codex provider exited with {result.exit_code}:\n{result.output}")
             return
-
-        emitted = False
-        for text in _extract_codex_text(result.stdout):
-            emitted = True
-            yield TextDelta(text)
 
         if not emitted and result.stdout.strip():
             yield TextDelta(result.stdout.strip())
