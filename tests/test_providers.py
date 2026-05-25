@@ -20,6 +20,7 @@ from libre_claw.providers.ollama_catalog import (
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider
 from libre_claw.providers.openrouter import OpenRouterProvider
+from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
 
 
 class FakeApiKeyStore:
@@ -101,6 +102,33 @@ def test_anthropic_presets_include_current_api_model_names() -> None:
     assert "claude-sonnet-4-6" in preset_names
     assert "claude-haiku-4-5-20251001" in preset_names
     assert "anthropic/claude-opus-4.7" not in preset_names
+
+
+def test_openrouter_presets_include_recommended_models() -> None:
+    preset_names = {preset.model for preset in OPENROUTER_MODEL_PRESETS}
+    expected_models = {
+        "deepseek/deepseek-v4-flash",
+        "tencent/hy3-preview",
+        "qwen/qwen3.7-max",
+        "deepseek/deepseek-v4-pro",
+        "moonshotai/kimi-k2.6",
+        "minimax/minimax-m2.7",
+        "z-ai/glm-5.1",
+        "xiaomi/mimo-v2.5-pro",
+        "qwen/qwen3.6-plus",
+        "anthropic/claude-opus-4.7",
+        "anthropic/claude-sonnet-4.6",
+        "openrouter/owl-alpha",
+        "google/gemini-3.5-flash",
+        "openai/gpt-5.5",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "stepfun/step-3.5-flash",
+        "openai/gpt-4o-mini",
+        "openrouter/auto",
+    }
+
+    assert expected_models <= preset_names
+    assert len(preset_names) == len(OPENROUTER_MODEL_PRESETS)
 
 
 def test_create_provider_requires_anthropic_api_key(monkeypatch, tmp_path: Path) -> None:

@@ -14,17 +14,10 @@ from libre_claw.providers.openrouter import (
     OPENROUTER_CATEGORIES,
     OPENROUTER_HTTP_REFERER,
 )
+from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
 
 
 OPENROUTER_ANALYTICS_URL = f"https://openrouter.ai/apps?url={OPENROUTER_HTTP_REFERER}"
-
-OPENROUTER_MODEL_PRESETS: tuple[tuple[str, str], ...] = (
-    ("qwen/qwen3.7-max", "Primary high-capacity coding preset."),
-    ("openrouter/auto", "Let OpenRouter route across available providers."),
-    ("moonshotai/kimi-k2", "Long-context coding and repo analysis preset."),
-    ("anthropic/claude-sonnet-4.6", "Claude coding preset through OpenRouter."),
-    ("openai/gpt-5.5", "OpenAI flagship preset through OpenRouter."),
-)
 
 
 @dataclass(frozen=True)
@@ -179,8 +172,8 @@ def openrouter_attribution_text() -> str:
 
 def openrouter_model_presets_text() -> str:
     lines = ["Recommended OpenRouter presets:"]
-    for model, description in OPENROUTER_MODEL_PRESETS:
-        lines.append(f"- /model openrouter:{model} --global  # {description}")
+    for preset in OPENROUTER_MODEL_PRESETS:
+        lines.append(f"- /model openrouter:{preset.model} --global  # {preset.description}")
     lines.extend(
         [
             "",

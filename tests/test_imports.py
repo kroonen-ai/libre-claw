@@ -34,6 +34,7 @@ def test_phase_one_modules_import() -> None:
         "libre_claw.providers.ollama",
         "libre_claw.providers.openai",
         "libre_claw.providers.openrouter",
+        "libre_claw.providers.openrouter_catalog",
         "libre_claw.release",
         "libre_claw.telegram.auth",
         "libre_claw.telegram.bot",

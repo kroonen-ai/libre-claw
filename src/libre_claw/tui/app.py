@@ -80,6 +80,7 @@ from libre_claw.providers import LLMProvider, ProviderConfigurationError, Usage,
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
+from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
 from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
 
@@ -221,12 +222,7 @@ MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
         *((preset.model, f"{preset.label} through Codex CLI auth") for preset in CODEX_MODEL_PRESETS),
     ),
     "openrouter": (
-        ("qwen/qwen3.7-max", "Qwen3.7 Max through OpenRouter"),
-        ("openrouter/auto", "OpenRouter automatic routing"),
-        ("anthropic/claude-sonnet-4.6", "Claude through OpenRouter"),
-        ("openai/gpt-5.5", "GPT-5.5 through OpenRouter"),
-        ("openai/gpt-4o", "GPT-4o through OpenRouter"),
-        ("moonshotai/kimi-k2", "Kimi K2 through OpenRouter"),
+        *((preset.model, f"{preset.label} through OpenRouter") for preset in OPENROUTER_MODEL_PRESETS),
     ),
     "ollama": (
         *((preset.model, preset.label) for preset in OLLAMA_MODEL_PRESETS),

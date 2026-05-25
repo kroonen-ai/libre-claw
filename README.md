@@ -366,6 +366,7 @@ Use `/model` from inside the TUI:
 /model ollama:gpt-oss:120b
 /model codex:gpt-5.4-mini
 /model codex:gpt-5.3-codex
+/model openrouter:deepseek/deepseek-v4-flash --global
 /model openrouter:qwen/qwen3.7-max --global
 /model openrouter:openrouter/auto
 ```
@@ -490,6 +491,30 @@ OpenRouter-specific helpers:
 - `/usage openrouter presets` prints recommended `/model openrouter:...`
   commands for higher-value coding, goal, and scheduled-check workflows.
 - Analytics link: https://openrouter.ai/apps?url=https://kroonen.ai
+
+Recommended OpenRouter presets in the TUI, Telegram model picker, and
+`/usage openrouter presets`:
+
+| Model |
+| --- |
+| `deepseek/deepseek-v4-flash` |
+| `tencent/hy3-preview` |
+| `qwen/qwen3.7-max` |
+| `deepseek/deepseek-v4-pro` |
+| `moonshotai/kimi-k2.6` |
+| `minimax/minimax-m2.7` |
+| `z-ai/glm-5.1` |
+| `xiaomi/mimo-v2.5-pro` |
+| `qwen/qwen3.6-plus` |
+| `anthropic/claude-opus-4.7` |
+| `anthropic/claude-sonnet-4.6` |
+| `openrouter/owl-alpha` |
+| `google/gemini-3.5-flash` |
+| `openai/gpt-5.5` |
+| `nvidia/nemotron-3-super-120b-a12b:free` |
+| `stepfun/step-3.5-flash` |
+| `openai/gpt-4o-mini` |
+| `openrouter/auto` |
 
 ## First-Run Setup
 

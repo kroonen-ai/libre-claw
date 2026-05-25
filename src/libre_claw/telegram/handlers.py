@@ -12,6 +12,7 @@ from typing import Any
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
+from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
 from libre_claw.telegram.auth import TelegramAuth
 from libre_claw.telegram.bridge import (
     TelegramBridge,
@@ -45,12 +46,7 @@ TELEGRAM_PROVIDER_LABELS: dict[str, str] = {
 TELEGRAM_MODEL_PRESETS: dict[str, tuple[TelegramModelPreset, ...]] = {
     "ollama": tuple(TelegramModelPreset("ollama", preset.model, preset.label) for preset in OLLAMA_MODEL_PRESETS),
     "openrouter": (
-        TelegramModelPreset("openrouter", "qwen/qwen3.7-max", "Qwen3.7 Max"),
-        TelegramModelPreset("openrouter", "openrouter/auto", "Auto Router"),
-        TelegramModelPreset("openrouter", "anthropic/claude-sonnet-4.6", "Claude Sonnet 4.6"),
-        TelegramModelPreset("openrouter", "openai/gpt-5.5", "GPT-5.5"),
-        TelegramModelPreset("openrouter", "openai/gpt-4o", "GPT-4o"),
-        TelegramModelPreset("openrouter", "moonshotai/kimi-k2", "Kimi K2"),
+        *(TelegramModelPreset("openrouter", preset.model, preset.label) for preset in OPENROUTER_MODEL_PRESETS),
     ),
     "openai": (
         TelegramModelPreset("openai", "gpt-5.5", "GPT-5.5"),

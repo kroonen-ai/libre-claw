@@ -66,5 +66,7 @@ def test_openrouter_attribution_and_presets_text_are_actionable() -> None:
 
     assert "HTTP-Referer: https://kroonen.ai" in attribution
     assert "X-OpenRouter-Categories: cli-agent" in attribution
+    assert "/model openrouter:deepseek/deepseek-v4-flash --global" in presets
     assert "/model openrouter:qwen/qwen3.7-max --global" in presets
+    assert "/model openrouter:anthropic/claude-opus-4.7 --global" in presets
     assert "/usage openrouter" in presets

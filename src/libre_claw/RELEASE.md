@@ -76,8 +76,11 @@ First shippable Libre Claw release from Kroonen AI Inc.
   `https://kroonen.ai`, `Libre Claw`, and the `cli-agent` category.
 - OpenRouter growth analytics through `/usage openrouter`, attribution
   verification, an analytics link to
-  `https://openrouter.ai/apps?url=https://kroonen.ai`, and recommended
-  OpenRouter model presets.
+  `https://openrouter.ai/apps?url=https://kroonen.ai`, and a shared
+  recommended model preset catalog for TUI, Telegram, and usage reports,
+  including `deepseek/deepseek-v4-flash`, `qwen/qwen3.7-max`,
+  `moonshotai/kimi-k2.6`, `anthropic/claude-opus-4.7`, and
+  `openai/gpt-5.5`.
 - Competitive polish pass with a one-command installer, first-run `/setup`
   wizard, provider/key setup inside the TUI, quickstart docs, demo scripts,
   public roadmap, and security documentation.

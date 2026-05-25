@@ -234,11 +234,11 @@ def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_pat
     suggestions = app._slash_suggestion_matches("/model openr")
     first = suggestions[0]
 
-    assert first.name == "/model openrouter:qwen/qwen3.7-max"
-    assert app._completion_text(first) == "/model openrouter:qwen/qwen3.7-max"
+    assert first.name == "/model openrouter:deepseek/deepseek-v4-flash"
+    assert app._completion_text(first) == "/model openrouter:deepseek/deepseek-v4-flash"
     app._slash_suggestions = [first]
     assert app._should_complete_on_submit("/model openr") is True
-    assert app._should_complete_on_submit("/model openrouter:qwen/qwen3.7-max") is False
+    assert app._should_complete_on_submit("/model openrouter:deepseek/deepseek-v4-flash") is False
 
 
 async def test_model_global_flag_persists_user_default(monkeypatch, tmp_path: Path) -> None:
