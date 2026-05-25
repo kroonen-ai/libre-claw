@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from libre_claw.telegram.bridge import (
 from libre_claw.telegram.handlers import (
     TELEGRAM_MODEL_PRESETS,
     TelegramHandlers,
+    _cancel_task,
     _finish_text_response,
     _message_chunks,
     _model_configuration_text,
@@ -30,6 +32,7 @@ from libre_claw.telegram.handlers import (
     _reply_text_chunks,
     _stream_preview,
     _telegram_help_text,
+    _typing_indicator_loop,
     _unauthorized_text,
     telegram_command_specs,
 )
@@ -190,6 +193,35 @@ async def test_telegram_finish_text_response_sends_all_final_chunks() -> None:
     assert len(placeholder.edits[0]) < 4096
     assert reply_to.replies
     assert placeholder.edits[0] + "".join(reply_to.replies) == text
+
+
+async def test_telegram_typing_indicator_repeats_until_cancelled(monkeypatch) -> None:
+    monkeypatch.setattr("libre_claw.telegram.handlers.TELEGRAM_TYPING_INTERVAL_SECONDS", 0.01)
+
+    class Bot:
+        def __init__(self) -> None:
+            self.actions: list[tuple[int, str]] = []
+
+        async def send_chat_action(self, chat_id: int, action: str) -> None:
+            self.actions.append((chat_id, action))
+
+    bot = Bot()
+    task = asyncio.create_task(_typing_indicator_loop(bot, 42))
+
+    await asyncio.sleep(0.025)
+    await _cancel_task(task)
+
+    assert len(bot.actions) >= 2
+    assert all(action == (42, "typing") for action in bot.actions)
+
+
+async def test_telegram_typing_indicator_stops_quietly_on_action_error() -> None:
+    class Bot:
+        async def send_chat_action(self, chat_id: int, action: str) -> None:
+            del chat_id, action
+            raise RuntimeError("telegram unavailable")
+
+    await _typing_indicator_loop(Bot(), 42)
 
 
 async def test_telegram_reply_text_chunks_retries_smaller_on_telegram_limit() -> None:
