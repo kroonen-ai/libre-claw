@@ -7,6 +7,7 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from importlib.resources import files
 from typing import Any, Literal, cast
 
 import httpx
@@ -122,6 +123,7 @@ class DaemonServer:
             [
                 web.get("/", self.dashboard),
                 web.get("/dashboard", self.dashboard),
+                web.get("/assets/{name}", self.dashboard_asset),
                 web.get("/health", self.health),
                 web.get("/runs", self.list_runs),
                 web.post("/runs", self.start_run),
@@ -145,6 +147,13 @@ class DaemonServer:
 
     async def dashboard(self, _request: web.Request) -> web.Response:
         return web.Response(text=dashboard_html(), content_type="text/html")
+
+    async def dashboard_asset(self, request: web.Request) -> web.Response:
+        name = request.match_info["name"]
+        if name not in {"logo-dark.jpg", "logo-light.jpg"}:
+            return _json_error("Asset not found.", status=404)
+        payload = files("libre_claw.web.assets").joinpath(name).read_bytes()
+        return web.Response(body=payload, content_type="image/jpeg")
 
     async def run(self, host: str | None = None, port: int | None = None) -> None:
         runner = web.AppRunner(self.app())
