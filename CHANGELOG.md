@@ -22,6 +22,9 @@ Initial shippable Libre Claw release.
   a run finishes inside a git repository.
 - Local background daemon API with `libre-claw daemon`, daemon-owned active
   runs, event polling, cancellation, and permission approval endpoints.
+- Local web dashboard served by the daemon at `/dashboard` for starting runs,
+  reviewing timelines, approving blocked tools, managing schedules, and checking
+  usage.
 - TUI daemon mode via `[tui].use_daemon = true`, allowing the TUI to start,
   poll, approve, cancel, and resume daemon-owned runs without owning execution.
 - Telegram can optionally route chat runs and inline approvals through the

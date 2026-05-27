@@ -53,6 +53,7 @@ from libre_claw.core.usage import (
 from libre_claw.core.session import session_from_payload
 from libre_claw.providers import LLMProvider, Usage, create_fallback_providers, create_provider
 from libre_claw.tools_builtin import create_builtin_registry
+from libre_claw.web import dashboard_html
 
 
 ProviderFactory = Callable[[LibreClawConfig], LLMProvider]
@@ -100,6 +101,8 @@ class DaemonServer:
         app = web.Application()
         app.add_routes(
             [
+                web.get("/", self.dashboard),
+                web.get("/dashboard", self.dashboard),
                 web.get("/health", self.health),
                 web.get("/runs", self.list_runs),
                 web.post("/runs", self.start_run),
@@ -120,6 +123,9 @@ class DaemonServer:
         app.on_cleanup.append(self._on_cleanup)
         self._app = app
         return app
+
+    async def dashboard(self, _request: web.Request) -> web.Response:
+        return web.Response(text=dashboard_html(), content_type="text/html")
 
     async def run(self, host: str | None = None, port: int | None = None) -> None:
         runner = web.AppRunner(self.app())

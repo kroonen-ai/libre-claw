@@ -255,7 +255,9 @@ def daemon_command(ctx: click.Context, host: str | None, port: int | None) -> No
     """Run the local background runner daemon."""
     config = _load_context_config(ctx)
     server = DaemonServer(config)
-    click.echo(f"Libre Claw daemon listening on http://{host or config.daemon.host}:{port or config.daemon.port}")
+    base_url = f"http://{host or config.daemon.host}:{port or config.daemon.port}"
+    click.echo(f"Libre Claw daemon listening on {base_url}")
+    click.echo(f"Dashboard: {base_url}/dashboard")
     try:
         asyncio.run(server.run(host=host, port=port))
     except RuntimeError as exc:

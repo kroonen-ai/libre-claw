@@ -664,9 +664,21 @@ By default it listens on:
 http://127.0.0.1:8766
 ```
 
+Open the local dashboard at:
+
+```text
+http://127.0.0.1:8766/dashboard
+```
+
+The dashboard can start daemon-owned runs, watch recent run timelines, approve
+blocked tool calls, cancel active runs, create/pause/resume/delete schedules,
+and review local usage totals from the same daemon API used by TUI and
+Telegram.
+
 Useful API endpoints:
 
 - `GET /health`
+- `GET /dashboard`
 - `GET /runs?limit=20`
 - `POST /runs` with `{"message": "..."}`
 - `GET /runs/<run-id>`

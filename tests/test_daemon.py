@@ -138,6 +138,26 @@ async def test_daemon_starts_background_run_and_persists_events(monkeypatch, tmp
     ]
 
 
+async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    response = await server.dashboard(RequestStub())  # type: ignore[arg-type]
+
+    assert response.content_type == "text/html"
+    assert "Libre Claw Dashboard" in response.text
+    assert "fetch(path" in response.text
+    assert "/runs" in response.text
+    assert "/automations" in response.text
+    assert "/usage?limit=250" in response.text
+
+
 async def test_daemon_rejects_request_working_directory_override(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
