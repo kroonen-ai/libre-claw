@@ -13,6 +13,7 @@ from libre_claw.providers.openrouter import (
     OPENROUTER_APP_TITLE,
     OPENROUTER_CATEGORIES,
     OPENROUTER_HTTP_REFERER,
+    OPENROUTER_RANKING_TARGETS,
 )
 from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
 
@@ -164,6 +165,7 @@ def openrouter_attribution_text() -> str:
             f"- HTTP-Referer: {OPENROUTER_HTTP_REFERER}",
             f"- X-OpenRouter-Title: {OPENROUTER_APP_TITLE}",
             f"- X-OpenRouter-Categories: {OPENROUTER_CATEGORIES}",
+            f"- Ranking targets: {', '.join(OPENROUTER_RANKING_TARGETS)}",
             f"- Analytics: {OPENROUTER_ANALYTICS_URL}",
             "- Status: configured for Libre Claw app attribution on every OpenRouter request.",
         ]
@@ -225,6 +227,7 @@ def openrouter_attribution_payload() -> dict[str, str]:
         "http_referer": OPENROUTER_HTTP_REFERER,
         "title": OPENROUTER_APP_TITLE,
         "categories": OPENROUTER_CATEGORIES,
+        "ranking_targets": ", ".join(OPENROUTER_RANKING_TARGETS),
         "analytics_url": OPENROUTER_ANALYTICS_URL,
     }
 

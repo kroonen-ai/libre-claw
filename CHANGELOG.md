@@ -37,7 +37,7 @@ Initial shippable Libre Claw release.
   management commands, and relevant skill injection across TUI, Telegram, and
   daemon agent runs.
 - Anthropic, OpenAI, OpenRouter, and Ollama providers. Defaults are `claude-opus-4-6`, `gpt-5.5`, and `qwen3.6:27b`; Ollama supports local daemon use, Ollama Cloud with `kimi-k2.6:cloud`, and Ollama/OpenAI-compatible endpoints.
-- Fixed OpenRouter app attribution for Libre Claw with `https://libreclaw.dev`, `Libre Claw`, and `cli-agent,personal-agent` headers.
+- Fixed OpenRouter app attribution for Libre Claw with `https://libreclaw.dev`, `Libre Claw`, and `cli-agent,personal-agent` headers, targeting Productivity, Coding Agents, Personal Agents, and CLI Agents visibility.
 - Cumulative session token tracking in the status bar, TUI `/cost`, and
   Telegram `/cost`, with OpenRouter usage accounting enabled for
   provider-reported request cost, cached tokens, and reasoning tokens.

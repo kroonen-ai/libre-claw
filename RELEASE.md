@@ -78,7 +78,8 @@ First shippable Libre Claw release from Kroonen AI Inc.
   `gpt-5.3-codex`, `gpt-5.3-codex-spark`, and `gpt-5.2`.
 - OpenRouter support with fixed Libre Claw app attribution headers:
   `https://libreclaw.dev`, `Libre Claw`, and the `cli-agent,personal-agent`
-  categories.
+  categories, targeting Productivity, Coding Agents, Personal Agents, and CLI
+  Agents visibility.
 - OpenRouter growth analytics through `/usage openrouter`, attribution
   verification, an analytics link to
   `https://openrouter.ai/apps?url=https://libreclaw.dev`, and a shared

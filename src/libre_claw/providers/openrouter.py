@@ -10,6 +10,12 @@ from libre_claw.providers.openai import OpenAIProvider
 OPENROUTER_HTTP_REFERER = "https://libreclaw.dev"
 OPENROUTER_APP_TITLE = "Libre Claw"
 OPENROUTER_CATEGORIES = "cli-agent,personal-agent"
+OPENROUTER_RANKING_TARGETS = (
+    "Productivity",
+    "Coding Agents",
+    "Personal Agents",
+    "CLI Agents",
+)
 
 
 class OpenRouterProvider(OpenAIProvider):
