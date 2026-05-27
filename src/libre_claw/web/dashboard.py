@@ -236,10 +236,20 @@ _DASHBOARD_HTML = r"""<!doctype html>
       box-shadow: var(--shadow);
     }
     .metric {
+      position: relative;
       display: grid;
       gap: 4px;
       padding: 13px;
       min-width: 0;
+      overflow: hidden;
+    }
+    .metric::before {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 3px;
+      content: "";
+      background: var(--accent);
+      opacity: .85;
     }
     .metric span, .tiny {
       color: var(--muted);
@@ -275,6 +285,13 @@ _DASHBOARD_HTML = r"""<!doctype html>
       margin: 0;
       font-size: 14px;
       letter-spacing: 0;
+    }
+    .eyebrow {
+      color: var(--accent-strong);
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: .08em;
+      text-transform: uppercase;
     }
     .head-copy {
       display: grid;
@@ -343,6 +360,48 @@ _DASHBOARD_HTML = r"""<!doctype html>
     .pill.running, .pill.queued { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: var(--accent-soft); }
     .pill.blocked { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 58%, var(--line)); background: var(--warn-soft); }
     .pill.failed, .pill.cancelled, .pill.paused { color: #ffd7da; border-color: color-mix(in srgb, var(--danger) 58%, var(--line)); background: var(--danger-soft); }
+    .overview {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .insight {
+      min-width: 0;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+        var(--panel);
+      border-radius: var(--radius);
+      padding: 13px;
+      box-shadow: var(--shadow);
+    }
+    .insight span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .insight strong {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 16px;
+    }
+    .run-focus {
+      border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
+      background:
+        linear-gradient(120deg, rgba(0, 112, 243, 0.16), rgba(139, 92, 246, 0.08) 42%, transparent 70%),
+        var(--panel);
+    }
+    .run-focus .section-head {
+      background: transparent;
+    }
+    .run-focus .body {
+      border-top: 1px solid var(--line);
+      background: rgba(0, 0, 0, 0.14);
+    }
     .workspace {
       display: grid;
       grid-template-columns: minmax(0, 1.35fr) minmax(330px, .85fr);
@@ -450,6 +509,16 @@ _DASHBOARD_HTML = r"""<!doctype html>
       font-size: 13px;
       overflow-wrap: anywhere;
     }
+    .notice::before {
+      content: "Status";
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
     .notice.error {
       border-color: #7a1d24;
       background: var(--danger-soft);
@@ -512,7 +581,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       .app { grid-template-columns: 1fr; }
       aside { position: static; }
       .workspace { grid-template-columns: 1fr; }
-      .status { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .status, .overview { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
     @media (max-width: 720px) {
       .app {
@@ -529,6 +598,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       .top-actions button,
       .top-actions a,
       .status,
+      .overview,
       .grid-2,
       .filter-row {
         width: 100%;
@@ -627,9 +697,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
       </section>
     </aside>
     <main>
-      <section>
+      <section class="run-focus">
         <div class="section-head">
           <div class="head-copy">
+            <span class="eyebrow">Run cockpit</span>
             <h2 id="selectedTitle">No run selected</h2>
             <span class="tiny" id="selectedMeta">Select a run to inspect its timeline and approvals.</span>
           </div>
@@ -643,6 +714,24 @@ _DASHBOARD_HTML = r"""<!doctype html>
           <div id="permissions" class="stack"></div>
         </div>
       </section>
+      <div class="overview" aria-label="Dashboard overview">
+        <div class="insight">
+          <span>Selected run</span>
+          <strong id="selectedInsight">none</strong>
+        </div>
+        <div class="insight">
+          <span>Pending approvals</span>
+          <strong id="pendingApprovalCount">0</strong>
+        </div>
+        <div class="insight">
+          <span>Schedules</span>
+          <strong id="automationCount">0</strong>
+        </div>
+        <div class="insight">
+          <span>Latest event</span>
+          <strong id="lastEventLabel">none</strong>
+        </div>
+      </div>
       <div class="workspace">
         <section>
           <div class="section-head">
@@ -849,6 +938,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     function clearSelectedRun() {
       $("selectedTitle").textContent = "No run selected";
       $("selectedMeta").textContent = "Select a run to inspect its timeline and approvals.";
+      $("selectedInsight").textContent = "none";
       $("selectedState").textContent = "idle";
       $("selectedState").className = "pill";
       $("cancelRun").disabled = true;
@@ -863,6 +953,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
       const run = detail.run;
       $("selectedTitle").textContent = run.title || "Untitled run";
       $("selectedMeta").textContent = `${run.run_id} | ${run.provider}:${run.model} | updated ${formatTime(run.updated_at)}`;
+      $("selectedInsight").textContent = run.run_id;
+      $("selectedInsight").title = run.run_id;
       $("selectedState").textContent = run.state;
       $("selectedState").className = `pill ${run.state}`;
       $("cancelRun").disabled = !["queued", "running", "blocked"].includes(run.state);
@@ -877,6 +969,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       container.replaceChildren();
       if (!state.events.length) {
         $("eventCount").textContent = "0 events";
+        $("lastEventLabel").textContent = "none";
         container.append(empty("No events yet."));
         return;
       }
@@ -886,9 +979,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
         ? `${visible.length} of ${state.events.length} events`
         : `${state.events.length} ${state.events.length === 1 ? "event" : "events"}`;
       if (!visible.length) {
+        $("lastEventLabel").textContent = eventTitle(state.events.at(-1));
         container.append(empty("No matching events."));
         return;
       }
+      $("lastEventLabel").textContent = eventTitle(state.events.at(-1));
       for (const event of visible) {
         const item = document.createElement("div");
         const data = event.data || {};
@@ -956,6 +1051,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     function renderPermissions(pendingIds) {
       const container = $("permissions");
       container.replaceChildren();
+      $("pendingApprovalCount").textContent = String(pendingIds.length);
       if (!pendingIds.length) return;
       for (const id of pendingIds) {
         const event = state.events.find((item) => item.type === "permission_request" && item.data?.tool_call_id === id);
@@ -994,11 +1090,13 @@ _DASHBOARD_HTML = r"""<!doctype html>
       const payload = await request("/automations?limit=50");
       const container = $("automations");
       container.replaceChildren();
-      if (!payload.automations?.length) {
+      const automations = payload.automations || [];
+      $("automationCount").textContent = String(automations.length);
+      if (!automations.length) {
         container.append(empty("No schedules yet."));
         return;
       }
-      for (const automation of payload.automations) {
+      for (const automation of automations) {
         const box = document.createElement("div");
         box.className = "automation";
         const head = document.createElement("div");
