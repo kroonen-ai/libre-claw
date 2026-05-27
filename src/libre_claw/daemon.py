@@ -57,6 +57,11 @@ from libre_claw.tools_builtin import create_builtin_registry
 ProviderFactory = Callable[[LibreClawConfig], LLMProvider]
 RegistryFactory = Callable[[LibreClawConfig, MemoryStore], ToolRegistry]
 RunKind = Literal["chat", "goal"]
+TELEGRAM_DAEMON_PROMPT_EXTRA = (
+    "Telegram output policy: keep mobile replies compact. Do not narrate intermediate "
+    "tool steps such as 'let me fetch' or 'now I will check'. Use tools silently and "
+    "send only the final useful result, unless you need approval or hit an error."
+)
 
 
 @dataclass
@@ -387,7 +392,7 @@ class DaemonServer:
                 },
             )
             await self.run_store.append_event(run.run_id, "user_message", {"content": message})
-            agent = await self._create_agent(config, session=session)
+            agent = await self._create_agent(config, session=session, surface=surface)
             async for event in agent.run(message):
                 if isinstance(event, AgentTextDelta):
                     assistant_chunks.append(event.text)
@@ -604,7 +609,7 @@ class DaemonServer:
             browser="",
         )
 
-    async def _create_agent(self, config: LibreClawConfig, *, session: Session | None = None) -> Agent:
+    async def _create_agent(self, config: LibreClawConfig, *, session: Session | None = None, surface: str = "daemon") -> Agent:
         provider = self.provider_factory(config)
         fallbacks = create_fallback_providers(config)
         memory_facts = await self.memory_store.list_always_injected_memories()
@@ -620,7 +625,7 @@ class DaemonServer:
             auto_compact_threshold=config.agent.auto_compact_threshold,
             context_window_tokens=config.agent.context_window_tokens,
             memory_facts=memory_facts,
-            system_prompt_extra=config.agent.system_prompt_extra,
+            system_prompt_extra=_surface_prompt_extra(config.agent.system_prompt_extra, surface),
             skill_provider=skill_store.relevant_skill_texts,
             soul_provider=soul_store.soul_texts,
             memory_provider=lambda user_message: self._relevant_memory_texts(config, user_message),
@@ -773,6 +778,13 @@ class DaemonClient:
 
 def daemon_base_url(config: LibreClawConfig, *, host: str | None = None, port: int | None = None) -> str:
     return f"http://{host or config.daemon.host}:{port or config.daemon.port}"
+
+
+def _surface_prompt_extra(existing: str, surface: str) -> str:
+    parts = [existing.strip()] if existing.strip() else []
+    if surface.startswith("telegram") or surface == "automation:telegram":
+        parts.append(TELEGRAM_DAEMON_PROMPT_EXTRA)
+    return "\n\n".join(parts)
 
 
 def _reject_working_directory_override(config: LibreClawConfig, payload: Mapping[str, Any]) -> None:

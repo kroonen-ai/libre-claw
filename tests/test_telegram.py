@@ -38,6 +38,7 @@ from libre_claw.telegram.handlers import (
     _tool_log_preview,
     _typing_indicator_loop,
     _unauthorized_text,
+    _visible_tool_notices,
     telegram_command_specs,
 )
 
@@ -234,10 +235,17 @@ async def test_telegram_tool_heavy_runs_send_final_answer_last(monkeypatch, tmp_
         async def stream_message(self, chat_id: int, text: str):
             assert chat_id == 123
             assert text == "hn"
-            yield TelegramText("Final")
-            yield TelegramToolNotice("🌐 GET https://hacker-news.firebaseio.com/v0/topstories.json")
-            yield TelegramToolNotice("✅ http_request done\nstatus: 200\nbytes: 4501")
-            yield TelegramText(" answer")
+            yield TelegramText("Let me fetch Hacker News.")
+            yield TelegramToolNotice(
+                "🌐 GET https://hacker-news.firebaseio.com/v0/topstories.json",
+                tool_name="http_request",
+            )
+            yield TelegramToolNotice(
+                "✅ http_request done\nstatus: 200\nbytes: 4501",
+                tool_name="http_request",
+                is_result=True,
+            )
+            yield TelegramText("Final answer")
             yield TelegramDone(None)
 
     class SentMessage:
@@ -291,6 +299,9 @@ async def test_telegram_tool_heavy_runs_send_final_answer_last(monkeypatch, tmp_
     sent_texts = [message.text for message in update.effective_message.sent]
     assert sent_texts[0] == "Libre Claw is thinking..."
     assert sent_texts[1].startswith("🧰 Tool activity (1)")
+    assert "HTTP requests: 1 requested, 0 done" in sent_texts[1]
+    assert update.effective_message.sent[1].edits[-1].startswith("🧰 Tool activity (1)")
+    assert "HTTP requests: 1 requested, 1 done" in update.effective_message.sent[1].edits[-1]
     assert sent_texts[-1] == "Final answer"
     assert update.effective_message.sent[0].edits[-1] == "✅ Run complete. Final answer below."
 
@@ -858,3 +869,13 @@ def test_telegram_tool_log_preview_keeps_latest_activity_in_one_message() -> Non
     assert "4 earlier events hidden" in preview
     assert "https://example.com/11" in preview
     assert "https://example.com/0" not in preview
+
+
+def test_telegram_http_activity_is_aggregated_in_tool_log() -> None:
+    notices = _visible_tool_notices(["🔧 bash\ncommand: pytest"], http_started=119, http_done=118)
+    preview = _tool_log_preview(notices, configured_limit=3900, total_count=238)
+
+    assert preview.startswith("🧰 Tool activity (238)")
+    assert "🌐 HTTP requests: 119 requested, 118 done" in preview
+    assert "🔧 bash" in preview
+    assert "hacker-news.firebaseio.com/v0/item" not in preview

@@ -62,6 +62,9 @@ class TelegramText:
 @dataclass(frozen=True)
 class TelegramToolNotice:
     text: str
+    tool_name: str = ""
+    is_error: bool = False
+    is_result: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,11 @@ TelegramEvent = TelegramText | TelegramToolNotice | TelegramPermissionPrompt | T
 TELEGRAM_NOTICE_LIMIT = 1200
 TELEGRAM_ARGUMENT_LIMIT = 700
 TELEGRAM_HTTP_ERROR_LIMIT = 500
+TELEGRAM_SYSTEM_PROMPT_EXTRA = (
+    "Telegram output policy: keep mobile replies compact. Do not narrate intermediate "
+    "tool steps such as 'let me fetch' or 'now I will check'. Use tools silently and "
+    "send only the final useful result, unless you need approval or hit an error."
+)
 
 
 @dataclass
@@ -151,7 +159,10 @@ class TelegramBridge:
                 continue
             if isinstance(event, AgentToolCall):
                 await self._archive_event(chat_id, "tool_call", {"name": event.call.name, "arguments": dict(event.call.arguments)})
-                yield TelegramToolNotice(_tool_call_notice(event.call.name, dict(event.call.arguments)))
+                yield TelegramToolNotice(
+                    _tool_call_notice(event.call.name, dict(event.call.arguments)),
+                    tool_name=event.call.name,
+                )
                 continue
             if isinstance(event, AgentPermissionRequest):
                 prompt_id = f"{chat_id}:{event.call.id}"
@@ -181,7 +192,10 @@ class TelegramBridge:
                         is_error=event.result.is_error,
                         content=event.result.as_text(),
                         metadata=dict(event.result.metadata),
-                    )
+                    ),
+                    tool_name=event.call.name,
+                    is_error=event.result.is_error,
+                    is_result=True,
                 )
                 continue
             if isinstance(event, AgentDone):
@@ -351,7 +365,7 @@ class TelegramBridge:
             auto_compact_threshold=self.config.agent.auto_compact_threshold,
             context_window_tokens=self.config.agent.context_window_tokens,
             memory_facts=self._memory_facts,
-            system_prompt_extra=self.config.agent.system_prompt_extra,
+            system_prompt_extra=_combine_prompt_extra(self.config.agent.system_prompt_extra, TELEGRAM_SYSTEM_PROMPT_EXTRA),
             skill_provider=self.skill_store.relevant_skill_texts,
             soul_provider=self.soul_store.soul_texts,
             memory_provider=lambda user_message: self.relevant_memory_texts(user_message),
@@ -602,6 +616,11 @@ def _format_usage_cost(usage: Usage) -> str:
     return f"${usage.cost:.2f}"
 
 
+def _combine_prompt_extra(existing: str, addition: str) -> str:
+    parts = [part.strip() for part in (existing, addition) if part.strip()]
+    return "\n\n".join(parts)
+
+
 def _tool_call_notice(name: str, arguments: dict[str, Any]) -> str:
     if name == "http_request":
         return _http_request_call_notice(arguments)
@@ -730,7 +749,11 @@ async def _telegram_events_from_daemon_event(run_id: str, event: dict[str, Any])
         yield TelegramText(str(data.get("text", "")))
         return
     if event_type == "tool_call":
-        yield TelegramToolNotice(_tool_call_notice(str(data.get("name", "tool")), _object_payload(data.get("arguments"))))
+        name = str(data.get("name", "tool"))
+        yield TelegramToolNotice(
+            _tool_call_notice(name, _object_payload(data.get("arguments"))),
+            tool_name=name,
+        )
         return
     if event_type == "permission_request":
         call = ToolCall(
@@ -745,13 +768,18 @@ async def _telegram_events_from_daemon_event(run_id: str, event: dict[str, Any])
         )
         return
     if event_type == "tool_result":
+        name = str(data.get("name", "tool"))
+        is_error = bool(data.get("is_error"))
         yield TelegramToolNotice(
             _tool_result_notice(
-                str(data.get("name", "tool")),
-                is_error=bool(data.get("is_error")),
+                name,
+                is_error=is_error,
                 content=str(data.get("content", "")),
                 metadata=_object_payload(data.get("metadata")),
-            )
+            ),
+            tool_name=name,
+            is_error=is_error,
+            is_result=True,
         )
         return
     if event_type == "error":

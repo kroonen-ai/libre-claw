@@ -228,12 +228,15 @@ class TelegramHandlers:
         saw_tool_notice = False
         tool_log_message: Any | None = None
         tool_notices: list[str] = []
+        tool_event_count = 0
+        http_started = 0
+        http_done = 0
         tool_log_dirty = False
         tool_log_last_update = 0.0
         typing_task = self._start_typing_indicator(context.bot, chat_id)
 
         async def runner() -> None:
-            nonlocal accumulated, last_update, saw_tool_notice, tool_log_dirty, tool_log_last_update, tool_log_message
+            nonlocal accumulated, http_done, http_started, last_update, saw_tool_notice, tool_event_count, tool_log_dirty, tool_log_last_update, tool_log_message
             try:
                 async for event in self.bridge.stream_message(chat_id, text):
                     if isinstance(event, TelegramText):
@@ -247,7 +250,15 @@ class TelegramHandlers:
                         continue
                     if isinstance(event, TelegramToolNotice):
                         saw_tool_notice = True
-                        tool_notices.append(event.text)
+                        accumulated = ""
+                        tool_event_count += 1
+                        if event.tool_name == "http_request" and not event.is_error:
+                            if event.is_result:
+                                http_done += 1
+                            else:
+                                http_started += 1
+                        else:
+                            tool_notices.append(event.text)
                         if tool_log_message is None:
                             await _edit_text_preview(
                                 placeholder,
@@ -255,7 +266,11 @@ class TelegramHandlers:
                                 self.bridge.config.telegram.max_message_length,
                             )
                             tool_log_message = await update.effective_message.reply_text(
-                                _tool_log_preview(tool_notices, self.bridge.config.telegram.max_message_length)
+                                _tool_log_preview(
+                                    _visible_tool_notices(tool_notices, http_started, http_done),
+                                    self.bridge.config.telegram.max_message_length,
+                                    total_count=_tool_activity_count(tool_notices, http_started, http_done),
+                                )
                             )
                             tool_log_last_update = time.monotonic()
                         else:
@@ -263,12 +278,16 @@ class TelegramHandlers:
                             now = time.monotonic()
                             should_update_tool_log = (
                                 now - tool_log_last_update >= TELEGRAM_TOOL_LOG_UPDATE_INTERVAL_SECONDS
-                                or len(tool_notices) % TELEGRAM_TOOL_LOG_UPDATE_EVENT_INTERVAL == 0
+                                or tool_event_count % TELEGRAM_TOOL_LOG_UPDATE_EVENT_INTERVAL == 0
                             )
                             if should_update_tool_log:
                                 await _safe_edit_text_preview(
                                     tool_log_message,
-                                    _tool_log_preview(tool_notices, self.bridge.config.telegram.max_message_length),
+                                    _tool_log_preview(
+                                        _visible_tool_notices(tool_notices, http_started, http_done),
+                                        self.bridge.config.telegram.max_message_length,
+                                        total_count=_tool_activity_count(tool_notices, http_started, http_done),
+                                    ),
                                     self.bridge.config.telegram.max_message_length,
                                 )
                                 tool_log_last_update = now
@@ -281,7 +300,11 @@ class TelegramHandlers:
                         if tool_log_message is not None and tool_log_dirty:
                             await _safe_edit_text_preview(
                                 tool_log_message,
-                                _tool_log_preview(tool_notices, self.bridge.config.telegram.max_message_length),
+                                _tool_log_preview(
+                                    _visible_tool_notices(tool_notices, http_started, http_done),
+                                    self.bridge.config.telegram.max_message_length,
+                                    total_count=_tool_activity_count(tool_notices, http_started, http_done),
+                                ),
                                 self.bridge.config.telegram.max_message_length,
                             )
                             tool_log_dirty = False
@@ -311,7 +334,11 @@ class TelegramHandlers:
                         if tool_log_message is not None and tool_log_dirty:
                             await _safe_edit_text_preview(
                                 tool_log_message,
-                                _tool_log_preview(tool_notices, self.bridge.config.telegram.max_message_length),
+                                _tool_log_preview(
+                                    _visible_tool_notices(tool_notices, http_started, http_done),
+                                    self.bridge.config.telegram.max_message_length,
+                                    total_count=_tool_activity_count(tool_notices, http_started, http_done),
+                                ),
                                 self.bridge.config.telegram.max_message_length,
                             )
                             tool_log_dirty = False
@@ -599,11 +626,25 @@ async def _cancel_task(task: asyncio.Task[Any]) -> None:
         await task
 
 
-def _tool_log_preview(notices: Sequence[str], configured_limit: int) -> str:
+def _visible_tool_notices(notices: Sequence[str], http_started: int, http_done: int) -> list[str]:
+    visible: list[str] = []
+    if http_started or http_done:
+        pieces = [f"{http_started} requested", f"{http_done} done"]
+        visible.append("🌐 HTTP requests: " + ", ".join(pieces))
+    visible.extend(notices)
+    return visible
+
+
+def _tool_activity_count(notices: Sequence[str], http_started: int, http_done: int) -> int:
+    return max(http_started, http_done) + len(notices)
+
+
+def _tool_log_preview(notices: Sequence[str], configured_limit: int, *, total_count: int | None = None) -> str:
     limit = _telegram_message_limit(configured_limit)
     visible = list(notices[-8:])
+    event_count = total_count if total_count is not None else len(notices)
     hidden_count = max(0, len(notices) - len(visible))
-    sections = [f"🧰 Tool activity ({len(notices)})"]
+    sections = [f"🧰 Tool activity ({event_count})"]
     if hidden_count:
         sections.append(f"… {hidden_count} earlier events hidden")
     sections.extend(_truncate_tool_notice(notice) for notice in visible)
