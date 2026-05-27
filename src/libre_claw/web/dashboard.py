@@ -81,6 +81,16 @@ _DASHBOARD_HTML = r"""<!doctype html>
     button.primary { background: var(--accent); border-color: var(--accent); color: white; font-weight: 800; }
     button.danger { color: #ffd7da; background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 54%, var(--line)); }
     button.ghost { background: transparent; }
+    a {
+      color: var(--accent-strong);
+      text-decoration: none;
+    }
+    a:hover {
+      color: var(--text);
+      text-decoration: underline;
+      text-decoration-color: var(--accent);
+      text-underline-offset: 3px;
+    }
     input, textarea, select {
       width: 100%;
       border: 1px solid var(--line);
@@ -308,6 +318,29 @@ _DASHBOARD_HTML = r"""<!doctype html>
       background: var(--danger-soft);
       color: #ffc3c7;
     }
+    .dashboard-footer {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border: 1px solid var(--line);
+      background: rgba(5, 5, 5, 0.58);
+      border-radius: 8px;
+      padding: 12px 14px;
+      color: var(--muted);
+      font-size: 12px;
+      box-shadow: var(--shadow);
+    }
+    .dashboard-footer nav {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .dashboard-footer span {
+      color: var(--soft);
+    }
     ::-webkit-scrollbar { width: 7px; height: 7px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 999px; }
@@ -354,6 +387,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
       }
       textarea {
         min-height: 92px;
+      }
+      .dashboard-footer {
+        align-items: flex-start;
+        flex-direction: column;
       }
     }
   </style>
@@ -466,6 +503,14 @@ _DASHBOARD_HTML = r"""<!doctype html>
         </section>
       </div>
     </main>
+    <footer class="dashboard-footer">
+      <span>Libre Claw dashboard</span>
+      <nav aria-label="Dashboard footer links">
+        <a href="https://libreclaw.dev" target="_blank" rel="noreferrer">libreclaw.dev</a>
+        <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank" rel="noreferrer">Apache-2.0</a>
+        <a href="https://kroonen.ai" target="_blank" rel="noreferrer">Kroonen AI Inc.</a>
+      </nav>
+    </footer>
   </div>
   <script>
     const state = { selectedRunId: "", events: [] };
