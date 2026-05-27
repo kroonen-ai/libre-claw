@@ -18,25 +18,51 @@ _DASHBOARD_HTML = r"""<!doctype html>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #000;
-      --panel: #0b1017;
-      --panel-2: #111821;
-      --line: #202b38;
-      --text: #f8fafc;
-      --muted: #8b95a5;
+      --bg: #000000;
+      --surface: #050505;
+      --panel: rgba(8, 8, 8, 0.82);
+      --panel-strong: #111111;
+      --line: rgba(255, 255, 255, 0.11);
+      --line-strong: rgba(255, 255, 255, 0.18);
+      --text: #ffffff;
+      --soft: #d4d4d8;
+      --muted: #a1a1aa;
       --accent: #0070f3;
+      --accent-soft: rgba(0, 112, 243, 0.14);
+      --accent-strong: #dbeafe;
       --purple: #8b5cf6;
+      --purple-soft: rgba(139, 92, 246, 0.13);
       --danger: #ff4d4f;
-      --ok: #22c55e;
+      --danger-soft: rgba(255, 77, 79, 0.14);
+      --ok: #42d392;
+      --ok-soft: rgba(66, 211, 146, 0.12);
       --warn: #f59e0b;
-      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --warn-soft: rgba(245, 158, 11, 0.12);
+      --grid-dot: rgba(255, 255, 255, 0.16);
+      --shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+      font-family: "Atkinson", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     * { box-sizing: border-box; }
+    html {
+      background: var(--bg);
+      overflow-x: clip;
+    }
     body {
       margin: 0;
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
+      overflow-x: clip;
+    }
+    body::before {
+      position: fixed;
+      z-index: -1;
+      inset: 0;
+      content: "";
+      background-image: radial-gradient(circle at center, var(--grid-dot) 1px, transparent 1px);
+      background-size: 24px 24px;
+      mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.72) 44%, transparent 82%);
+      pointer-events: none;
     }
     button, input, textarea, select {
       font: inherit;
@@ -44,45 +70,68 @@ _DASHBOARD_HTML = r"""<!doctype html>
     button {
       border: 1px solid var(--line);
       color: var(--text);
-      background: #0d141d;
+      background: rgba(255, 255, 255, 0.04);
       border-radius: 6px;
-      padding: 8px 10px;
+      padding: 9px 11px;
       cursor: pointer;
+      transition: border-color .16s ease, background .16s ease, transform .16s ease;
     }
-    button:hover { border-color: var(--accent); }
-    button.primary { background: var(--accent); border-color: var(--accent); color: white; }
-    button.danger { color: white; background: #5f1218; border-color: #8f1d28; }
+    button:hover { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); background: rgba(255, 255, 255, 0.07); }
+    button:active { transform: translateY(1px); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: white; font-weight: 800; }
+    button.danger { color: #ffd7da; background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 54%, var(--line)); }
     button.ghost { background: transparent; }
     input, textarea, select {
       width: 100%;
       border: 1px solid var(--line);
-      background: #05080c;
+      background: #050505;
       color: var(--text);
       border-radius: 6px;
       padding: 9px 10px;
       outline: none;
     }
-    input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+    input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
     textarea { min-height: 110px; resize: vertical; }
+    label {
+      display: grid;
+      gap: 6px;
+    }
     .app {
       display: grid;
-      grid-template-columns: 330px minmax(0, 1fr);
+      grid-template-columns: 360px minmax(0, 1fr);
+      gap: 18px;
+      width: min(1480px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 18px 0;
       min-height: 100vh;
     }
     aside {
-      border-right: 1px solid var(--line);
-      background: #05080c;
-      padding: 18px;
+      align-self: start;
+      position: sticky;
+      top: 18px;
       display: flex;
       flex-direction: column;
       gap: 16px;
+      min-width: 0;
     }
     main {
-      padding: 18px;
       display: grid;
       grid-template-rows: auto auto minmax(0, 1fr);
       gap: 16px;
       min-width: 0;
+    }
+    .topbar {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      border: 1px solid var(--line);
+      background: rgba(5, 5, 5, 0.82);
+      backdrop-filter: blur(18px);
+      border-radius: 8px;
+      padding: 12px;
+      box-shadow: var(--shadow);
     }
     .brand {
       display: flex;
@@ -90,16 +139,32 @@ _DASHBOARD_HTML = r"""<!doctype html>
       gap: 10px;
       font-weight: 800;
       letter-spacing: 0;
+      min-width: 0;
+    }
+    .brand small {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
     }
     .logo {
-      width: 30px;
-      height: 30px;
+      flex: 0 0 auto;
+      width: 34px;
+      height: 34px;
       border-radius: 7px;
       background: linear-gradient(135deg, var(--accent), var(--purple));
       display: grid;
       place-items: center;
       font-size: 12px;
       font-weight: 900;
+      box-shadow: 0 0 24px var(--accent-soft);
+    }
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
     }
     .status {
       display: grid;
@@ -110,6 +175,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       border: 1px solid var(--line);
       background: var(--panel);
       border-radius: 8px;
+      box-shadow: var(--shadow);
     }
     .metric { padding: 12px; }
     .metric span, label, .tiny {
@@ -120,6 +186,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       display: block;
       margin-top: 5px;
       font-size: 18px;
+      letter-spacing: 0;
     }
     section {
       min-width: 0;
@@ -132,11 +199,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
       gap: 12px;
       padding: 12px 14px;
       border-bottom: 1px solid var(--line);
-      background: var(--panel-2);
+      background: rgba(255, 255, 255, 0.025);
     }
     .section-head h2, .section-head h3 {
       margin: 0;
       font-size: 14px;
+      letter-spacing: 0;
     }
     .body { padding: 14px; }
     .stack { display: grid; gap: 10px; }
@@ -147,30 +215,43 @@ _DASHBOARD_HTML = r"""<!doctype html>
       gap: 8px;
       max-height: 52vh;
       overflow: auto;
+      overflow-x: hidden;
       padding-right: 4px;
     }
     .run-item {
       width: 100%;
+      min-width: 0;
       text-align: left;
       border: 1px solid var(--line);
-      background: #090e15;
+      background: rgba(255, 255, 255, 0.025);
       border-radius: 7px;
       padding: 10px;
+      overflow: hidden;
     }
-    .run-item.active { border-color: var(--accent); }
+    .run-item.active { border-color: var(--accent); background: var(--accent-soft); }
     .run-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .run-meta { margin-top: 5px; color: var(--muted); font-size: 12px; }
+    .run-meta {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      max-width: 100%;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
     .pill {
+      display: inline-flex;
+      align-items: center;
       border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 3px 8px;
+      padding: 4px 8px;
       font-size: 12px;
       color: var(--muted);
+      background: rgba(255, 255, 255, 0.03);
     }
-    .pill.done { color: var(--ok); border-color: #1d6b3c; }
-    .pill.running, .pill.queued { color: var(--accent); border-color: #0b4f9d; }
-    .pill.blocked { color: var(--warn); border-color: #7a4b08; }
-    .pill.failed, .pill.cancelled { color: var(--danger); border-color: #7a1d24; }
+    .pill.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 52%, var(--line)); background: var(--ok-soft); }
+    .pill.running, .pill.queued { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: var(--accent-soft); }
+    .pill.blocked { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 58%, var(--line)); background: var(--warn-soft); }
+    .pill.failed, .pill.cancelled { color: #ffd7da; border-color: color-mix(in srgb, var(--danger) 58%, var(--line)); background: var(--danger-soft); }
     .workspace {
       display: grid;
       grid-template-columns: minmax(0, 1.4fr) minmax(320px, .8fr);
@@ -188,7 +269,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       border: 1px solid var(--line);
       border-radius: 7px;
       padding: 10px;
-      background: #070b11;
+      background: rgba(255, 255, 255, 0.025);
     }
     .event-type {
       color: var(--purple);
@@ -200,7 +281,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       margin: 0;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
-      color: #dbe3ec;
+      color: var(--soft);
       font-size: 13px;
       line-height: 1.45;
     }
@@ -211,7 +292,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
     .automation {
       border: 1px solid var(--line);
-      background: #070b11;
+      background: rgba(255, 255, 255, 0.025);
       border-radius: 7px;
       padding: 10px;
       display: grid;
@@ -219,30 +300,84 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
     .automation strong { font-size: 13px; }
     .notice {
-      border: 1px solid #173d70;
-      background: #061121;
-      color: #b8d7ff;
+      border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--line));
+      background: var(--accent-soft);
+      color: var(--accent-strong);
       padding: 10px;
       border-radius: 7px;
       font-size: 13px;
     }
     .error {
       border-color: #7a1d24;
-      background: #1b0709;
+      background: var(--danger-soft);
       color: #ffc3c7;
     }
+    ::-webkit-scrollbar { width: 7px; height: 7px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 999px; }
     @media (max-width: 980px) {
       .app { grid-template-columns: 1fr; }
-      aside { border-right: 0; border-bottom: 1px solid var(--line); }
+      aside { position: static; }
       .workspace { grid-template-columns: 1fr; }
       .status { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 680px) {
+      .app {
+        width: min(100%, calc(100% - 20px));
+        padding: 10px 0;
+        gap: 10px;
+      }
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .top-actions,
+      .top-actions button,
+      .top-actions a {
+        width: 100%;
+      }
+      .status,
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+      .section-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .row button {
+        flex: 1 1 140px;
+      }
+      .runs {
+        max-height: 36vh;
+      }
+      .timeline {
+        max-height: 70vh;
+      }
+      .run-title {
+        white-space: normal;
+      }
+      textarea {
+        min-height: 92px;
+      }
     }
   </style>
 </head>
 <body>
   <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">LC</div>
+        <div>
+          <div>Libre Claw Dashboard</div>
+          <small>Local control plane for daemon runs, approvals, schedules, and usage.</small>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="ghost" id="refreshAll" type="button">Refresh</button>
+        <button class="primary" id="focusRunInput" type="button">New Run</button>
+      </div>
+    </header>
     <aside>
-      <div class="brand"><div class="logo">LC</div><div>Libre Claw Dashboard</div></div>
       <div class="status">
         <div class="metric"><span>Daemon</span><strong id="daemonStatus">...</strong></div>
         <div class="metric"><span>Active</span><strong id="activeRuns">0</strong></div>
@@ -549,6 +684,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
     });
 
     $("refreshRuns").addEventListener("click", refreshRuns);
+    $("refreshAll").addEventListener("click", refreshAll);
+    $("focusRunInput").addEventListener("click", () => $("runMessage").focus());
     $("cancelRun").addEventListener("click", async () => {
       if (!state.selectedRunId) return;
       await request(`/runs/${state.selectedRunId}/cancel`, { method: "POST" });
