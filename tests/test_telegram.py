@@ -10,6 +10,7 @@ from typing import Any
 
 from libre_claw.config import load_config
 from libre_claw.core.session import ChatMessage
+from libre_claw.core.tools import ToolCall
 from libre_claw.providers.base import Done, LLMProvider, StreamEvent, TextDelta, ToolCallReady, ToolSchema
 from libre_claw.telegram.auth import TelegramAuth
 from libre_claw.telegram.bot import TelegramBot
@@ -348,6 +349,101 @@ async def test_telegram_tool_heavy_runs_send_final_answer_last(monkeypatch, tmp_
     assert "HTTP requests: 1 requested, 1 done" in update.effective_message.sent[1].edits[-1]
     assert sent_texts[-1] == "Final answer"
     assert update.effective_message.sent[0].edits[-1] == "✅ Run complete. Final answer below."
+
+
+async def test_telegram_typing_indicator_stops_while_permission_is_blocked(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("libre_claw.telegram.handlers.TELEGRAM_TYPING_INTERVAL_SECONDS", 0.01)
+    permission_replied = asyncio.Event()
+    release = asyncio.Event()
+
+    class State:
+        task: asyncio.Task[None] | None = None
+
+    class Bridge:
+        config = load_config()
+
+        def __init__(self) -> None:
+            self.state = State()
+
+        def state_for(self, chat_id: int) -> State:
+            assert chat_id == 123
+            return self.state
+
+        async def stream_message(self, chat_id: int, text: str):
+            assert chat_id == 123
+            assert text == "run command"
+            yield TelegramPermissionPrompt(
+                "prompt-1",
+                ToolCall(id="toolu_1", name="bash", arguments={"command": "echo hi"}),
+                "Approve bash?",
+            )
+            await release.wait()
+            yield TelegramDone(None)
+
+    class SentMessage:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.edits: list[str] = []
+
+        async def edit_text(self, text: str, **kwargs: object) -> None:
+            del kwargs
+            self.edits.append(text)
+
+    class EffectiveMessage:
+        text = "run command"
+
+        def __init__(self) -> None:
+            self.sent: list[SentMessage] = []
+
+        async def reply_text(self, text: str, **kwargs: object) -> SentMessage:
+            del kwargs
+            message = SentMessage(text)
+            self.sent.append(message)
+            if "Approve bash?" in text:
+                permission_replied.set()
+            return message
+
+    class User:
+        id = 123
+
+    class Chat:
+        id = 123
+
+    class Update:
+        effective_user = User()
+        effective_chat = Chat()
+
+        def __init__(self) -> None:
+            self.effective_message = EffectiveMessage()
+
+    class Bot:
+        def __init__(self) -> None:
+            self.actions: list[tuple[int, str]] = []
+
+        async def send_chat_action(self, chat_id: int, action: str) -> None:
+            self.actions.append((chat_id, action))
+
+    class Context:
+        def __init__(self) -> None:
+            self.bot = Bot()
+
+    bridge = Bridge()
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))  # type: ignore[arg-type]
+    update = Update()
+    context = Context()
+
+    await handlers.message(update, context)  # type: ignore[arg-type]
+    assert bridge.state.task is not None
+    await asyncio.wait_for(permission_replied.wait(), timeout=1)
+    action_count = len(context.bot.actions)
+    await asyncio.sleep(0.04)
+    release.set()
+    await bridge.state.task
+
+    assert action_count >= 1
+    assert len(context.bot.actions) == action_count
 
 
 async def test_telegram_typing_indicator_repeats_until_cancelled(monkeypatch) -> None:

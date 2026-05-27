@@ -240,7 +240,13 @@ class TelegramHandlers:
         http_done = 0
         tool_log_dirty = False
         tool_log_last_update = 0.0
-        typing_task = self._start_typing_indicator(context.bot, chat_id)
+        typing_task: asyncio.Task[None] | None = self._start_typing_indicator(context.bot, chat_id)
+
+        async def stop_typing() -> None:
+            nonlocal typing_task
+            if typing_task is not None:
+                await _cancel_task(typing_task)
+                typing_task = None
 
         async def runner() -> None:
             nonlocal accumulated, http_done, http_started, last_update, saw_tool_notice, tool_event_count, tool_log_dirty, tool_log_last_update, tool_log_message
@@ -301,9 +307,11 @@ class TelegramHandlers:
                                 tool_log_dirty = False
                         continue
                     if isinstance(event, TelegramPermissionPrompt):
+                        await stop_typing()
                         await self._reply_permission_prompt(update.effective_message, event)
                         continue
                     if isinstance(event, TelegramDone):
+                        await stop_typing()
                         if tool_log_message is not None and tool_log_dirty:
                             await _safe_edit_text_preview(
                                 tool_log_message,
@@ -339,6 +347,7 @@ class TelegramHandlers:
                             await _edit_text_preview(placeholder, "Done.", self.bridge.config.telegram.max_message_length)
                         continue
                     if isinstance(event, TelegramError):
+                        await stop_typing()
                         if tool_log_message is not None and tool_log_dirty:
                             await _safe_edit_text_preview(
                                 tool_log_message,
@@ -370,6 +379,7 @@ class TelegramHandlers:
                             )
                         continue
             except Exception as exc:
+                await stop_typing()
                 await _finish_text_response(
                     placeholder,
                     update.effective_message,
@@ -377,7 +387,7 @@ class TelegramHandlers:
                     self.bridge.config.telegram.max_message_length,
                 )
             finally:
-                await _cancel_task(typing_task)
+                await stop_typing()
 
         task = asyncio.create_task(runner())
         self.bridge.state_for(chat_id).task = task
@@ -415,7 +425,14 @@ class TelegramHandlers:
     async def _run_telegram_heartbeat_once(self, context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
         prompt = heartbeat_prompt(self.bridge.config, surface="telegram")
         accumulated = ""
-        typing_task = self._start_typing_indicator(context.bot, chat_id)
+        typing_task: asyncio.Task[None] | None = self._start_typing_indicator(context.bot, chat_id)
+
+        async def stop_typing() -> None:
+            nonlocal typing_task
+            if typing_task is not None:
+                await _cancel_task(typing_task)
+                typing_task = None
+
         try:
             async for event in self.bridge.stream_message(chat_id, prompt):
                 if isinstance(event, TelegramText):
@@ -425,9 +442,11 @@ class TelegramHandlers:
                     await _send_text_chunks(context.bot, chat_id, event.text, self.bridge.config.telegram.max_message_length)
                     continue
                 if isinstance(event, TelegramPermissionPrompt):
+                    await stop_typing()
                     await self._send_permission_prompt(context.bot, chat_id, event)
                     continue
                 if isinstance(event, TelegramDone):
+                    await stop_typing()
                     await _send_text_chunks(
                         context.bot,
                         chat_id,
@@ -437,10 +456,11 @@ class TelegramHandlers:
                     )
                     continue
                 if isinstance(event, TelegramError):
+                    await stop_typing()
                     await _send_text_chunks(context.bot, chat_id, event.text, self.bridge.config.telegram.max_message_length)
                     return
         finally:
-            await _cancel_task(typing_task)
+            await stop_typing()
 
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query

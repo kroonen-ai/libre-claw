@@ -228,7 +228,7 @@ def _run_telegram_bot(ctx: click.Context) -> None:
 
 
 async def _run_telegram_stack(config: LibreClawConfig, host: str | None = None, port: int | None = None) -> None:
-    server = DaemonServer(config)
+    server = DaemonServer(config, start_telegram_bridge=False)
     server_task = asyncio.create_task(server.run(host=host, port=port), name="libre-claw-daemon")
     await asyncio.sleep(0.25)
     bot_task = asyncio.create_task(TelegramBot(config).run(), name="libre-claw-telegram")

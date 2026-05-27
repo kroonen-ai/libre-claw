@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,66 @@ async def _wait_for_event(server: DaemonServer, run_id: str, event_type: str) ->
                 return event
         await asyncio.sleep(0.01)
     raise AssertionError(f"Run {run_id} did not emit {event_type}")
+
+
+async def test_daemon_autostarts_telegram_bridge_when_configured(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "telegram-token")
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = replace(config, telegram=replace(config.telegram, enabled=True, use_daemon=True))
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def fake_telegram_runner(_config: object) -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+        telegram_bot_runner=fake_telegram_runner,
+    )
+
+    await server._on_startup(None)  # type: ignore[arg-type]
+    await asyncio.wait_for(started.wait(), timeout=1)
+    health = _response_payload(await server.health(RequestStub()))  # type: ignore[arg-type]
+    await server._on_cleanup(None)  # type: ignore[arg-type]
+
+    assert health["telegram_bridge"] == "running"
+    assert cancelled.is_set()
+
+
+async def test_daemon_does_not_autostart_telegram_bridge_without_token(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = replace(config, telegram=replace(config.telegram, enabled=True, use_daemon=True))
+
+    async def fake_telegram_runner(_config: object) -> None:
+        raise AssertionError("Telegram should not start without a configured token")
+
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+        telegram_bot_runner=fake_telegram_runner,
+    )
+
+    await server._on_startup(None)  # type: ignore[arg-type]
+    health = _response_payload(await server.health(RequestStub()))  # type: ignore[arg-type]
+    await server._on_cleanup(None)  # type: ignore[arg-type]
+
+    assert health["telegram_bridge"] == "missing_token"
+    assert server._telegram_task is None
 
 
 async def test_daemon_starts_background_run_and_persists_events(monkeypatch, tmp_path: Path) -> None:

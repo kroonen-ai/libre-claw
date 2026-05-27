@@ -1042,6 +1042,13 @@ allowed_user_ids = [123456789]
 The bot token is read from the secure key store or `TELEGRAM_BOT_TOKEN`; it is
 not stored in TOML.
 
+When `[telegram].enabled = true`, `[telegram].use_daemon = true`, and a token is
+available from the secure store or environment, `libre-claw daemon` supervises
+the Telegram bridge automatically. `libre-claw telegram up` still works as the
+explicit two-process convenience command and avoids starting a duplicate bridge.
+Typing indicators are cancelled when a run completes, errors, or blocks on a
+permission prompt.
+
 ## Configuration
 
 Bundled defaults:

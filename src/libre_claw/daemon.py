@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 import httpx
+import structlog
 from aiohttp import web
 
 from libre_claw.config import GeneralConfig, LibreClawConfig
@@ -61,7 +62,9 @@ from libre_claw.web import dashboard_html
 ProviderFactory = Callable[[LibreClawConfig], LLMProvider]
 RegistryFactory = Callable[[LibreClawConfig, MemoryStore], ToolRegistry]
 TelegramSender = Callable[[LibreClawConfig, int, str], Awaitable[None]]
+TelegramBotRunner = Callable[[LibreClawConfig], Awaitable[None]]
 RunKind = Literal["chat", "goal"]
+LOGGER = structlog.get_logger(__name__)
 TELEGRAM_DAEMON_PROMPT_EXTRA = (
     "Telegram output policy: keep mobile replies compact. Do not narrate intermediate "
     "tool steps such as 'let me fetch' or 'now I will check'. Use tools silently and "
@@ -87,17 +90,22 @@ class DaemonServer:
         provider_factory: ProviderFactory = create_provider,
         registry_factory: RegistryFactory = create_builtin_registry,
         telegram_sender: TelegramSender | None = None,
+        telegram_bot_runner: TelegramBotRunner | None = None,
+        start_telegram_bridge: bool = True,
     ) -> None:
         self.config = config
         self.run_store = run_store or RunStore()
         self.provider_factory = provider_factory
         self.registry_factory = registry_factory
         self.telegram_sender = telegram_sender or _send_telegram_message
+        self.telegram_bot_runner = telegram_bot_runner or _run_telegram_bot_bridge
+        self.start_telegram_bridge = start_telegram_bridge
         self.memory_store = MemoryStore()
         self.automation_store = AutomationStore(config.automations.root)
         self.active_runs: dict[str, ActiveRun] = {}
         self._app: web.Application | None = None
         self._automation_task: asyncio.Task[None] | None = None
+        self._telegram_task: asyncio.Task[None] | None = None
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -143,18 +151,66 @@ class DaemonServer:
         await self.memory_store.initialize()
         if self.config.automations.enabled:
             self._automation_task = asyncio.create_task(self._automation_loop())
+        if self._should_start_telegram_bridge():
+            self._telegram_task = asyncio.create_task(
+                self._run_telegram_bridge_supervised(),
+                name="libre-claw-telegram",
+            )
 
     async def _on_cleanup(self, _app: web.Application) -> None:
         if self._automation_task is not None and not self._automation_task.done():
             self._automation_task.cancel()
+        if self._telegram_task is not None and not self._telegram_task.done():
+            self._telegram_task.cancel()
         for active in list(self.active_runs.values()):
             if not active.task.done():
                 active.task.cancel()
         tasks = [active.task for active in self.active_runs.values()]
         if self._automation_task is not None:
             tasks.append(self._automation_task)
+        if self._telegram_task is not None:
+            tasks.append(self._telegram_task)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _should_start_telegram_bridge(self) -> bool:
+        if not self.start_telegram_bridge:
+            return False
+        if not self.config.telegram.enabled or not self.config.telegram.use_daemon:
+            return False
+        if not _telegram_token_available(self.config):
+            LOGGER.warning("telegram_bridge_not_started", reason="missing_token")
+            return False
+        return True
+
+    def _telegram_bridge_status(self) -> str:
+        if not self.config.telegram.enabled or not self.config.telegram.use_daemon:
+            return "disabled"
+        if not self.start_telegram_bridge:
+            return "external"
+        if not _telegram_token_available(self.config):
+            return "missing_token"
+        if self._telegram_task is None:
+            return "stopped"
+        if self._telegram_task.cancelled():
+            return "stopped"
+        if self._telegram_task.done():
+            return "failed" if self._telegram_task.exception() is not None else "stopped"
+        return "running"
+
+    async def _run_telegram_bridge_supervised(self) -> None:
+        delay = 1.0
+        while True:
+            try:
+                LOGGER.info("telegram_bridge_starting")
+                await self.telegram_bot_runner(self.config)
+                LOGGER.warning("telegram_bridge_stopped")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOGGER.warning("telegram_bridge_failed", error=str(exc))
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 30.0)
 
     async def health(self, _request: web.Request) -> web.Response:
         return web.json_response(
@@ -163,6 +219,7 @@ class DaemonServer:
                 "active_runs": len(self.active_runs),
                 "host": self.config.daemon.host,
                 "port": self.config.daemon.port,
+                "telegram_bridge": self._telegram_bridge_status(),
             }
         )
 
@@ -814,6 +871,23 @@ class DaemonClient:
 
 def daemon_base_url(config: LibreClawConfig, *, host: str | None = None, port: int | None = None) -> str:
     return f"http://{host or config.daemon.host}:{port or config.daemon.port}"
+
+
+async def _run_telegram_bot_bridge(config: LibreClawConfig) -> None:
+    # Local import avoids a module-level cycle: telegram.bot imports DaemonClient
+    # from this module so Telegram can connect back to the daemon API.
+    from libre_claw.telegram.bot import TelegramBot
+
+    await TelegramBot(config).run()
+
+
+def _telegram_token_available(config: LibreClawConfig) -> bool:
+    try:
+        lookup = ApiKeyStore.from_config(config.auth).get_api_key("telegram", config.telegram.bot_token_env)
+    except Exception as exc:
+        LOGGER.warning("telegram_token_lookup_failed", error=str(exc))
+        return False
+    return bool(lookup.value)
 
 
 def _surface_prompt_extra(existing: str, surface: str) -> str:

@@ -138,6 +138,9 @@ First shippable Libre Claw release from Kroonen AI Inc.
 - User-friendly Telegram setup with `libre-claw telegram setup`, secure token
   storage, `libre-claw telegram status`, and `libre-claw telegram up` to run
   the bot plus local daemon together.
+- `libre-claw daemon` now starts and supervises the Telegram bridge whenever
+  Telegram is enabled, daemon mode is on, and a bot token is present. Telegram
+  typing indicators stop cleanly when runs finish, fail, or wait for approval.
 - Secure key storage through environment variables, OS keyring, or encrypted
   local fallback. API keys are not stored in TOML.
 - OAuth 2.0 PKCE and JWT scaffolding for a future dashboard.
