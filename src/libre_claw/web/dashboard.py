@@ -153,12 +153,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
       width: 34px;
       height: 34px;
       border-radius: 7px;
-      background: linear-gradient(135deg, var(--accent), var(--purple));
-      display: grid;
-      place-items: center;
-      font-size: 12px;
-      font-weight: 900;
-      box-shadow: 0 0 24px var(--accent-soft);
+      display: block;
+      box-shadow: 0 0 0 1px var(--line), 0 0 24px var(--accent-soft);
     }
     .top-actions {
       display: flex;
@@ -366,7 +362,36 @@ _DASHBOARD_HTML = r"""<!doctype html>
   <div class="app">
     <header class="topbar">
       <div class="brand">
-        <div class="logo">LC</div>
+        <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" aria-hidden="true">
+          <defs>
+            <filter id="dashboard-logo-glow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="12" result="blur"/>
+              <feMerge>
+                <feMergeNode in="blur"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+          </defs>
+          <rect width="512" height="512" rx="44" fill="#050508"/>
+          <g opacity="0.1" filter="url(#dashboard-logo-glow)">
+            <path d="M 55,65 C 90,180 140,310 205,450" stroke="#0070F3" stroke-width="70" fill="none" stroke-linecap="round"/>
+            <path d="M 175,30 C 215,160 270,310 340,470" stroke="#0070F3" stroke-width="80" fill="none" stroke-linecap="round"/>
+            <path d="M 310,65 C 345,180 390,310 445,445" stroke="#0070F3" stroke-width="70" fill="none" stroke-linecap="round"/>
+          </g>
+          <path d="M 58,58 C 48,62 50,75 58,90 C 85,165 120,265 160,355 C 180,400 195,435 200,455 C 204,468 210,470 214,466 C 218,460 216,448 210,430 C 198,395 175,340 148,270 C 115,180 82,100 66,62 C 62,52 58,54 58,58 Z" fill="#0070F3"/>
+          <path d="M 182,24 C 170,26 170,42 180,64 C 215,155 260,275 305,380 C 325,428 338,462 342,482 C 345,496 352,498 358,494 C 364,488 362,474 356,452 C 344,412 318,348 284,265 C 242,162 200,72 188,38 C 184,26 180,22 182,24 Z" fill="#0070F3"/>
+          <path d="M 316,58 C 306,62 308,76 316,94 C 340,162 370,258 402,345 C 420,390 432,425 436,445 C 440,458 446,460 450,456 C 454,450 452,438 446,420 C 435,388 414,335 390,268 C 358,180 330,100 320,64 C 318,54 314,54 316,58 Z" fill="#0070F3"/>
+          <path d="M 58,58 C 48,62 50,75 58,90 C 72,125 88,168 105,215 L 100,208 C 84,164 68,118 56,85 C 50,72 48,62 58,58 Z" fill="#5CB8FF" opacity="0.45"/>
+          <path d="M 182,24 C 170,26 170,42 180,64 C 196,108 216,165 238,228 L 232,220 C 212,160 192,102 178,58 C 170,40 170,26 182,24 Z" fill="#5CB8FF" opacity="0.45"/>
+          <path d="M 316,58 C 306,62 308,76 316,94 C 328,125 342,165 358,212 L 354,206 C 338,162 324,120 314,88 C 308,74 306,62 316,58 Z" fill="#5CB8FF" opacity="0.45"/>
+          <path d="M 200,455 C 195,435 180,400 160,355 C 152,335 144,316 136,298 L 140,304 C 148,322 156,340 164,360 C 182,404 198,440 206,460 C 210,470 214,466 214,466 C 210,470 204,468 200,455 Z" fill="#002D70" opacity="0.6"/>
+          <path d="M 342,482 C 338,462 325,428 305,380 C 296,358 286,336 276,316 L 280,322 C 290,342 300,364 310,386 C 328,432 342,466 348,488 C 352,498 358,494 358,494 C 352,498 345,496 342,482 Z" fill="#002D70" opacity="0.6"/>
+          <path d="M 436,445 C 432,425 420,390 402,345 C 394,325 386,306 378,288 L 382,294 C 390,312 398,332 406,350 C 422,394 436,430 442,450 C 446,460 450,456 450,456 C 446,460 440,458 436,445 Z" fill="#002D70" opacity="0.6"/>
+          <line x1="130" y1="95" x2="172" y2="210" stroke="#0070F3" stroke-width="1.5" opacity="0.15" stroke-linecap="round"/>
+          <line x1="255" y1="85" x2="295" y2="195" stroke="#0070F3" stroke-width="1.5" opacity="0.15" stroke-linecap="round"/>
+          <line x1="140" y1="310" x2="165" y2="385" stroke="#0070F3" stroke-width="1" opacity="0.1" stroke-linecap="round"/>
+          <line x1="275" y1="320" x2="298" y2="390" stroke="#0070F3" stroke-width="1" opacity="0.1" stroke-linecap="round"/>
+        </svg>
         <div>
           <div>Libre Claw Dashboard</div>
           <small>Local control plane for daemon runs, approvals, schedules, and usage.</small>
@@ -473,6 +498,21 @@ _DASHBOARD_HTML = r"""<!doctype html>
       return text.length > length ? `${text.slice(0, length - 1)}...` : text;
     }
 
+    function formatCompactNumber(value) {
+      const number = Number(value || 0);
+      if (!Number.isFinite(number)) return "0";
+      return new Intl.NumberFormat(undefined, {
+        notation: "compact",
+        maximumFractionDigits: number >= 1000000 ? 1 : 0,
+      }).format(number);
+    }
+
+    function formatExactNumber(value) {
+      const number = Number(value || 0);
+      if (!Number.isFinite(number)) return "0";
+      return new Intl.NumberFormat().format(number);
+    }
+
     function pill(stateValue) {
       const span = document.createElement("span");
       span.className = `pill ${stateValue}`;
@@ -488,7 +528,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     async function refreshUsage() {
       const usage = await request("/usage?limit=250");
-      $("usageTokens").textContent = usage.summary?.total_tokens ?? 0;
+      const totalTokens = usage.summary?.total_tokens ?? 0;
+      const tokenNode = $("usageTokens");
+      tokenNode.textContent = formatCompactNumber(totalTokens);
+      tokenNode.title = `${formatExactNumber(totalTokens)} tokens`;
     }
 
     async function refreshRuns() {
