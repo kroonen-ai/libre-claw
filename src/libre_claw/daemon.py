@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -53,8 +54,8 @@ from libre_claw.core.usage import (
     usage_report_text,
     usage_summary_payload,
 )
-from libre_claw.core.session import session_from_payload
-from libre_claw.providers import LLMProvider, Usage, create_fallback_providers, create_provider
+from libre_claw.core.session import ChatMessage, session_from_payload, text_block
+from libre_claw.providers import Done, LLMProvider, ProviderError, TextDelta, Usage, create_fallback_providers, create_provider
 from libre_claw.telegram.formatting import clean_final_answer_for_telegram, plain_text_chunks, telegram_html_chunks
 from libre_claw.tools_builtin import create_builtin_registry
 from libre_claw.web import dashboard_html
@@ -78,7 +79,17 @@ AUTOMATION_DAEMON_PROMPT_EXTRA = (
     "you need to inspect data, call tools without explaining each step. For news-watch "
     "tasks, emit only the curated bullets, or exactly 'No high-signal updates.' when "
     "nothing qualifies. If a required source or provider fails, return one concise "
-    "failure sentence instead of a partial scratch transcript."
+    "failure sentence instead of a partial scratch transcript. Keep the run bounded: "
+    "when a source returns many IDs or links, sample the relevant slice, avoid comment "
+    "or child-object fanout, and finish from the observations you already have instead "
+    "of exhausting the tool-call budget."
+)
+AUTOMATION_FINALIZER_SYSTEM = (
+    "You are Libre Claw's scheduled-run finalizer. You receive a failed or partial "
+    "automation run log and must produce the cleanest possible user-facing report from "
+    "the saved observations. Tools are disabled. Do not narrate process, do not include "
+    "raw logs, raw IDs, JSON dumps, or debug text. If the observations are insufficient, "
+    "write one concise failure sentence with the concrete reason."
 )
 DASHBOARD_ASSET_TYPES = {
     "favicon.ico": "image/vnd.microsoft.icon",
@@ -682,6 +693,10 @@ class DaemonServer:
             surface=f"automation:{automation.route}",
             hold_final_state=True,
         )
+        if state != "done":
+            finalized = await self._finalize_partial_automation(automation, run, config, state)
+            if finalized:
+                state = "done"
         try:
             await asyncio.to_thread(_write_automation_report, automation, run, report_path)
             await self.run_store.append_event(
@@ -862,6 +877,74 @@ class DaemonServer:
         except Exception:
             return
 
+    async def _finalize_partial_automation(
+        self,
+        automation: AutomationRecord,
+        run: RunRecord,
+        config: LibreClawConfig,
+        failed_state: RunState,
+    ) -> bool:
+        try:
+            events = await self.run_store.load_events(run.run_id)
+            prompt = _automation_finalizer_prompt(
+                automation,
+                run,
+                events,
+                failed_state,
+                max_context_chars=max(1, config.automations.finalizer_max_context_chars),
+            )
+            provider = self.provider_factory(config)
+            chunks: list[str] = []
+            async for event in provider.complete(
+                messages=[ChatMessage(role="user", content=[text_block(prompt)])],
+                tools=[],
+                system=AUTOMATION_FINALIZER_SYSTEM,
+                temperature=0.0,
+                max_tokens=max(1, config.automations.finalizer_max_tokens),
+            ):
+                if isinstance(event, TextDelta):
+                    chunks.append(event.text)
+                    continue
+                if isinstance(event, ProviderError):
+                    await self.run_store.append_event(
+                        run.run_id,
+                        "automation_finalizer_error",
+                        {"message": event.message},
+                    )
+                    return False
+                if isinstance(event, Done):
+                    continue
+            summary = "".join(chunks).strip()
+            if not summary:
+                return False
+            await self.run_store.finish_run(
+                run.run_id,
+                "running",
+                plan=run_plan_text(events),
+                summary=summary,
+                verification=(
+                    f"Primary scheduled run finished with state: {failed_state}. "
+                    "A tool-free scheduler finalizer produced the clean report from saved run events.\n"
+                ),
+                diff=_read_artifact(run, "diff.patch"),
+                browser=browser_artifact_text(events),
+            )
+            await self.run_store.append_event(
+                run.run_id,
+                "automation_finalized",
+                {"automation_id": automation.automation_id, "source_state": failed_state},
+            )
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.run_store.append_event(
+                run.run_id,
+                "automation_finalizer_error",
+                {"message": str(exc)},
+            )
+            return False
+
 
 class DaemonClient:
     """Small HTTP client used by future TUI and Telegram daemon adapters."""
@@ -976,6 +1059,157 @@ def _surface_prompt_extra(existing: str, surface: str) -> str:
     if surface.startswith("telegram") or surface == "automation:telegram":
         parts.append(TELEGRAM_DAEMON_PROMPT_EXTRA)
     return "\n\n".join(parts)
+
+
+def _automation_finalizer_prompt(
+    automation: AutomationRecord,
+    run: RunRecord,
+    events: list[RunEvent],
+    failed_state: RunState,
+    *,
+    max_context_chars: int,
+) -> str:
+    return (
+        "A scheduled automation stopped before producing a clean final report.\n\n"
+        f"Automation: {automation.name}\n"
+        f"Schedule: {automation.schedule}\n"
+        f"Route: {automation.route}\n"
+        f"Run: {run.run_id}\n"
+        f"Primary state: {failed_state}\n\n"
+        "Original scheduled task:\n"
+        f"{automation.prompt.strip()}\n\n"
+        "Saved run observations, bounded and redacted:\n"
+        f"{_automation_event_digest(events, max_context_chars=max_context_chars)}\n\n"
+        "Now produce the final scheduled report only. Use the requested output format when the "
+        "original task specified one. If there is enough data, do not mark the report as failed. "
+        "If there is not enough data, write one concise failure sentence with the concrete reason."
+    )
+
+
+def _automation_event_digest(events: list[RunEvent], *, max_context_chars: int) -> str:
+    sections: list[str] = []
+    errors: list[str] = []
+    assistant_text: list[str] = []
+    tool_results: list[str] = []
+    tool_counts: dict[str, int] = {}
+
+    for event in events:
+        data = event.data
+        if event.type == "error":
+            message = str(data.get("message", "")).strip()
+            if message:
+                errors.append(message)
+            continue
+        if event.type == "assistant_delta":
+            text = str(data.get("text", ""))
+            if text:
+                assistant_text.append(text)
+            continue
+        if event.type == "tool_result":
+            name = str(data.get("name", "tool"))
+            tool_counts[name] = tool_counts.get(name, 0) + 1
+            tool_results.append(_automation_tool_result_digest(data))
+
+    if tool_counts:
+        counts = ", ".join(f"{name}: {count}" for name, count in sorted(tool_counts.items()))
+        sections.append("Tool result counts:\n" + counts)
+    if errors:
+        sections.append("Errors:\n" + "\n".join(f"- {error}" for error in errors[-5:]))
+    scratch = redact_secrets("".join(assistant_text)).strip()
+    if scratch:
+        sections.append("Assistant scratch/output before stop:\n" + _compact_text(scratch, 12000))
+    if tool_results:
+        sections.append("Tool observations:\n" + _bounded_join(tool_results, max_context_chars))
+    digest = "\n\n".join(section for section in sections if section.strip()).strip()
+    return digest or "No usable run observations were saved."
+
+
+def _automation_tool_result_digest(data: Mapping[str, Any]) -> str:
+    name = str(data.get("name", "tool"))
+    arguments = data.get("arguments")
+    metadata = data.get("metadata")
+    is_error = bool(data.get("is_error"))
+    content = redact_secrets(str(data.get("content", ""))).strip()
+    lines = [f"- {name} {'error' if is_error else 'result'}"]
+    if isinstance(arguments, Mapping) and arguments:
+        lines.append("  args: " + _compact_text(json.dumps(arguments, sort_keys=True, default=str), 600))
+    if isinstance(metadata, Mapping) and metadata:
+        selected = {
+            key: metadata.get(key)
+            for key in ("method", "url", "requested_url", "status_code", "content_type", "bytes", "saved_path")
+            if metadata.get(key) not in (None, "")
+        }
+        if selected:
+            lines.append("  meta: " + _compact_text(json.dumps(selected, sort_keys=True, default=str), 600))
+    if content:
+        lines.append("  content: " + _compact_text(content, 1600).replace("\n", "\n  "))
+    return "\n".join(lines)
+
+
+def _bounded_join(items: list[str], max_chars: int) -> str:
+    selected: list[str] = []
+    used = 0
+    omitted = 0
+    for item in items:
+        item = item.strip()
+        if not item:
+            continue
+        cost = len(item) + 2
+        if selected and used + cost > max_chars:
+            omitted += 1
+            continue
+        if not selected and cost > max_chars:
+            selected.append(_compact_text(item, max_chars))
+            used = max_chars
+            continue
+        selected.append(item)
+        used += cost
+    if omitted:
+        selected.append(f"... {omitted} more tool observations omitted from finalizer context ...")
+    return "\n\n".join(selected)
+
+
+def _automation_failure_summary(run: RunRecord) -> str:
+    errors = _run_error_messages(run)
+    if not errors:
+        return (
+            "Run failed before Libre Claw produced a final clean report. "
+            "Partial scratch output and tool events were saved locally for debugging."
+        )
+    return (
+        f"Run failed before Libre Claw produced a final clean report: {errors[-1]}\n\n"
+        "Partial scratch output and tool events were saved locally for debugging."
+    )
+
+
+def _run_error_messages(run: RunRecord) -> list[str]:
+    events_path = run.path / "events.jsonl"
+    try:
+        lines = events_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    errors: list[str] = []
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or payload.get("type") != "error":
+            continue
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            continue
+        message = str(data.get("message", "")).strip()
+        if message:
+            errors.append(message)
+    return errors
+
+
+def _compact_text(text: str, limit: int) -> str:
+    cleaned = text.strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 40)].rstrip() + f"\n... truncated {len(cleaned) - limit} characters ..."
 
 
 def _reject_working_directory_override(config: LibreClawConfig, payload: Mapping[str, Any]) -> None:
@@ -1184,10 +1418,7 @@ def _automation_telegram_message(
     state: str,
 ) -> str:
     if state != "done":
-        summary = (
-            "Run failed before Libre Claw produced a final clean report. "
-            "Partial scratch output and tool events were saved locally for debugging."
-        )
+        summary = _automation_failure_summary(run)
     else:
         summary = _read_artifact(run, "summary.md").strip()
         if not summary:

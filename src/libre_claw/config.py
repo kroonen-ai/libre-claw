@@ -148,6 +148,8 @@ class AutomationsConfig:
     root: Path
     poll_interval: float
     max_due_per_tick: int
+    finalizer_max_tokens: int
+    finalizer_max_context_chars: int
 
 
 @dataclass(frozen=True)
@@ -536,6 +538,8 @@ def _load_default_config() -> ConfigTable:
             "root": "~/.libre-claw/automations",
             "poll_interval": 30.0,
             "max_due_per_tick": 5,
+            "finalizer_max_tokens": 3000,
+            "finalizer_max_context_chars": 70000,
         },
         "browser": {
             "allowed_domains": [],
@@ -793,6 +797,8 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             root=_path(automations, "root"),
             poll_interval=_float(automations, "poll_interval"),
             max_due_per_tick=_int(automations, "max_due_per_tick"),
+            finalizer_max_tokens=_int(automations, "finalizer_max_tokens"),
+            finalizer_max_context_chars=_int(automations, "finalizer_max_context_chars"),
         ),
         browser=BrowserConfig(
             allowed_domains=tuple(_list(browser, "allowed_domains", str)),

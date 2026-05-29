@@ -162,6 +162,8 @@ enabled = true
 root = "~/.libre-claw/automations"
 poll_interval = 30.0
 max_due_per_tick = 5
+finalizer_max_tokens = 3000
+finalizer_max_context_chars = 70000
 
 [browser]
 allowed_domains = [] # empty allows any http(s) host not in denied_domains

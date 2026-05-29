@@ -62,6 +62,8 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.automations.root == tmp_path / ".libre-claw" / "automations"
     assert config.automations.poll_interval == 30.0
     assert config.automations.max_due_per_tick == 5
+    assert config.automations.finalizer_max_tokens == 3000
+    assert config.automations.finalizer_max_context_chars == 70000
     assert config.browser.allowed_domains == ()
     assert config.browser.denied_domains == ()
     assert config.browser.profile_dir == tmp_path / ".libre-claw" / "browser" / "profiles"

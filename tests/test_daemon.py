@@ -18,7 +18,7 @@ from libre_claw.core.runs import RunStore
 from libre_claw.core.session import ChatMessage
 from libre_claw.core.tools import BaseTool, ToolContext, ToolRegistry, ToolResult
 from libre_claw.daemon import DaemonClient, DaemonServer, _automation_telegram_message
-from libre_claw.providers.base import Done, LLMProvider, StreamEvent, TextDelta, ToolCallReady, ToolSchema, Usage
+from libre_claw.providers.base import Done, LLMProvider, ProviderError, StreamEvent, TextDelta, ToolCallReady, ToolSchema, Usage
 
 
 class RequestStub:
@@ -44,6 +44,7 @@ class ScriptedProvider(LLMProvider):
         self.responses = responses
         self.system_prompts: list[str | None] = []
         self.message_batches: list[list[ChatMessage]] = []
+        self.max_tokens_values: list[int | None] = []
 
     async def complete(
         self,
@@ -55,7 +56,8 @@ class ScriptedProvider(LLMProvider):
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
         self.message_batches.append(list(messages))
-        del tools, stream, temperature, max_tokens
+        self.max_tokens_values.append(max_tokens)
+        del tools, stream, temperature
         self.system_prompts.append(system)
         for event in self.responses.pop(0):
             yield event
@@ -487,9 +489,10 @@ async def test_daemon_automation_api_crud(monkeypatch, tmp_path: Path) -> None:
 async def test_daemon_tick_runs_due_automation_and_writes_report(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
+    config = load_config()
     provider = ScriptedProvider([[TextDelta("scheduled done"), Done(Usage(input_tokens=2, output_tokens=3))]])
     server = DaemonServer(
-        load_config(),
+        config,
         run_store=RunStore(tmp_path / "runs"),
         provider_factory=lambda _config: provider,
         registry_factory=lambda _config, _memory: ToolRegistry(),
@@ -500,8 +503,8 @@ async def test_daemon_tick_runs_due_automation_and_writes_report(monkeypatch, tm
         prompt="Run scheduled work",
         schedule="every 1 minutes",
         route="report",
-        provider="openrouter",
-        model="openrouter/auto",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
     )
     past_payload = automation.path.read_text(encoding="utf-8").replace(
         automation.next_run_at,
@@ -527,6 +530,7 @@ async def test_daemon_tick_runs_due_automation_and_writes_report(monkeypatch, tm
 async def test_daemon_tick_delivers_telegram_automation_report(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
+    config = load_config()
     sent: list[tuple[int, str]] = []
 
     async def fake_telegram_sender(_config: object, chat_id: int, text: str) -> None:
@@ -534,7 +538,7 @@ async def test_daemon_tick_delivers_telegram_automation_report(monkeypatch, tmp_
 
     provider = ScriptedProvider([[TextDelta("scheduled done"), Done(Usage(input_tokens=2, output_tokens=3))]])
     server = DaemonServer(
-        load_config(),
+        config,
         run_store=RunStore(tmp_path / "runs"),
         provider_factory=lambda _config: provider,
         registry_factory=lambda _config, _memory: ToolRegistry(),
@@ -546,8 +550,8 @@ async def test_daemon_tick_delivers_telegram_automation_report(monkeypatch, tmp_
         prompt="Run scheduled work",
         schedule="every 1 minutes",
         route="telegram",
-        provider="openrouter",
-        model="openrouter/auto",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
         telegram_chat_id=42,
     )
     past_payload = automation.path.read_text(encoding="utf-8").replace(
@@ -572,13 +576,59 @@ async def test_daemon_tick_delivers_telegram_automation_report(monkeypatch, tmp_
     assert any(event.type == "automation_telegram_delivered" for event in events)
 
 
+async def test_daemon_automation_finalizer_recovers_partial_failed_run(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    tool_limit = config.agent.max_tool_calls_per_turn
+    provider = ScriptedProvider(
+        [
+            [ProviderError(f"Stopped after exceeding {tool_limit} tool calls in one turn.")],
+            [TextDelta("Clean scheduled report from saved observations."), Done()],
+        ]
+    )
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    server.automation_store = AutomationStore(tmp_path / "automations")
+    automation = await server.automation_store.create(
+        name="Research watch",
+        prompt="Fetch sources and produce a clean final report.",
+        schedule="every 1 minutes",
+        route="report",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
+    )
+    past_payload = automation.path.read_text(encoding="utf-8").replace(
+        automation.next_run_at,
+        "2000-01-01T00:00:00+00:00",
+    )
+    automation.path.write_text(past_payload, encoding="utf-8")
+
+    await server._tick_automations()
+    run = (await server.run_store.list_runs(limit=1))[0]
+    await _wait_for_state(server, run.run_id, "done")
+    events = await server.run_store.load_events(run.run_id)
+
+    assert (run.path / "summary.md").read_text(encoding="utf-8") == "Clean scheduled report from saved observations."
+    assert any(event.type == "automation_finalized" for event in events)
+    assert provider.system_prompts[-1] is not None
+    assert "scheduled-run finalizer" in provider.system_prompts[-1]
+    assert provider.max_tokens_values[-1] == config.automations.finalizer_max_tokens
+
+
 async def test_daemon_failed_telegram_automation_hides_partial_scratch_summary(tmp_path: Path) -> None:
+    config = load_config()
+    tool_limit = config.agent.max_tool_calls_per_turn
     store = RunStore(tmp_path / "runs")
     run = await store.create_run(
         "Scheduled: HN watch",
         kind="chat",
-        provider="openrouter",
-        model="deepseek/deepseek-v4-flash",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
         working_directory=tmp_path,
         state="queued",
     )
@@ -591,6 +641,11 @@ async def test_daemon_failed_telegram_automation_hides_partial_scratch_summary(t
         diff="",
         browser="",
     )
+    await store.append_event(
+        run.run_id,
+        "error",
+        {"message": f"Stopped after exceeding {tool_limit} tool calls in one turn."},
+    )
     failed_run = await store.load_run(run.run_id)
     assert failed_run is not None
     automation = await AutomationStore(tmp_path / "automations").create(
@@ -598,8 +653,8 @@ async def test_daemon_failed_telegram_automation_hides_partial_scratch_summary(t
         prompt="Run scheduled work",
         schedule="every 1 minutes",
         route="telegram",
-        provider="openrouter",
-        model="openrouter/auto",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
         telegram_chat_id=42,
     )
 
@@ -607,6 +662,7 @@ async def test_daemon_failed_telegram_automation_hides_partial_scratch_summary(t
 
     assert "finished with state: failed" in message
     assert "failed before Libre Claw produced a final clean report" in message
+    assert f"Stopped after exceeding {tool_limit} tool calls" in message
     assert "Top 30 IDs" not in message
     assert "Let me batch-fetch" not in message
 
