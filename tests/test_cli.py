@@ -55,6 +55,7 @@ def test_cli_exposes_telegram_command() -> None:
     assert "daemon" in result.output
     assert "restart" in result.output
     assert "start" in result.output
+    assert "shutdown" in result.output
     assert "stop" in result.output
     assert "tui" in result.output
     assert "chat" in result.output
@@ -75,19 +76,19 @@ def test_cli_start_exposes_daemon_options() -> None:
     assert "--port" in result.output
 
 
-def test_cli_stop_reports_no_running_process(monkeypatch, tmp_path) -> None:
+def test_cli_shutdown_reports_no_running_process(monkeypatch, tmp_path) -> None:
     runner = CliRunner()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("libre_claw.cli._request_daemon_shutdown", lambda base_url: False)
 
-    result = runner.invoke(main, ["stop"])
+    result = runner.invoke(main, ["shutdown"])
 
     assert result.exit_code == 0
     assert "No running Libre Claw process found" in result.output
 
 
-def test_cli_stop_uses_recorded_pid_fallback(monkeypatch, tmp_path) -> None:
+def test_cli_shutdown_uses_recorded_pid_fallback(monkeypatch, tmp_path) -> None:
     runner = CliRunner()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -109,7 +110,7 @@ def test_cli_stop_uses_recorded_pid_fallback(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr("libre_claw.cli._kill_pid", fake_kill)
 
-    result = runner.invoke(main, ["stop"])
+    result = runner.invoke(main, ["shutdown"])
 
     assert result.exit_code == 0
     assert "Stopped Libre Claw telegram-up with pid 4242" in result.output
@@ -117,7 +118,7 @@ def test_cli_stop_uses_recorded_pid_fallback(monkeypatch, tmp_path) -> None:
     assert not state_path.exists()
 
 
-def test_cli_stop_does_not_signal_stale_reused_pid(monkeypatch, tmp_path) -> None:
+def test_cli_shutdown_does_not_signal_stale_reused_pid(monkeypatch, tmp_path) -> None:
     runner = CliRunner()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -136,11 +137,34 @@ def test_cli_stop_does_not_signal_stale_reused_pid(monkeypatch, tmp_path) -> Non
 
     monkeypatch.setattr("libre_claw.cli._kill_pid", fail_kill)
 
-    result = runner.invoke(main, ["stop"])
+    result = runner.invoke(main, ["shutdown"])
 
     assert result.exit_code == 0
     assert "Removed stale pid 4242 without signaling it" in result.output
     assert not state_path.exists()
+
+
+def test_cli_stop_cancels_latest_active_turn(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    requests: list[tuple[str, str, str]] = []
+
+    def fake_request(method: str, base_url: str, path: str, timeout: float):
+        requests.append((method, base_url, path))
+        if method == "GET":
+            return {"runs": [{"run_id": "run-1", "state": "done"}, {"run_id": "run-2", "state": "running"}]}
+        if method == "POST" and path == "/runs/run-2/cancel":
+            return {"run": {"run_id": "run-2", "state": "cancelled"}}
+        return None
+
+    monkeypatch.setattr("libre_claw.cli._request_daemon_json", fake_request)
+
+    result = runner.invoke(main, ["stop"])
+
+    assert result.exit_code == 0
+    assert "Stopped daemon turn run-2" in result.output
+    assert requests[-1] == ("POST", "http://127.0.0.1:8766", "/runs/run-2/cancel")
 
 
 def test_cli_restart_reuses_previous_process_mode(monkeypatch, tmp_path) -> None:

@@ -154,6 +154,9 @@ class FakeDaemonClient:
     async def health(self) -> dict[str, Any]:
         return {"ok": True, "active_runs": 1, "telegram_bridge": "external"}
 
+    async def shutdown(self) -> dict[str, Any]:
+        return {"ok": True, "stopping": True}
+
     async def resolve_permission(self, run_id: str, tool_call_id: str, resolution: str) -> dict[str, Any]:
         self.resolutions.append((run_id, tool_call_id, resolution))
         return {"run_id": run_id, "tool_call_id": tool_call_id, "resolution": resolution}
@@ -190,6 +193,9 @@ def test_telegram_help_text_lists_slash_commands() -> None:
     assert "/run <id> - Inspect a daemon run" in text
     assert "/status - Show token and cost usage" in text
     assert "/stop - Cancel the active generation" in text
+    assert "/shutdown - Shut down the daemon/bridge" in text
+    assert "/btw <note> - Add a side note for future turns" in text
+    assert "/steer <instruction> - Steer future agent turns" in text
     assert "Send a normal message" in text
 
 
@@ -547,6 +553,9 @@ def test_telegram_command_specs_drive_bot_menu() -> None:
     assert commands["runs"] == "List recent daemon runs"
     assert commands["run"] == "Inspect one daemon run"
     assert commands["stop"] == "Cancel active generation"
+    assert commands["shutdown"] == "Shut down Libre Claw"
+    assert commands["btw"] == "Add a side note"
+    assert commands["steer"] == "Steer future turns"
     assert "schedule" in commands
     assert commands["heartbeat"] == "Recurring check-ins"
     assert commands["memory"] == "Manage persistent memory"
@@ -568,6 +577,21 @@ async def test_telegram_daemon_commands_report_remote_state(monkeypatch, tmp_pat
     assert "[done] openrouter:deepseek/deepseek-v4-flash" in runs
     assert "Fix the thing" in runs
     assert "Artifacts: summary.md" in run
+
+
+async def test_telegram_steering_commands_store_session_summary(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    bridge = TelegramBridge(load_config(), daemon_client=FakeDaemonClient())  # type: ignore[arg-type]
+
+    btw = await bridge.add_steering_note(1, "btw", "prefer concise replies")
+    steer = await bridge.add_steering_note(1, "steer", "use the HN skill")
+
+    assert btw == "Side note saved for future turns."
+    assert steer == "Steering instruction saved for future turns."
+    summary = bridge.state_for(1).session.summary or ""
+    assert "Side note: prefer concise replies" in summary
+    assert "Steering instruction: use the HN skill" in summary
 
 
 def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monkeypatch) -> None:

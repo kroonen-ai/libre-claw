@@ -312,17 +312,29 @@ def _run_daemon_process(ctx: click.Context, *, host: str | None, port: int | Non
         click.echo("Stopped Libre Claw daemon.")
 
 
-@main.command("stop")
+@main.command("shutdown")
 @click.option("--host", help="Host interface for the local daemon API.")
 @click.option("--port", type=int, help="Port for the local daemon API.")
 @click.option("--timeout", type=float, default=10.0, show_default=True, help="Seconds to wait for shutdown.")
 @click.option("--force", is_flag=True, help="Send SIGKILL if the process does not stop after SIGTERM.")
 @click.pass_context
-def stop_command(ctx: click.Context, host: str | None, port: int | None, timeout: float, force: bool) -> None:
-    """Stop a running Libre Claw daemon or Telegram stack from another terminal."""
+def shutdown_command(ctx: click.Context, host: str | None, port: int | None, timeout: float, force: bool) -> None:
+    """Shut down a running Libre Claw daemon or Telegram stack from another terminal."""
     config = _load_context_config(ctx)
     result = _stop_lifecycle(config, host=host, port=port, timeout=timeout, force=force)
     click.echo(result.message)
+
+
+@main.command("stop")
+@click.argument("run_id", required=False)
+@click.option("--host", help="Host interface for the local daemon API.")
+@click.option("--port", type=int, help="Port for the local daemon API.")
+@click.option("--timeout", type=float, default=10.0, show_default=True, help="Seconds to wait for the daemon API.")
+@click.pass_context
+def stop_command(ctx: click.Context, run_id: str | None, host: str | None, port: int | None, timeout: float) -> None:
+    """Stop the active daemon turn without shutting down Libre Claw."""
+    config = _load_context_config(ctx)
+    click.echo(_stop_active_turn(config, run_id=run_id, host=host, port=port, timeout=timeout))
 
 
 @main.command("restart")
@@ -456,9 +468,7 @@ def _stop_lifecycle(
     state = _read_process_state()
     pid = _state_pid(state)
     mode = state.get("mode") if isinstance(state.get("mode"), str) else None
-    configured_url = daemon_base_url(config, host=host, port=port)
-    state_url = state.get("base_url") if isinstance(state.get("base_url"), str) else None
-    target_urls = _unique_urls([configured_url if host or port else state_url, configured_url])
+    target_urls = _lifecycle_target_urls(config, host=host, port=port)
 
     for base_url in target_urls:
         if _request_daemon_shutdown(base_url):
@@ -498,6 +508,66 @@ def _stop_lifecycle(
         return ProcessStopResult(False, f"Sent SIGTERM to pid {pid}, but it is still running. Retry with --force.", pid, mode)
 
     return ProcessStopResult(False, "No running Libre Claw process found.")
+
+
+def _stop_active_turn(
+    config: LibreClawConfig,
+    *,
+    run_id: str | None,
+    host: str | None,
+    port: int | None,
+    timeout: float,
+) -> str:
+    base_urls = _lifecycle_target_urls(config, host=host, port=port)
+    if run_id:
+        for base_url in base_urls:
+            if _cancel_daemon_run(base_url, run_id, timeout=timeout):
+                return f"Stopped daemon turn {run_id}."
+        return f"Could not stop daemon turn {run_id}. If you meant to stop Libre Claw itself, use `libre-claw shutdown`."
+
+    for base_url in base_urls:
+        payload = _request_daemon_json("GET", base_url, "/runs?limit=25", timeout=timeout)
+        runs = payload.get("runs") if payload else None
+        if not isinstance(runs, list):
+            continue
+        active = _first_active_run(runs)
+        if active is None:
+            continue
+        active_id = str(active.get("run_id", ""))
+        if active_id and _cancel_daemon_run(base_url, active_id, timeout=timeout):
+            return f"Stopped daemon turn {active_id}."
+    return "No active daemon turn found. If you meant to stop Libre Claw itself, use `libre-claw shutdown`."
+
+
+def _first_active_run(runs: list[object]) -> dict[str, Any] | None:
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        if str(run.get("state", "")).lower() in {"queued", "running", "blocked"}:
+            return run
+    return None
+
+
+def _cancel_daemon_run(base_url: str, run_id: str, *, timeout: float) -> bool:
+    payload = _request_daemon_json("POST", base_url, f"/runs/{run_id}/cancel", timeout=timeout)
+    return payload is not None
+
+
+def _request_daemon_json(method: str, base_url: str, path: str, *, timeout: float) -> dict[str, Any] | None:
+    try:
+        response = httpx.request(method, f"{_client_base_url(base_url)}{path}", timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _lifecycle_target_urls(config: LibreClawConfig, *, host: str | None, port: int | None) -> list[str]:
+    configured_url = daemon_base_url(config, host=host, port=port)
+    state = _read_process_state()
+    state_url = state.get("base_url") if isinstance(state.get("base_url"), str) else None
+    return _unique_urls([configured_url if host or port else state_url, configured_url])
 
 
 def _unique_urls(values: list[str | None]) -> list[str]:

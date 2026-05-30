@@ -23,8 +23,10 @@ Initial shippable Libre Claw release.
 - Local background daemon API with `libre-claw start` / `libre-claw daemon`,
   daemon-owned active runs, event polling, cancellation, and permission
   approval endpoints.
-- Process lifecycle commands with `libre-claw stop` and `libre-claw restart`
-  for stopping or restarting the daemon/Telegram stack from another terminal.
+- Process lifecycle commands with `libre-claw shutdown` and
+  `libre-claw restart` for shutting down or restarting the daemon/Telegram
+  stack from another terminal. `libre-claw stop` now cancels the active daemon
+  turn without stopping Libre Claw.
 - Local web dashboard served by the daemon at `/dashboard` for starting runs,
   reviewing timelines, approving blocked tools, managing schedules, and checking
   usage.
@@ -35,6 +37,8 @@ Initial shippable Libre Claw release.
   durable daemon run.
 - Telegram slash command menu now exposes daemon-aware remote commands for
   usage, run history, run inspection, daemon health, and session restart.
+- TUI and Telegram support `/btw` and `/steer` for adding steering notes to
+  future agent turns without starting a new run.
 - Scheduled automations with `route = "telegram"` now deliver the completed
   report back to the stored Telegram chat after each daemon run.
 - Daemon run requests reject per-request `working_directory` overrides; the

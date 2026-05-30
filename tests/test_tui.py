@@ -143,6 +143,8 @@ def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
     assert app._palette_matches("memory")[0].name == "/memory"
     assert app._palette_matches("telegram")[0].name == "/telegram"
     assert app._slash_suggestion_matches("/")[0].name == "/help"
+    assert app._slash_suggestion_matches("/bt")[0].name == "/btw"
+    assert app._slash_suggestion_matches("/ste")[0].name == "/steer"
     assert [command.name for command in app._slash_suggestion_matches("/m")] == ["/model", "/memory"]
     assert app._slash_suggestion_matches("/g")[0].name == "/goal"
     assert app._slash_suggestion_matches("/memory ")[0].name == "/memory status"
@@ -840,6 +842,23 @@ async def test_compact_status_and_force_keep(monkeypatch, tmp_path: Path) -> Non
     assert app.session.summary is not None
     assert any("Context:" in entry.content for entry in app.transcript)
     assert any("Compacted context from 6 messages to 2" in entry.content for entry in app.transcript)
+
+
+async def test_tui_btw_and_steer_store_future_turn_notes(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        await app._handle_command("/btw prefer concise replies")
+        await app._handle_command("/steer use the HN skill")
+
+    summary = app.session.summary or ""
+    assert "Side note: prefer concise replies" in summary
+    assert "Steering instruction: use the HN skill" in summary
+    assert any("Side note saved" in entry.content for entry in app.transcript)
+    assert any("Steering instruction saved" in entry.content for entry in app.transcript)
 
 
 async def test_tui_memory_commands_manage_searchable_items(monkeypatch, tmp_path: Path) -> None:

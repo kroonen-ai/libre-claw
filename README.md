@@ -176,12 +176,15 @@ when Telegram is enabled and a stored bot token exists.
 Lifecycle helpers:
 
 ```bash
-libre-claw stop
+libre-claw shutdown
 libre-claw restart
 ```
 
 `restart` reuses the last recorded mode, so a running `telegram up` stack comes
 back as `telegram up`. Logs go to `~/.libre-claw/daemon.log`.
+
+Use `libre-claw stop` when you want to cancel the active daemon turn without
+shutting down Libre Claw.
 
 ### Telegram
 
@@ -215,6 +218,9 @@ Useful Telegram commands:
 /memory
 /cancel
 /stop
+/shutdown
+/btw
+/steer
 ```
 
 ![Libre Claw Telegram bot](docs/assets/libre-claw-telegram-screenshot.jpeg)

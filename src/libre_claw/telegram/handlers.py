@@ -154,6 +154,30 @@ class TelegramHandlers:
         cancelled = await self.bridge.cancel_async(update.effective_chat.id)
         await update.effective_message.reply_text("Cancelled." if cancelled else "No active generation.")
 
+    async def shutdown(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        if self.bridge.daemon_client is not None:
+            await update.effective_message.reply_text("Shutdown requested. Libre Claw will stop if daemon mode is active.")
+            await self.bridge.shutdown_command_text()
+            return
+        response = await self.bridge.shutdown_command_text()
+        await update.effective_message.reply_text(response)
+
+    async def btw(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        text = " ".join(context.args or [])
+        response = await self.bridge.add_steering_note(update.effective_chat.id, "btw", text)
+        await update.effective_message.reply_text(response)
+
+    async def steer(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        text = " ".join(context.args or [])
+        response = await self.bridge.add_steering_note(update.effective_chat.id, "steer", text)
+        await update.effective_message.reply_text(response)
+
     async def model(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
@@ -940,6 +964,9 @@ def _telegram_help_text() -> str:
             "/memory status|list|search|add|forget - Manage persistent memory",
             "/cancel - Cancel the active generation",
             "/stop - Cancel the active generation",
+            "/shutdown - Shut down the daemon/bridge",
+            "/btw <note> - Add a side note for future turns",
+            "/steer <instruction> - Steer future agent turns",
             "",
             "Send a normal message to start an agent run.",
         ]
@@ -967,6 +994,9 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("memory", "Manage persistent memory"),
         ("cancel", "Cancel active generation"),
         ("stop", "Cancel active generation"),
+        ("shutdown", "Shut down Libre Claw"),
+        ("btw", "Add a side note"),
+        ("steer", "Steer future turns"),
     )
 
 

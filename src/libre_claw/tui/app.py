@@ -77,7 +77,7 @@ from libre_claw.core.memory import (
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, pending_approvals, run_changes_text, run_plan_text
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
-from libre_claw.core.session import ChatMessage, estimate_context_tokens
+from libre_claw.core.session import ChatMessage, estimate_context_tokens, session_to_payload
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
 from libre_claw.core.soul import SoulError, SoulStore
 from libre_claw.core.tools import ToolCall, ToolResult
@@ -205,6 +205,9 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/help", "/help", "Show available commands"),
     SlashCommand("/clear", "/clear", "Clear transcript and session history"),
     SlashCommand("/cancel", "/cancel", "Cancel active generation or tool execution"),
+    SlashCommand("/stop", "/stop [run_id]", "Stop the current turn without exiting Libre Claw"),
+    SlashCommand("/btw", "/btw <note>", "Add a side note for future turns"),
+    SlashCommand("/steer", "/steer <instruction>", "Steer future agent turns"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/usage", "/usage openrouter|attribution|presets", "Show provider usage analytics"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
@@ -860,11 +863,17 @@ class LibreClawApp(App[None]):
         if command == "/clear":
             self._clear_transcript()
             return
-        if command == "/cancel":
+        if command in {"/cancel", "/stop"}:
             if argument:
                 await self._cancel_run_command(argument)
             else:
                 self._cancel_active_generation()
+            return
+        if command == "/btw":
+            self._handle_steering_note("btw", argument)
+            return
+        if command == "/steer":
+            self._handle_steering_note("steer", argument)
             return
         if command == "/help":
             self._append_system(self._help_text())
@@ -943,6 +952,16 @@ class LibreClawApp(App[None]):
             return
 
         self._append_system(f"Unknown command: {command}")
+
+    def _handle_steering_note(self, kind: Literal["btw", "steer"], argument: str) -> None:
+        note = argument.strip()
+        if not note:
+            self._append_system(f"Usage: /{kind} <note>")
+            return
+        label = "Side note" if kind == "btw" else "Steering instruction"
+        self.session.summary = _append_session_note(self.session.summary, f"{label}: {note}")
+        self._archive_session_event_later("steering_note", {"kind": kind, "content": note})
+        self._append_system(f"{label} saved for future turns.")
 
     async def _handle_palette_input(self, query: str) -> None:
         matches = self._palette_matches(query)
@@ -1042,6 +1061,7 @@ class LibreClawApp(App[None]):
                 provider=_canonical_tui_provider(self.config.general.default_provider),
                 model=_effective_model(self.config),
                 surface="tui:daemon",
+                session=session_to_payload(self.session),
             )
             run = _object_payload(started.get("run"))
             run_id = str(run.get("run_id", ""))
@@ -3439,6 +3459,15 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         providers=config.providers,
         source_paths=config.source_paths,
     )
+
+
+def _append_session_note(summary: str | None, note: str, *, limit: int = 4000) -> str:
+    lines = [line for line in (summary or "").splitlines() if line.strip()]
+    lines.append("User steering: " + note.strip())
+    text = "\n".join(lines).strip()
+    if len(text) <= limit:
+        return text
+    return text[-limit:].lstrip()
 
 
 def _effective_model(config: LibreClawConfig) -> str:

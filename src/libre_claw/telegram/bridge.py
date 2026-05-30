@@ -306,6 +306,25 @@ class TelegramBridge:
             ]
         )
 
+    async def shutdown_command_text(self) -> str:
+        if self.daemon_client is None:
+            return "Daemon: not connected. Nothing to shut down from Telegram."
+        try:
+            await self.daemon_client.shutdown()
+        except Exception as exc:
+            return f"Could not shut down daemon: {exc}"
+        return "Shutdown requested. Libre Claw will stop if daemon mode is active."
+
+    async def add_steering_note(self, chat_id: int, kind: str, text: str) -> str:
+        note = text.strip()
+        if not note:
+            return f"Usage: /{kind} <note>"
+        state = self.state_for(chat_id)
+        label = "Side note" if kind == "btw" else "Steering instruction"
+        state.session.summary = _append_session_note(state.session.summary, f"{label}: {note}")
+        await self._archive_event(chat_id, "steering_note", {"kind": kind, "content": note})
+        return f"{label} saved for future turns."
+
     async def runs_command_text(self, argument: str) -> str:
         limit = _telegram_list_limit(argument, default=10, maximum=25)
         try:
@@ -876,6 +895,15 @@ async def _telegram_events_from_daemon_event(run_id: str, event: dict[str, Any])
 
 def _object_payload(value: object) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _append_session_note(summary: str | None, note: str, *, limit: int = 4000) -> str:
+    lines = [line for line in (summary or "").splitlines() if line.strip()]
+    lines.append("User steering: " + note.strip())
+    text = "\n".join(lines).strip()
+    if len(text) <= limit:
+        return text
+    return text[-limit:].lstrip()
 
 
 def _telegram_list_limit(argument: str, *, default: int, maximum: int) -> int:
