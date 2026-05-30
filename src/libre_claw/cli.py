@@ -4,11 +4,19 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, Iterator, NoReturn
 
 import click
+import httpx
 
 from libre_claw import __version__
 from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
@@ -30,9 +38,30 @@ from libre_claw.core.workspace import (
     workspace_result_text,
     workspace_status_text,
 )
-from libre_claw.daemon import DaemonServer
+from libre_claw.daemon import DaemonServer, daemon_base_url
 from libre_claw.telegram.bot import TelegramBot
 from libre_claw.tui.app import LibreClawApp
+
+
+PROCESS_STATE_NAME = "process.json"
+PROCESS_LOG_NAME = "daemon.log"
+PROCESS_MODES = {"daemon", "telegram-up", "telegram-run"}
+
+
+@dataclass(frozen=True)
+class ProcessStopResult:
+    stopped: bool
+    message: str
+    pid: int | None = None
+    mode: str | None = None
+
+
+@dataclass(frozen=True)
+class StartedProcess:
+    pid: int
+    base_url: str
+    log_path: Path
+    mode: str
 
 
 def _raise_click_error(message: str) -> NoReturn:
@@ -121,10 +150,12 @@ def telegram_up_command(ctx: click.Context, host: str | None, port: int | None) 
     """Run the local daemon and Telegram bot together."""
     config = _load_context_config(ctx)
     config = replace(config, telegram=replace(config.telegram, enabled=True, use_daemon=True))
-    click.echo(f"Starting Libre Claw daemon on http://{host or config.daemon.host}:{port or config.daemon.port}")
+    base_url = daemon_base_url(config, host=host, port=port)
+    click.echo(f"Starting Libre Claw daemon on {base_url}")
     click.echo("Starting Telegram bridge. Press Ctrl+C to stop both.")
     try:
-        asyncio.run(_run_telegram_stack(config, host=host, port=port))
+        with _registered_process("telegram-up", base_url):
+            asyncio.run(_run_telegram_stack(config, host=host, port=port))
     except RuntimeError as exc:
         _raise_click_error(str(exc))
     except KeyboardInterrupt:
@@ -222,7 +253,8 @@ def _run_telegram_bot(ctx: click.Context) -> None:
     bot = TelegramBot(config)
 
     try:
-        asyncio.run(bot.run())
+        with _registered_process("telegram-run", daemon_base_url(config)):
+            asyncio.run(bot.run())
     except RuntimeError as exc:
         _raise_click_error(str(exc))
 
@@ -234,7 +266,7 @@ async def _run_telegram_stack(config: LibreClawConfig, host: str | None = None, 
     bot_task = asyncio.create_task(TelegramBot(config).run(), name="libre-claw-telegram")
     tasks = {server_task, bot_task}
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()
         for task in pending:
@@ -255,13 +287,373 @@ def daemon_command(ctx: click.Context, host: str | None, port: int | None) -> No
     """Run the local background runner daemon."""
     config = _load_context_config(ctx)
     server = DaemonServer(config)
-    base_url = f"http://{host or config.daemon.host}:{port or config.daemon.port}"
+    base_url = daemon_base_url(config, host=host, port=port)
     click.echo(f"Libre Claw daemon listening on {base_url}")
     click.echo(f"Dashboard: {base_url}/dashboard")
     try:
-        asyncio.run(server.run(host=host, port=port))
+        with _registered_process("daemon", base_url):
+            asyncio.run(server.run(host=host, port=port))
     except RuntimeError as exc:
         _raise_click_error(str(exc))
+    except KeyboardInterrupt:
+        click.echo("Stopped Libre Claw daemon.")
+
+
+@main.command("stop")
+@click.option("--host", help="Host interface for the local daemon API.")
+@click.option("--port", type=int, help="Port for the local daemon API.")
+@click.option("--timeout", type=float, default=10.0, show_default=True, help="Seconds to wait for shutdown.")
+@click.option("--force", is_flag=True, help="Send SIGKILL if the process does not stop after SIGTERM.")
+@click.pass_context
+def stop_command(ctx: click.Context, host: str | None, port: int | None, timeout: float, force: bool) -> None:
+    """Stop a running Libre Claw daemon or Telegram stack from another terminal."""
+    config = _load_context_config(ctx)
+    result = _stop_lifecycle(config, host=host, port=port, timeout=timeout, force=force)
+    click.echo(result.message)
+
+
+@main.command("restart")
+@click.option("--host", help="Host interface for the local daemon API.")
+@click.option("--port", type=int, help="Port for the local daemon API.")
+@click.option("--timeout", type=float, default=10.0, show_default=True, help="Seconds to wait for stop/start.")
+@click.option("--force", is_flag=True, help="Force-kill a stuck previous process before restarting.")
+@click.option(
+    "--mode",
+    type=click.Choice(["auto", "daemon", "telegram-up", "telegram-run"]),
+    default="auto",
+    show_default=True,
+    help="Process to start after stopping. Auto reuses the previous process mode.",
+)
+@click.pass_context
+def restart_command(
+    ctx: click.Context,
+    host: str | None,
+    port: int | None,
+    timeout: float,
+    force: bool,
+    mode: str,
+) -> None:
+    """Restart the running Libre Claw daemon or Telegram stack in the background."""
+    config = _load_context_config(ctx)
+    state = _read_process_state()
+    selected_mode = _selected_restart_mode(mode, state)
+    stop_result = _stop_lifecycle(config, host=host, port=port, timeout=timeout, force=force)
+    if not stop_result.stopped and stop_result.pid is not None:
+        _raise_click_error(stop_result.message)
+    started = _start_background_process(ctx, config, selected_mode, host=host, port=port)
+    healthy = _wait_for_daemon_health(started.base_url, timeout=timeout) if selected_mode != "telegram-run" else True
+    if healthy:
+        click.echo(f"Restarted Libre Claw {started.mode} with pid {started.pid}.")
+    else:
+        click.echo(f"Started Libre Claw {started.mode} with pid {started.pid}, but health is not ready yet.")
+    click.echo(f"Log: {started.log_path}")
+
+
+def _runtime_dir() -> Path:
+    return Path.home() / ".libre-claw"
+
+
+def _process_state_path() -> Path:
+    return _runtime_dir() / PROCESS_STATE_NAME
+
+
+def _process_log_path() -> Path:
+    return _runtime_dir() / PROCESS_LOG_NAME
+
+
+@contextmanager
+def _registered_process(mode: str, base_url: str) -> Iterator[None]:
+    _write_process_state(mode, base_url)
+    try:
+        yield
+    finally:
+        _remove_process_state_if_current()
+
+
+def _write_process_state(mode: str, base_url: str) -> None:
+    if mode not in PROCESS_MODES:
+        raise ValueError(f"Unsupported Libre Claw process mode: {mode}")
+    path = _process_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pid": os.getpid(),
+        "mode": mode,
+        "base_url": base_url,
+        "cwd": str(Path.cwd()),
+        "argv": sys.argv,
+        "started_at": time.time(),
+    }
+    temp_path = path.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temp_path.replace(path)
+
+
+def _read_process_state() -> dict[str, Any]:
+    path = _process_state_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _remove_process_state_if_current() -> None:
+    state = _read_process_state()
+    if _state_pid(state) != os.getpid():
+        return
+    try:
+        _process_state_path().unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _state_pid(state: dict[str, Any]) -> int | None:
+    value = state.get("pid")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _selected_restart_mode(mode: str, state: dict[str, Any]) -> str:
+    if mode != "auto":
+        return mode
+    previous = state.get("mode")
+    if isinstance(previous, str) and previous in PROCESS_MODES:
+        return previous
+    return "daemon"
+
+
+def _stop_lifecycle(
+    config: LibreClawConfig,
+    *,
+    host: str | None,
+    port: int | None,
+    timeout: float,
+    force: bool,
+) -> ProcessStopResult:
+    state = _read_process_state()
+    pid = _state_pid(state)
+    mode = state.get("mode") if isinstance(state.get("mode"), str) else None
+    configured_url = daemon_base_url(config, host=host, port=port)
+    state_url = state.get("base_url") if isinstance(state.get("base_url"), str) else None
+    target_urls = _unique_urls([configured_url if host or port else state_url, configured_url])
+
+    for base_url in target_urls:
+        if _request_daemon_shutdown(base_url):
+            if pid is not None and _is_pid_running(pid) and not _wait_for_pid_exit(pid, timeout):
+                if force and _kill_pid(pid, signal.SIGKILL) and _wait_for_pid_exit(pid, timeout=2.0):
+                    _clear_process_state()
+                    return ProcessStopResult(True, f"Stopped Libre Claw {mode or 'process'} with pid {pid}.", pid, mode)
+                return ProcessStopResult(
+                    False,
+                    f"Shutdown was requested, but pid {pid} is still running. Retry with --force.",
+                    pid,
+                    mode,
+                )
+            _clear_process_state()
+            return ProcessStopResult(True, f"Stopped Libre Claw {mode or 'daemon'} at {base_url}.", pid, mode)
+
+    if pid is not None:
+        if not _is_pid_running(pid):
+            _clear_process_state()
+            return ProcessStopResult(False, f"No running Libre Claw process found. Removed stale pid {pid}.", pid, mode)
+        if not _pid_matches_process_state(pid, state):
+            _clear_process_state()
+            return ProcessStopResult(
+                False,
+                f"No running Libre Claw process found. Removed stale pid {pid} without signaling it.",
+                pid,
+                mode,
+            )
+        if not _kill_pid(pid, signal.SIGTERM):
+            return ProcessStopResult(False, f"Could not signal Libre Claw pid {pid}.", pid, mode)
+        if _wait_for_pid_exit(pid, timeout):
+            _clear_process_state()
+            return ProcessStopResult(True, f"Stopped Libre Claw {mode or 'process'} with pid {pid}.", pid, mode)
+        if force and _kill_pid(pid, signal.SIGKILL) and _wait_for_pid_exit(pid, timeout=2.0):
+            _clear_process_state()
+            return ProcessStopResult(True, f"Force-stopped Libre Claw {mode or 'process'} with pid {pid}.", pid, mode)
+        return ProcessStopResult(False, f"Sent SIGTERM to pid {pid}, but it is still running. Retry with --force.", pid, mode)
+
+    return ProcessStopResult(False, "No running Libre Claw process found.")
+
+
+def _unique_urls(values: list[str | None]) -> list[str]:
+    seen: set[str] = set()
+    urls: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        normalized = value.rstrip("/")
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        urls.append(normalized)
+    return urls
+
+
+def _request_daemon_shutdown(base_url: str) -> bool:
+    try:
+        response = httpx.post(f"{_client_base_url(base_url)}/shutdown", timeout=2.0)
+        return response.status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+def _client_base_url(base_url: str) -> str:
+    if base_url.startswith("http://0.0.0.0:"):
+        return "http://127.0.0.1:" + base_url.rsplit(":", maxsplit=1)[-1]
+    return base_url.rstrip("/")
+
+
+def _is_pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _kill_pid(pid: int, sig: signal.Signals) -> bool:
+    if pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, sig)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return True
+
+
+def _pid_matches_process_state(pid: int, state: dict[str, Any]) -> bool:
+    command = _process_command(pid)
+    if command is None:
+        return True
+    if "libre-claw" in command or "libre_claw" in command:
+        return True
+    argv = state.get("argv")
+    if isinstance(argv, list) and argv:
+        executable = Path(str(argv[0])).name
+        return bool(executable and executable in command)
+    return False
+
+
+def _process_command(pid: int) -> str | None:
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed executable and arguments.
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=1.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    command = result.stdout.strip()
+    return command or None
+
+
+def _wait_for_pid_exit(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout)
+    while time.monotonic() < deadline:
+        if not _is_pid_running(pid):
+            return True
+        time.sleep(0.1)
+    return not _is_pid_running(pid)
+
+
+def _clear_process_state() -> None:
+    try:
+        _process_state_path().unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _start_background_process(
+    ctx: click.Context,
+    config: LibreClawConfig,
+    mode: str,
+    *,
+    host: str | None,
+    port: int | None,
+) -> StartedProcess:
+    if mode not in PROCESS_MODES:
+        raise click.ClickException(f"Unsupported restart mode: {mode}")
+    command = _entry_command() + _global_cli_args(ctx)
+    if mode == "telegram-up":
+        command.extend(["telegram", "up"])
+    elif mode == "telegram-run":
+        command.extend(["telegram", "run"])
+    else:
+        command.append("daemon")
+    if mode != "telegram-run":
+        if host:
+            command.extend(["--host", host])
+        if port is not None:
+            command.extend(["--port", str(port)])
+
+    log_path = _process_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab") as log_file:
+        process = subprocess.Popen(  # noqa: S603 - command is the current Libre Claw executable.
+            command,
+            cwd=Path.cwd(),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    return StartedProcess(
+        pid=process.pid,
+        base_url=daemon_base_url(config, host=host, port=port),
+        log_path=log_path,
+        mode=mode,
+    )
+
+
+def _entry_command() -> list[str]:
+    executable = Path(sys.argv[0])
+    if executable.exists() and os.access(executable, os.X_OK):
+        return [str(executable)]
+    return [sys.executable, "-m", "libre_claw"]
+
+
+def _global_cli_args(ctx: click.Context) -> list[str]:
+    obj = ctx.obj or {}
+    args: list[str] = []
+    config_path = obj.get("config_path")
+    working_directory = obj.get("working_directory")
+    if isinstance(config_path, Path):
+        args.extend(["--config", str(config_path)])
+    if isinstance(working_directory, Path):
+        args.extend(["--working-directory", str(working_directory)])
+    return args
+
+
+def _wait_for_daemon_health(base_url: str, *, timeout: float) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout)
+    while time.monotonic() < deadline:
+        try:
+            response = httpx.get(f"{_client_base_url(base_url)}/health", timeout=1.0)
+            if response.status_code == 200:
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(0.2)
+    return False
 
 
 @main.group("workspace", invoke_without_command=True)

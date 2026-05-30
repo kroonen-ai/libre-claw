@@ -134,6 +134,7 @@ class DaemonServer:
         self._app: web.Application | None = None
         self._automation_task: asyncio.Task[None] | None = None
         self._telegram_task: asyncio.Task[None] | None = None
+        self._shutdown_event: asyncio.Event | None = None
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -143,6 +144,7 @@ class DaemonServer:
                 web.get("/dashboard", self.dashboard),
                 web.get("/assets/{name}", self.dashboard_asset),
                 web.get("/health", self.health),
+                web.post("/shutdown", self.shutdown),
                 web.get("/runs", self.list_runs),
                 web.post("/runs", self.start_run),
                 web.get("/runs/{run_id}", self.get_run),
@@ -185,14 +187,16 @@ class DaemonServer:
         )
 
     async def run(self, host: str | None = None, port: int | None = None) -> None:
+        self._shutdown_event = asyncio.Event()
         runner = web.AppRunner(self.app())
         await runner.setup()
         site = web.TCPSite(runner, host or self.config.daemon.host, port or self.config.daemon.port)
         try:
             await site.start()
-            await asyncio.Event().wait()
+            await self._shutdown_event.wait()
         finally:
             await runner.cleanup()
+            self._shutdown_event = None
 
     async def _on_startup(self, _app: web.Application) -> None:
         await self.memory_store.initialize()
@@ -269,6 +273,15 @@ class DaemonServer:
                 "telegram_bridge": self._telegram_bridge_status(),
             }
         )
+
+    async def shutdown(self, request: web.Request) -> web.Response:
+        """Stop the daemon from a local CLI command."""
+        if not _is_loopback_request(request):
+            return _json_error("Shutdown is only available from localhost.", status=403)
+        if self._shutdown_event is None:
+            return web.json_response({"ok": True, "stopping": False})
+        self._shutdown_event.set()
+        return web.json_response({"ok": True, "stopping": True})
 
     async def list_runs(self, request: web.Request) -> web.Response:
         limit = _positive_int(request.query.get("limit"), default=20, maximum=100)
@@ -1017,6 +1030,9 @@ class DaemonClient:
     async def delete_automation(self, automation_id: str) -> dict[str, Any]:
         return await self._request("DELETE", f"/automations/{automation_id}")
 
+    async def shutdown(self) -> dict[str, Any]:
+        return await self._request("POST", "/shutdown")
+
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         async with httpx.AsyncClient(
             base_url=self.base_url,
@@ -1229,6 +1245,17 @@ def _reject_working_directory_override(config: LibreClawConfig, payload: Mapping
 
 def _json_error(message: str, *, status: int = 400) -> web.Response:
     return web.json_response({"error": message}, status=status)
+
+
+def _is_loopback_request(request: web.Request) -> bool:
+    transport = getattr(request, "transport", None)
+    if transport is None:
+        return True
+    peer = transport.get_extra_info("peername")
+    if not peer:
+        return True
+    host = str(peer[0] if isinstance(peer, tuple) else peer)
+    return host in {"127.0.0.1", "::1", "localhost"} or host.startswith("::ffff:127.")
 
 
 def _positive_int(value: str | None, *, default: int, maximum: int) -> int:

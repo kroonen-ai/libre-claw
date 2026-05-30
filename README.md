@@ -172,6 +172,16 @@ The daemon owns active runs, keeps them alive after the TUI exits, exposes a
 local dashboard, supervises schedules, and can start Telegram automatically
 when Telegram is enabled and a stored bot token exists.
 
+Lifecycle helpers:
+
+```bash
+libre-claw stop
+libre-claw restart
+```
+
+`restart` reuses the last recorded mode, so a running `telegram up` stack comes
+back as `telegram up`. Logs go to `~/.libre-claw/daemon.log`.
+
 ### Telegram
 
 ```bash

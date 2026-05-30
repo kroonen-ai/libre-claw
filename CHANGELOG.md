@@ -22,6 +22,8 @@ Initial shippable Libre Claw release.
   a run finishes inside a git repository.
 - Local background daemon API with `libre-claw daemon`, daemon-owned active
   runs, event polling, cancellation, and permission approval endpoints.
+- Process lifecycle commands with `libre-claw stop` and `libre-claw restart`
+  for stopping or restarting the daemon/Telegram stack from another terminal.
 - Local web dashboard served by the daemon at `/dashboard` for starting runs,
   reviewing timelines, approving blocked tools, managing schedules, and checking
   usage.

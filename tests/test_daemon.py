@@ -225,6 +225,24 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert 'method = editingId ? "PUT" : "POST"' in response.text
 
 
+async def test_daemon_shutdown_endpoint_sets_shutdown_event(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    server._shutdown_event = asyncio.Event()
+
+    response = await server.shutdown(RequestStub())  # type: ignore[arg-type]
+    payload = _response_payload(response)
+
+    assert payload == {"ok": True, "stopping": True}
+    assert server._shutdown_event.is_set()
+
+
 async def test_daemon_serves_packaged_dashboard_logo(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

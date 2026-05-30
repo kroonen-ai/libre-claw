@@ -27,6 +27,8 @@ First shippable Libre Claw release, built by Kroonen AI.
   a run finishes inside a git repository.
 - Local background daemon API with `libre-claw daemon`, daemon-owned active
   runs, event polling, cancellation, and permission approval endpoints.
+- Process lifecycle commands with `libre-claw stop` and `libre-claw restart`
+  for stopping or restarting the daemon/Telegram stack from another terminal.
 - Local web dashboard at `http://127.0.0.1:8766/dashboard` for starting runs,
   reviewing timelines, approving blocked tools, managing schedules, and checking
   usage from the daemon.
