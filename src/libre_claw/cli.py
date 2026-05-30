@@ -293,19 +293,37 @@ def daemon_command(ctx: click.Context, host: str | None, port: int | None) -> No
 @main.command("start")
 @click.option("--host", help="Host interface for the local daemon API.")
 @click.option("--port", type=int, help="Port for the local daemon API.")
+@click.option("-d", "--detach", is_flag=True, help="Start the daemon in the background and return immediately.")
 @click.pass_context
-def start_command(ctx: click.Context, host: str | None, port: int | None) -> None:
+def start_command(ctx: click.Context, host: str | None, port: int | None, detach: bool) -> None:
     """Start the local background runner daemon."""
-    _run_daemon_process(ctx, host=host, port=port)
+    _run_daemon_process(ctx, host=host, port=port, detach=detach)
 
 
-def _run_daemon_process(ctx: click.Context, *, host: str | None, port: int | None) -> None:
+def _run_daemon_process(
+    ctx: click.Context,
+    *,
+    host: str | None,
+    port: int | None,
+    detach: bool = False,
+) -> None:
     config = _load_context_config(ctx)
     base_url = daemon_base_url(config, host=host, port=port)
     running_url = _running_daemon_url(config, host=host, port=port)
     if running_url is not None:
         click.echo(f"Libre Claw daemon is already running at {running_url}")
         click.echo(f"Dashboard: {running_url}/dashboard")
+        return
+
+    if detach:
+        started = _start_background_process(ctx, config, "daemon", host=host, port=port)
+        healthy = _wait_for_daemon_health(started.base_url, timeout=10.0)
+        if healthy:
+            click.echo(f"Started Libre Claw daemon with pid {started.pid}.")
+        else:
+            click.echo(f"Started Libre Claw daemon with pid {started.pid}, but health is not ready yet.")
+        click.echo(f"Dashboard: {started.base_url}/dashboard")
+        click.echo(f"Log: {started.log_path}")
         return
 
     server = DaemonServer(config)
