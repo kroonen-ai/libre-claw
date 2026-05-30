@@ -259,7 +259,7 @@ def _token_value(value: Any, fallback: int) -> int:
 
 
 def _supports_temperature(model: str) -> bool:
-    # Claude Opus 4.7 and later reject non-default sampling parameters.
+    # Recent Claude Opus models reject non-default sampling parameters.
     return not (
         model.startswith("claude-opus-4-7")
         or model.startswith("claude-opus-4-8")

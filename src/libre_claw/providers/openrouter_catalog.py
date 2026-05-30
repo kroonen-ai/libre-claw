@@ -60,8 +60,8 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Qwen plus-tier coding and reasoning preset.",
     ),
     OpenRouterModelPreset(
-        "anthropic/claude-opus-4.7",
-        "Claude Opus 4.7",
+        "anthropic/claude-opus-4.8",
+        "Claude Opus 4.8",
         "Anthropic Opus through OpenRouter.",
     ),
     OpenRouterModelPreset(

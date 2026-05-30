@@ -14,18 +14,13 @@ class AnthropicModelPreset:
 
 
 # Direct Claude API model IDs from Anthropic's current model overview.
-# Provider-prefixed forms such as anthropic/claude-opus-4.7 are for gateways
+# Provider-prefixed forms such as anthropic/claude-opus-4.8 are for gateways
 # like OpenRouter/Hermes, not Anthropic's first-party Messages API.
 ANTHROPIC_MODEL_PRESETS: tuple[AnthropicModelPreset, ...] = (
     AnthropicModelPreset(
         "claude-opus-4-8",
         "Claude Opus 4.8",
         "Anthropic's most capable model for complex reasoning, long-horizon agentic coding, and high-autonomy work.",
-    ),
-    AnthropicModelPreset(
-        "claude-opus-4-7",
-        "Claude Opus 4.7",
-        "Previous Opus generation for complex reasoning and agentic coding.",
     ),
     AnthropicModelPreset(
         "claude-sonnet-4-6",
