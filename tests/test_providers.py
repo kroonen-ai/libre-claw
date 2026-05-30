@@ -10,6 +10,7 @@ import pytest
 from libre_claw.auth.api_keys import ApiKeyLookup
 from libre_claw.config import load_config
 from libre_claw.providers import ProviderConfigurationError, create_fallback_providers, create_provider
+from libre_claw.providers.factory import _fallback_model
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.codex import CodexProvider
@@ -129,6 +130,13 @@ def test_openrouter_presets_include_recommended_models() -> None:
 
     assert expected_models <= preset_names
     assert len(preset_names) == len(OPENROUTER_MODEL_PRESETS)
+
+
+def test_provider_factory_fallback_models_match_public_defaults() -> None:
+    assert _fallback_model("anthropic") == "claude-opus-4-8"
+    assert _fallback_model("openrouter") == "openrouter/auto"
+    assert _fallback_model("codex") == "gpt-5.5"
+    assert _fallback_model("ollama") == "qwen3.6:27b"
 
 
 def test_create_provider_requires_anthropic_api_key(monkeypatch, tmp_path: Path) -> None:

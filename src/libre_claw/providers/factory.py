@@ -249,7 +249,7 @@ def _fallback_model(provider_name: str) -> str:
     if provider_name == "codex":
         return "gpt-5.5"
     if provider_name == "ollama":
-        return "qwen3:32b"
+        return "qwen3.6:27b"
     return "claude-opus-4-8"
 
 
