@@ -80,9 +80,9 @@ First shippable Libre Claw release, built by Kroonen AI.
   working-directory sync, a visible `Hide` control, a left-side `Files` rail
   for restoring the sidebar, and `Ctrl+B` toggling.
 - Provider support for Anthropic, OpenAI, OpenRouter, Ollama, and Codex CLI
-  auth. Default model selections are `claude-opus-4-7`, `gpt-5.5`, and
-  `qwen3.6:27b`, with Anthropic direct API presets updated to `claude-opus-4-7`,
-  `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001`, plus expanded
+  auth. Default model selections are `claude-opus-4-8`, `gpt-5.5`, and
+  `qwen3.6:27b`, with Anthropic direct API presets updated to `claude-opus-4-8`,
+  `claude-opus-4-7`, `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001`, plus expanded
   Ollama Cloud presets covering the current cloud library aliases such as
   `kimi-k2.6:cloud`, `qwen3.5:cloud`, `gemma4:31b-cloud`,
   `deepseek-v4-flash:cloud`, and `gpt-oss:120b`.

@@ -100,6 +100,38 @@ async def test_anthropic_provider_normalizes_text_streaming_events() -> None:
     assert manager.closed is True
 
 
+async def test_anthropic_provider_omits_temperature_for_opus_4_8() -> None:
+    final_message = SimpleNamespace(
+        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+        stop_reason="end_turn",
+    )
+    stream = FakeStream(
+        events=[
+            SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(type="text_delta", text="ok")),
+            SimpleNamespace(type="message_stop"),
+        ],
+        final_message=final_message,
+    )
+    manager = FakeStreamManager(stream)
+    client = FakeClient(manager)
+    provider = AnthropicProvider(api_key="test-key", model="claude-opus-4-8", max_tokens=99, client=client)
+
+    events = [
+        event
+        async for event in provider.complete(
+            messages=[ChatMessage(role="user", content=[text_block("Hello")])],
+        )
+    ]
+
+    assert events == [
+        TextDelta("ok"),
+        Done(usage=Usage(input_tokens=1, output_tokens=1), stop_reason="end_turn"),
+    ]
+    assert client.messages.last_request is not None
+    assert client.messages.last_request["model"] == "claude-opus-4-8"
+    assert "temperature" not in client.messages.last_request
+
+
 async def test_anthropic_provider_normalizes_streamed_tool_call() -> None:
     final_message = SimpleNamespace(usage=SimpleNamespace(input_tokens=8, output_tokens=5), stop_reason="tool_use")
     stream = FakeStream(

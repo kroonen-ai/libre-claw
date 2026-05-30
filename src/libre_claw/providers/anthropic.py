@@ -85,8 +85,9 @@ class AnthropicProvider(LLMProvider):
             "model": self.model,
             "messages": self._format_messages(messages),
             "max_tokens": max_tokens or self.max_tokens,
-            "temperature": temperature,
         }
+        if _supports_temperature(self.model):
+            request["temperature"] = temperature
         if system:
             request["system"] = system
         if tools:
@@ -255,6 +256,14 @@ def _token_value(value: Any, fallback: int) -> int:
     if isinstance(value, int):
         return value
     return fallback
+
+
+def _supports_temperature(model: str) -> bool:
+    # Claude Opus 4.7 and later reject non-default sampling parameters.
+    return not (
+        model.startswith("claude-opus-4-7")
+        or model.startswith("claude-opus-4-8")
+    )
 
 
 async def _maybe_final_message(response_stream: Any) -> Any | None:

@@ -25,7 +25,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     config = load_config()
 
     assert config.general.default_provider == "anthropic"
-    assert config.general.default_model == "claude-opus-4-7"
+    assert config.general.default_model == "claude-opus-4-8"
     assert config.general.working_directory == tmp_path.resolve()
     assert config.tui.show_status_bar is True
     assert config.tui.show_file_tree is False

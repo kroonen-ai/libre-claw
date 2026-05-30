@@ -174,7 +174,7 @@ def test_replace_general_updates_model(monkeypatch, tmp_path: Path) -> None:
     updated = _replace_general(config, default_model="claude-test")
 
     assert updated.general.default_model == "claude-test"
-    assert config.general.default_model == "claude-opus-4-7"
+    assert config.general.default_model == "claude-opus-4-8"
 
 
 def test_effective_model_uses_provider_default_when_switching_to_openai(monkeypatch, tmp_path: Path) -> None:
@@ -223,7 +223,7 @@ def test_model_help_includes_enrollment_commands(monkeypatch, tmp_path: Path) ->
 
     help_text = _model_help_text(config)
 
-    assert "Current model: anthropic:claude-opus-4-7" in help_text
+    assert "Current model: anthropic:claude-opus-4-8" in help_text
     assert "Add `--global`" in help_text
     assert "libre-claw auth set-key openrouter" in help_text
     assert "/model openrouter:openrouter/auto" in help_text

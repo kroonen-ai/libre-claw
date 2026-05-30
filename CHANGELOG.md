@@ -50,7 +50,7 @@ Initial shippable Libre Claw release.
   `.libre-claw/skills/`, AgentSkills-style `SKILL.md` discovery, `/skills`
   management commands, and relevant skill injection across TUI, Telegram, and
   daemon agent runs.
-- Anthropic, OpenAI, OpenRouter, and Ollama providers. Defaults are `claude-opus-4-7`, `gpt-5.5`, and `qwen3.6:27b`; Ollama supports local daemon use, Ollama Cloud with `kimi-k2.6:cloud`, and Ollama/OpenAI-compatible endpoints.
+- Anthropic, OpenAI, OpenRouter, and Ollama providers. Defaults are `claude-opus-4-8`, `gpt-5.5`, and `qwen3.6:27b`; Ollama supports local daemon use, Ollama Cloud with `kimi-k2.6:cloud`, and Ollama/OpenAI-compatible endpoints.
 - Added OpenRouter usage accounting and recommended model presets for TUI,
   Telegram, and usage reports.
 - Cumulative session token tracking in the status bar, TUI `/cost`, and

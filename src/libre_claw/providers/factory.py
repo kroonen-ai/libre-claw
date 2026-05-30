@@ -250,7 +250,7 @@ def _fallback_model(provider_name: str) -> str:
         return "gpt-5.5"
     if provider_name == "ollama":
         return "qwen3:32b"
-    return "claude-opus-4-7"
+    return "claude-opus-4-8"
 
 
 def _is_ollama_cloud_url(base_url: str) -> bool:
