@@ -285,6 +285,19 @@ async def _run_telegram_stack(config: LibreClawConfig, host: str | None = None, 
 @click.pass_context
 def daemon_command(ctx: click.Context, host: str | None, port: int | None) -> None:
     """Run the local background runner daemon."""
+    _run_daemon_process(ctx, host=host, port=port)
+
+
+@main.command("start")
+@click.option("--host", help="Host interface for the local daemon API.")
+@click.option("--port", type=int, help="Port for the local daemon API.")
+@click.pass_context
+def start_command(ctx: click.Context, host: str | None, port: int | None) -> None:
+    """Start the local background runner daemon."""
+    _run_daemon_process(ctx, host=host, port=port)
+
+
+def _run_daemon_process(ctx: click.Context, *, host: str | None, port: int | None) -> None:
     config = _load_context_config(ctx)
     server = DaemonServer(config)
     base_url = daemon_base_url(config, host=host, port=port)

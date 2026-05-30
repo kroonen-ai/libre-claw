@@ -159,6 +159,7 @@ work.
 ### Daemon And Dashboard
 
 ```bash
+libre-claw start
 libre-claw daemon
 ```
 

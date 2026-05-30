@@ -54,6 +54,7 @@ def test_cli_exposes_telegram_command() -> None:
     assert result.exit_code == 0
     assert "daemon" in result.output
     assert "restart" in result.output
+    assert "start" in result.output
     assert "stop" in result.output
     assert "tui" in result.output
     assert "chat" in result.output
@@ -61,6 +62,17 @@ def test_cli_exposes_telegram_command() -> None:
     assert "workspace" in result.output
     assert "auth" in result.output
     assert "config" in result.output
+
+
+def test_cli_start_exposes_daemon_options() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["start", "--help"])
+
+    assert result.exit_code == 0
+    assert "Start the local background runner daemon" in result.output
+    assert "--host" in result.output
+    assert "--port" in result.output
 
 
 def test_cli_stop_reports_no_running_process(monkeypatch, tmp_path) -> None:
