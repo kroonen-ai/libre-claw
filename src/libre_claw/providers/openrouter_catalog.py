@@ -70,9 +70,9 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Anthropic Sonnet through OpenRouter.",
     ),
     OpenRouterModelPreset(
-        "openrouter/owl-alpha",
-        "OpenRouter Owl Alpha",
-        "OpenRouter experimental model preset.",
+        "minimax/minimax-m3",
+        "MiniMax M3",
+        "MiniMax M3 coding, agentic, and productivity preset through OpenRouter.",
     ),
     OpenRouterModelPreset(
         "google/gemini-3.5-flash",

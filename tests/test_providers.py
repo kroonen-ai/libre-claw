@@ -120,7 +120,7 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "qwen/qwen3.6-plus",
         "anthropic/claude-opus-4.8",
         "anthropic/claude-sonnet-4.6",
-        "openrouter/owl-alpha",
+        "minimax/minimax-m3",
         "google/gemini-3.5-flash",
         "openai/gpt-5.5",
         "nvidia/nemotron-3-super-120b-a12b:free",

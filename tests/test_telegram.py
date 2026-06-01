@@ -611,6 +611,7 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
     assert len([button for row in model_keyboard.inline_keyboard for button in row if button.callback_data.startswith("cfg:model:openrouter:")]) == len(
         TELEGRAM_MODEL_PRESETS["openrouter"]
     )
+    assert any("MiniMax M3" in button.text for row in model_keyboard.inline_keyboard for button in row)
     assert any("MiniMax M3" in button.text for row in ollama_keyboard.inline_keyboard for button in row)
     assert any(preset.model == "minimax-m3:cloud" for preset in TELEGRAM_MODEL_PRESETS["ollama"])
 
