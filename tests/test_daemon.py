@@ -17,7 +17,7 @@ from libre_claw.core.automations import AutomationStore
 from libre_claw.core.runs import RunStore
 from libre_claw.core.session import ChatMessage
 from libre_claw.core.tools import BaseTool, ToolContext, ToolRegistry, ToolResult
-from libre_claw.daemon import DaemonClient, DaemonServer, _automation_telegram_message
+from libre_claw.daemon import DaemonClient, DaemonServer, _automation_finalizer_prompt, _automation_telegram_message
 from libre_claw.providers.base import Done, LLMProvider, ProviderError, StreamEvent, TextDelta, ToolCallReady, ToolSchema, Usage
 
 
@@ -733,6 +733,65 @@ async def test_daemon_automation_finalizer_recovers_empty_provider_output(
     assert "Clean scheduled report from saved observations." in sent[0][1]
     assert "No assistant summary was produced" not in sent[0][1]
     assert any(event.type == "automation_finalized" and event.data["source_state"] == "failed" for event in events)
+
+
+async def test_daemon_automation_finalizer_prompt_prioritizes_saved_tool_observations(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    store = RunStore(tmp_path / "runs")
+    automation_store = AutomationStore(tmp_path / "automations")
+    automation = await automation_store.create(
+        name="HN watch",
+        prompt="Fetch Hacker News and produce HN Brief.",
+        schedule="every 1 minutes",
+        route="report",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
+    )
+    run = await store.create_run(
+        "Scheduled: HN watch",
+        kind="chat",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
+        working_directory=tmp_path,
+        state="failed",
+    )
+    await store.append_event(
+        run.run_id,
+        "tool_result",
+        {
+            "tool_call_id": "call_1",
+            "name": "http_request",
+            "arguments": {"url": "https://hacker-news.firebaseio.com/v0/item/1.json"},
+            "is_error": False,
+            "content": (
+                'GET https://hacker-news.firebaseio.com/v0/item/1.json\n'
+                "status: 200 OK\n\n"
+                '{"title":"ChatGPT for Google Sheets exfiltrates workbooks",'
+                '"url":"https://example.test/security","score":218,"descendants":75}'
+            ),
+            "metadata": {"status_code": 200, "url": "https://hacker-news.firebaseio.com/v0/item/1.json"},
+        },
+    )
+    await store.append_event(run.run_id, "error", {"message": "Provider returned no assistant text or tool calls."})
+
+    prompt = _automation_finalizer_prompt(
+        automation,
+        run,
+        await store.load_events(run.run_id),
+        "failed",
+        max_context_chars=8000,
+    )
+
+    assert "write the report from that data even when the primary run ended with no assistant text" in prompt
+    assert "Tool observations:" in prompt
+    assert "Run-level errors after observations:" in prompt
+    assert prompt.index("Tool observations:") < prompt.index("Run-level errors after observations:")
+    assert "ChatGPT for Google Sheets exfiltrates workbooks" in prompt
 
 
 async def test_daemon_failed_telegram_automation_hides_partial_scratch_summary(tmp_path: Path) -> None:

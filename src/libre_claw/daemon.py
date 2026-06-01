@@ -88,8 +88,11 @@ AUTOMATION_FINALIZER_SYSTEM = (
     "You are Libre Claw's scheduled-run finalizer. You receive a failed or partial "
     "automation run log and must produce the cleanest possible user-facing report from "
     "the saved observations. Tools are disabled. Do not narrate process, do not include "
-    "raw logs, raw IDs, JSON dumps, or debug text. If the observations are insufficient, "
-    "write one concise failure sentence with the concrete reason."
+    "raw logs, raw IDs, JSON dumps, or debug text. Successful saved tool observations "
+    "are authoritative; a primary-run provider error or empty assistant response is "
+    "recoverable when those observations contain enough facts for the requested report. "
+    "Only write a failure sentence when the source observations themselves are missing, "
+    "mostly errored, or too incomplete to answer."
 )
 DASHBOARD_ASSET_TYPES = {
     "favicon.ico": "image/vnd.microsoft.icon",
@@ -1120,8 +1123,10 @@ def _automation_finalizer_prompt(
         "Saved run observations, bounded and redacted:\n"
         f"{_automation_event_digest(events, max_context_chars=max_context_chars)}\n\n"
         "Now produce the final scheduled report only. Use the requested output format when the "
-        "original task specified one. If there is enough data, do not mark the report as failed. "
-        "If there is not enough data, write one concise failure sentence with the concrete reason."
+        "original task specified one. If successful tool observations include enough source data, "
+        "write the report from that data even when the primary run ended with no assistant text. "
+        "Do not call that situation a source failure. If there is not enough source data, write "
+        "one concise failure sentence with the concrete reason."
     )
 
 
@@ -1152,13 +1157,17 @@ def _automation_event_digest(events: list[RunEvent], *, max_context_chars: int) 
     if tool_counts:
         counts = ", ".join(f"{name}: {count}" for name, count in sorted(tool_counts.items()))
         sections.append("Tool result counts:\n" + counts)
-    if errors:
-        sections.append("Errors:\n" + "\n".join(f"- {error}" for error in errors[-5:]))
     scratch = redact_secrets("".join(assistant_text)).strip()
     if scratch:
         sections.append("Assistant scratch/output before stop:\n" + _compact_text(scratch, 12000))
     if tool_results:
         sections.append("Tool observations:\n" + _bounded_join(tool_results, max_context_chars))
+    if errors:
+        sections.append(
+            "Run-level errors after observations:\n"
+            + "\n".join(f"- {error}" for error in errors[-5:])
+            + "\nThese errors describe why the primary run stopped; they do not invalidate successful source observations above."
+        )
     digest = "\n\n".join(section for section in sections if section.strip()).strip()
     return digest or "No usable run observations were saved."
 
