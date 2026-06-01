@@ -7,8 +7,8 @@ from typing import Any
 
 from libre_claw.providers.openai import OpenAIProvider
 
-OPENROUTER_HTTP_REFERER = "https://libreclaw.dev"
-OPENROUTER_DOCS_URL = "https://libreclaw.dev/docs/"
+OPENROUTER_HTTP_REFERER = "https://libreclaw.sh"
+OPENROUTER_DOCS_URL = "https://libreclaw.sh/docs/"
 OPENROUTER_APP_TITLE = "Libre Claw"
 OPENROUTER_CATEGORIES = "cli-agent,personal-agent"
 OPENROUTER_RANKING_TARGETS = (

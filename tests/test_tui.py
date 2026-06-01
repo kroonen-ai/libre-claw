@@ -516,7 +516,7 @@ async def test_usage_command_reports_openrouter_run_rollups(monkeypatch, tmp_pat
     assert "OpenRouter usage" in system_text
     assert "qwen/qwen3.7-max" in system_text
     assert "tui:chat" in system_text
-    assert "https://openrouter.ai/apps?url=https://libreclaw.dev" in system_text
+    assert "https://openrouter.ai/apps?url=https://libreclaw.sh" in system_text
     assert "/model openrouter:qwen/qwen3.7-max --global" in system_text
 
 

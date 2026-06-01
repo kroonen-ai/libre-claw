@@ -493,8 +493,8 @@ api_key_env = ""
 
 ## Documentation
 
-- Website: [libreclaw.dev](https://libreclaw.dev)
-- Docs: [libreclaw.dev/docs](https://libreclaw.dev/docs/)
+- Website: [libreclaw.sh](https://libreclaw.sh)
+- Docs: [libreclaw.sh/docs](https://libreclaw.sh/docs/)
 - Getting started: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
 - Security: [SECURITY.md](SECURITY.md)
 - Roadmap: [ROADMAP.md](ROADMAP.md)

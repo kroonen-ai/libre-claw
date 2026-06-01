@@ -786,7 +786,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     <footer class="dashboard-footer">
       <span>Libre Claw dashboard</span>
       <nav aria-label="Dashboard footer links">
-        <a href="https://libreclaw.dev" target="_blank" rel="noreferrer">libreclaw.dev</a>
+        <a href="https://libreclaw.sh" target="_blank" rel="noreferrer">libreclaw.sh</a>
         <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank" rel="noreferrer">Apache-2.0</a>
         <a href="https://kroonen.ai" target="_blank" rel="noreferrer">Kroonen AI</a>
       </nav>
