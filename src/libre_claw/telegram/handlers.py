@@ -32,6 +32,7 @@ from libre_claw.telegram.formatting import (
     TELEGRAM_HARD_MESSAGE_LIMIT,
     TELEGRAM_SAFE_MESSAGE_LIMIT,
     TelegramFormattedChunk,
+    markdown_to_telegram_html,
     plain_text_chunks,
     telegram_html_chunks,
     telegram_message_limit,
@@ -389,12 +390,14 @@ class TelegramHandlers:
                                 "🧰 Working through tools. Final answer will arrive below.",
                                 self.bridge.config.telegram.max_message_length,
                             )
-                            tool_log_message = await update.effective_message.reply_text(
+                            tool_log_message = await _reply_tool_log_preview(
+                                update.effective_message,
                                 _tool_log_preview(
                                     _visible_tool_notices(tool_notices, http_started, http_done),
                                     self.bridge.config.telegram.max_message_length,
                                     total_count=_tool_activity_count(tool_notices, http_started, http_done),
                                 ),
+                                self.bridge.config.telegram.max_message_length,
                                 reply_markup=self._tool_log_expand_markup(tool_notices, http_started, http_done),
                             )
                             tool_log_last_update = time.monotonic()
@@ -406,7 +409,7 @@ class TelegramHandlers:
                                 or tool_event_count % TELEGRAM_TOOL_LOG_UPDATE_EVENT_INTERVAL == 0
                             )
                             if should_update_tool_log:
-                                await _safe_edit_text_preview(
+                                await _safe_edit_tool_log_preview(
                                     tool_log_message,
                                     _tool_log_preview(
                                         _visible_tool_notices(tool_notices, http_started, http_done),
@@ -426,7 +429,7 @@ class TelegramHandlers:
                     if isinstance(event, TelegramDone):
                         await stop_typing()
                         if tool_log_message is not None and tool_log_dirty:
-                            await _safe_edit_text_preview(
+                            await _safe_edit_tool_log_preview(
                                 tool_log_message,
                                 _tool_log_preview(
                                     _visible_tool_notices(tool_notices, http_started, http_done),
@@ -463,7 +466,7 @@ class TelegramHandlers:
                     if isinstance(event, TelegramError):
                         await stop_typing()
                         if tool_log_message is not None and tool_log_dirty:
-                            await _safe_edit_text_preview(
+                            await _safe_edit_tool_log_preview(
                                 tool_log_message,
                                 _tool_log_preview(
                                     _visible_tool_notices(tool_notices, http_started, http_done),
@@ -748,7 +751,6 @@ class TelegramHandlers:
             TelegramExpandablePayload(
                 title="Full tool activity",
                 text=_tool_log_full(visible_notices, total_count=_tool_activity_count(notices, http_started, http_done)),
-                render_html=False,
             )
         )
 
@@ -873,7 +875,7 @@ def _tool_log_preview(notices: Sequence[str], configured_limit: int, *, total_co
     sections = [f"🧰 Tool activity ({event_count})"]
     if hidden_count:
         sections.append(f"… {hidden_count} earlier events hidden")
-    sections.extend(_truncate_tool_notice(notice) for notice in visible)
+    sections.extend(_format_tool_notice_for_log(notice, body_limit=420) for notice in visible)
     preview = "\n\n".join(sections)
     if len(preview) <= limit:
         return preview
@@ -882,11 +884,11 @@ def _tool_log_preview(notices: Sequence[str], configured_limit: int, *, total_co
 
 def _tool_log_full(notices: Sequence[str], *, total_count: int) -> str:
     sections = [f"🧰 Tool activity ({total_count})"]
-    sections.extend(notices)
+    sections.extend(_format_tool_notice_for_log(notice, body_limit=None) for notice in notices)
     return "\n\n".join(sections)
 
 
-def _truncate_tool_notice(notice: str) -> str:
+def _format_tool_notice_for_log(notice: str, *, body_limit: int | None) -> str:
     lines = [line.rstrip() for line in notice.strip().splitlines() if line.strip()]
     if not lines:
         return "Tool event"
@@ -894,7 +896,8 @@ def _truncate_tool_notice(notice: str) -> str:
     body = "\n".join(lines[1:])
     if not body:
         return head
-    return f"{head}\n{_truncate(body, 420)}"
+    body_text = _truncate(body, body_limit) if body_limit is not None else body
+    return f"{head}\n```text\n{body_text}\n```"
 
 
 async def _edit_text_preview(
@@ -958,6 +961,89 @@ async def _finish_text_response(message: Any, reply_to: Any, text: str, configur
     await _edit_formatted_text(message, first)
     for chunk in chunks[1:]:
         await _reply_formatted_chunk(reply_to, chunk)
+
+
+async def _reply_tool_log_preview(
+    message: Any,
+    text: str,
+    configured_limit: int,
+    *,
+    reply_markup: Any | None = None,
+) -> Any:
+    chunk = _tool_log_formatted_chunk(text, configured_limit)
+    try:
+        return await message.reply_text(
+            chunk.text,
+            reply_markup=reply_markup,
+            parse_mode=chunk.parse_mode,
+            disable_web_page_preview=True,
+        )
+    except TypeError:
+        return await message.reply_text(_strip_html_tags(chunk.text), reply_markup=reply_markup)
+    except Exception as exc:
+        if chunk.parse_mode is not None and _is_telegram_parse_error(exc):
+            return await message.reply_text(
+                _strip_html_tags(chunk.text),
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+        if _is_telegram_error(exc, "message is too long") and len(text) > 1:
+            return await _reply_tool_log_preview(
+                message,
+                _truncate(text, configured_limit),
+                configured_limit,
+                reply_markup=reply_markup,
+            )
+        raise
+
+
+async def _safe_edit_tool_log_preview(
+    message: Any,
+    text: str,
+    configured_limit: int,
+    *,
+    reply_markup: Any | None = None,
+) -> bool:
+    chunk = _tool_log_formatted_chunk(text, configured_limit)
+    try:
+        await message.edit_text(
+            chunk.text,
+            reply_markup=reply_markup,
+            parse_mode=chunk.parse_mode,
+            disable_web_page_preview=True,
+        )
+        return True
+    except TypeError:
+        try:
+            await message.edit_text(_strip_html_tags(chunk.text), reply_markup=reply_markup)
+        except TypeError:
+            await message.edit_text(_strip_html_tags(chunk.text))
+        return True
+    except Exception as exc:
+        if _is_telegram_error(exc, "message is not modified"):
+            return True
+        if _is_telegram_retry_after(exc):
+            return False
+        if chunk.parse_mode is not None and _is_telegram_parse_error(exc):
+            await message.edit_text(
+                _strip_html_tags(chunk.text),
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+            return True
+        if _is_telegram_error(exc, "message is too long"):
+            return await _safe_edit_text_preview(message, _strip_html_tags(chunk.text), configured_limit, reply_markup=reply_markup)
+        raise
+
+
+def _tool_log_formatted_chunk(text: str, configured_limit: int) -> TelegramFormattedChunk:
+    limit = _telegram_message_limit(configured_limit)
+    source = text
+    html = markdown_to_telegram_html(source)
+    if len(html) > limit:
+        source = _truncate(source, configured_limit)
+        html = markdown_to_telegram_html(source)
+    return TelegramFormattedChunk(html, parse_mode="HTML")
 
 
 async def _reply_text_chunks(

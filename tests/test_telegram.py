@@ -38,6 +38,7 @@ from libre_claw.telegram.handlers import (
     _safe_edit_text_preview,
     _stream_preview,
     _telegram_help_text,
+    _tool_log_formatted_chunk,
     _tool_log_preview,
     _typing_indicator_loop,
     _unauthorized_text,
@@ -1336,11 +1337,14 @@ def test_telegram_tool_log_preview_keeps_latest_activity_in_one_message() -> Non
     notices = [f"🌐 GET https://example.com/{index}\nurl: https://example.com/{index}" for index in range(12)]
 
     preview = _tool_log_preview(notices, configured_limit=3900)
+    html = _tool_log_formatted_chunk(preview, configured_limit=3900)
 
     assert preview.startswith("🧰 Tool activity (12)")
     assert "4 earlier events hidden" in preview
     assert "https://example.com/11" in preview
     assert "https://example.com/0" not in preview
+    assert "```text" in preview
+    assert "<pre><code>url: https://example.com/11</code></pre>" in html.text
 
 
 def test_telegram_http_activity_is_aggregated_in_tool_log() -> None:
