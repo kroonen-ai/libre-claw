@@ -25,6 +25,7 @@ from libre_claw.telegram.bridge import (
 )
 from libre_claw.telegram.handlers import (
     TELEGRAM_MODEL_PRESETS,
+    TelegramExpandablePayload,
     TelegramHandlers,
     _cancel_task,
     _finish_text_response,
@@ -869,6 +870,84 @@ async def test_telegram_permission_callback_data_stays_under_telegram_limit(monk
         assert query.edits and query.edits[-1].startswith(edit_prefix)
 
     assert bridge.resolved == [(long_prompt_id, resolution) for _, resolution, _, _ in cases]
+
+
+async def test_telegram_expand_callback_replies_with_full_payload(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    class Bridge:
+        config = load_config()
+
+    bridge = Bridge()
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))  # type: ignore[arg-type]
+    markup = handlers._expand_reply_markup(
+        TelegramExpandablePayload(title="Full response", text="This is the full hidden text.", clean_final=True)
+    )
+    callback_data = markup.inline_keyboard[0][0].callback_data
+    assert callback_data is not None
+    assert callback_data.startswith("x:")
+    assert len(callback_data) <= 64
+
+    class User:
+        id = 123
+
+    class Message:
+        def __init__(self) -> None:
+            self.replies: list[str] = []
+
+        async def reply_text(self, text: str, **kwargs: object) -> None:
+            del kwargs
+            self.replies.append(text)
+
+    class Query:
+        data = callback_data
+        from_user = User()
+
+        def __init__(self) -> None:
+            self.message = Message()
+            self.answers: list[str] = []
+            self.markup_cleared = False
+
+        async def answer(self, text: str, show_alert: bool = False) -> None:
+            del show_alert
+            self.answers.append(text)
+
+        async def edit_message_reply_markup(self, reply_markup: object | None = None) -> None:
+            assert reply_markup is None
+            self.markup_cleared = True
+
+    class Update:
+        def __init__(self, query: Query) -> None:
+            self.callback_query = query
+
+    query = Query()
+    await handlers.callback(Update(query), object())  # type: ignore[arg-type]
+
+    assert query.answers == ["Showing full content."]
+    assert query.markup_cleared is True
+    assert query.message.replies == ["Full response\n\nThis is the full hidden text."]
+
+
+def test_telegram_tool_log_expand_markup_exposes_hidden_events(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    class Bridge:
+        config = load_config()
+
+    handlers = TelegramHandlers(Bridge(), TelegramAuth(allowed_user_ids=frozenset({123})))  # type: ignore[arg-type]
+    notices = [f"🔧 tool_{index}\noutput {index}" for index in range(12)]
+    markup = handlers._tool_log_expand_markup(notices, http_started=0, http_done=0)
+
+    assert markup is not None
+    callback_data = markup.inline_keyboard[0][0].callback_data
+    assert callback_data is not None
+    assert callback_data.startswith("x:")
+    token = callback_data.removeprefix("x:")
+    payload = handlers._expand_callback_ids[token]
+    assert "tool_0" in payload.text
+    assert "tool_11" in payload.text
 
 
 def test_telegram_bot_reads_secure_stored_token(monkeypatch, tmp_path: Path) -> None:

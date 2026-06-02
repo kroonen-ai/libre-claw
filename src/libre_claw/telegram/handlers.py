@@ -64,6 +64,14 @@ class TelegramModelPreset:
     label: str
 
 
+@dataclass(frozen=True)
+class TelegramExpandablePayload:
+    title: str
+    text: str
+    clean_final: bool = False
+    render_html: bool = True
+
+
 TELEGRAM_PROVIDER_LABELS: dict[str, str] = {
     "anthropic": "Anthropic",
     "openai": "OpenAI API",
@@ -108,6 +116,8 @@ class TelegramHandlers:
         self._heartbeat_intervals: dict[int, int] = {}
         self._permission_callback_ids: dict[str, str] = {}
         self._permission_callback_counter = 0
+        self._expand_callback_ids: dict[str, TelegramExpandablePayload] = {}
+        self._expand_callback_counter = 0
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -354,7 +364,12 @@ class TelegramHandlers:
                             continue
                         should_update = len(accumulated) % 100 == 0 or time.monotonic() - last_update >= self.bridge.config.telegram.stream_update_interval
                         if should_update:
-                            await _edit_text_preview(placeholder, accumulated, self.bridge.config.telegram.max_message_length)
+                            await self._edit_expandable_preview(
+                                placeholder,
+                                accumulated,
+                                title="Full response",
+                                clean_final=True,
+                            )
                             last_update = time.monotonic()
                         continue
                     if isinstance(event, TelegramToolNotice):
@@ -379,7 +394,8 @@ class TelegramHandlers:
                                     _visible_tool_notices(tool_notices, http_started, http_done),
                                     self.bridge.config.telegram.max_message_length,
                                     total_count=_tool_activity_count(tool_notices, http_started, http_done),
-                                )
+                                ),
+                                reply_markup=self._tool_log_expand_markup(tool_notices, http_started, http_done),
                             )
                             tool_log_last_update = time.monotonic()
                         else:
@@ -398,6 +414,7 @@ class TelegramHandlers:
                                         total_count=_tool_activity_count(tool_notices, http_started, http_done),
                                     ),
                                     self.bridge.config.telegram.max_message_length,
+                                    reply_markup=self._tool_log_expand_markup(tool_notices, http_started, http_done),
                                 )
                                 tool_log_last_update = now
                                 tool_log_dirty = False
@@ -417,6 +434,7 @@ class TelegramHandlers:
                                     total_count=_tool_activity_count(tool_notices, http_started, http_done),
                                 ),
                                 self.bridge.config.telegram.max_message_length,
+                                reply_markup=self._tool_log_expand_markup(tool_notices, http_started, http_done),
                             )
                             tool_log_dirty = False
                         if accumulated:
@@ -453,6 +471,7 @@ class TelegramHandlers:
                                     total_count=_tool_activity_count(tool_notices, http_started, http_done),
                                 ),
                                 self.bridge.config.telegram.max_message_length,
+                                reply_markup=self._tool_log_expand_markup(tool_notices, http_started, http_done),
                             )
                             tool_log_dirty = False
                         if saw_tool_notice:
@@ -575,6 +594,24 @@ class TelegramHandlers:
                     with suppress(Exception):
                         await query.edit_message_text(edit_text)
                 return
+        if data.startswith("x:"):
+            payload = self._expand_callback_ids.get(data.removeprefix("x:"))
+            if payload is None:
+                await query.answer("Expanded content expired.", show_alert=True)
+                return
+            await query.answer("Showing full content.")
+            with suppress(Exception):
+                await query.edit_message_reply_markup(reply_markup=None)
+            message = getattr(query, "message", None)
+            if message is not None:
+                await _reply_text_chunks(
+                    message,
+                    f"{payload.title}\n\n{payload.text}",
+                    self.bridge.config.telegram.max_message_length,
+                    clean_final=payload.clean_final,
+                    render_html=payload.render_html,
+                )
+            return
         if data == "cfg:cancel":
             await query.answer("Cancelled.")
             await query.edit_message_text("Model configuration cancelled.")
@@ -685,6 +722,40 @@ class TelegramHandlers:
             ]
         )
 
+    async def _edit_expandable_preview(
+        self,
+        message: Any,
+        text: str,
+        *,
+        title: str,
+        clean_final: bool = False,
+        render_html: bool = True,
+    ) -> None:
+        reply_markup = (
+            self._expand_reply_markup(
+                TelegramExpandablePayload(title=title, text=text, clean_final=clean_final, render_html=render_html)
+            )
+            if _stream_preview_is_truncated(text, self.bridge.config.telegram.max_message_length)
+            else None
+        )
+        await _edit_text_preview(message, text, self.bridge.config.telegram.max_message_length, reply_markup=reply_markup)
+
+    def _tool_log_expand_markup(self, notices: Sequence[str], http_started: int, http_done: int) -> Any | None:
+        visible_notices = _visible_tool_notices(notices, http_started, http_done)
+        if len(visible_notices) <= 8 and not any("truncated" in notice.lower() for notice in visible_notices):
+            return None
+        return self._expand_reply_markup(
+            TelegramExpandablePayload(
+                title="Full tool activity",
+                text=_tool_log_full(visible_notices, total_count=_tool_activity_count(notices, http_started, http_done)),
+                render_html=False,
+            )
+        )
+
+    def _expand_reply_markup(self, payload: TelegramExpandablePayload) -> Any:
+        token = self._register_expand_payload(payload)
+        return InlineKeyboardMarkup([[InlineKeyboardButton("Show full", callback_data=f"x:{token}")]])
+
     def _register_permission_prompt(self, prompt_id: str) -> str:
         self._permission_callback_counter += 1
         token = _base36(self._permission_callback_counter)
@@ -693,6 +764,16 @@ class TelegramHandlers:
             stale_tokens = list(self._permission_callback_ids)[:100]
             for stale_token in stale_tokens:
                 self._permission_callback_ids.pop(stale_token, None)
+        return token
+
+    def _register_expand_payload(self, payload: TelegramExpandablePayload) -> str:
+        self._expand_callback_counter += 1
+        token = _base36(self._expand_callback_counter)
+        self._expand_callback_ids[token] = payload
+        if len(self._expand_callback_ids) > 500:
+            stale_tokens = list(self._expand_callback_ids)[:100]
+            for stale_token in stale_tokens:
+                self._expand_callback_ids.pop(stale_token, None)
         return token
 
     async def _deny_unrenderable_permission(
@@ -726,6 +807,10 @@ def _stream_preview(text: str, configured_limit: int) -> str:
         return text or " "
     available = max(1, limit - len(TELEGRAM_CONTINUED_SUFFIX))
     return text[:available].rstrip() + TELEGRAM_CONTINUED_SUFFIX
+
+
+def _stream_preview_is_truncated(text: str, configured_limit: int) -> bool:
+    return len(text) > _telegram_message_limit(configured_limit)
 
 
 def _telegram_message_limit(configured_limit: int) -> int:
@@ -795,6 +880,12 @@ def _tool_log_preview(notices: Sequence[str], configured_limit: int, *, total_co
     return _truncate(preview, configured_limit)
 
 
+def _tool_log_full(notices: Sequence[str], *, total_count: int) -> str:
+    sections = [f"🧰 Tool activity ({total_count})"]
+    sections.extend(notices)
+    return "\n\n".join(sections)
+
+
 def _truncate_tool_notice(notice: str) -> str:
     lines = [line.rstrip() for line in notice.strip().splitlines() if line.strip()]
     if not lines:
@@ -806,15 +897,23 @@ def _truncate_tool_notice(notice: str) -> str:
     return f"{head}\n{_truncate(body, 420)}"
 
 
-async def _edit_text_preview(message: Any, text: str, configured_limit: int) -> None:
+async def _edit_text_preview(
+    message: Any,
+    text: str,
+    configured_limit: int,
+    *,
+    reply_markup: Any | None = None,
+) -> None:
     preview = _stream_preview(text, configured_limit)
     try:
+        await message.edit_text(preview, reply_markup=reply_markup)
+    except TypeError:
         await message.edit_text(preview)
     except Exception as exc:
         if _is_telegram_error(exc, "message is not modified"):
             return
         if _is_telegram_error(exc, "message is too long"):
-            await message.edit_text(_truncate(preview, configured_limit))
+            await message.edit_text(_truncate(preview, configured_limit), reply_markup=reply_markup)
             return
         raise
 
@@ -837,9 +936,15 @@ async def _edit_formatted_text(message: Any, chunk: TelegramFormattedChunk) -> N
         raise
 
 
-async def _safe_edit_text_preview(message: Any, text: str, configured_limit: int) -> bool:
+async def _safe_edit_text_preview(
+    message: Any,
+    text: str,
+    configured_limit: int,
+    *,
+    reply_markup: Any | None = None,
+) -> bool:
     try:
-        await _edit_text_preview(message, text, configured_limit)
+        await _edit_text_preview(message, text, configured_limit, reply_markup=reply_markup)
         return True
     except Exception as exc:
         if _is_telegram_retry_after(exc):
