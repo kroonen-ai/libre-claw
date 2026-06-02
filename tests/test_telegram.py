@@ -161,7 +161,7 @@ class FakeDaemonClient:
 
     async def update_model(self, provider: str, model: str, *, persist_global: bool = False) -> dict[str, Any]:
         self.model_updates.append((provider, model, persist_global))
-        return {"provider": provider, "model": model, "persisted_path": None}
+        return {"provider": provider, "model": model, "persisted_path": None, "automations_updated": 1 if persist_global else 0}
 
     async def resolve_permission(self, run_id: str, tool_call_id: str, resolution: str) -> dict[str, Any]:
         self.resolutions.append((run_id, tool_call_id, resolution))
@@ -715,6 +715,47 @@ async def test_telegram_model_command_syncs_daemon_runtime(monkeypatch, tmp_path
     assert update.effective_message.replies == [
         "Model set to openrouter:deepseek/deepseek-v4-pro.\n"
         "Daemon default updated for new daemon-backed runs."
+    ]
+
+
+async def test_telegram_model_global_command_syncs_daemon_and_schedules(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    daemon = FakeDaemonClient(with_permission=False)
+    bridge = TelegramBridge(config, daemon_client=daemon)  # type: ignore[arg-type]
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))
+
+    class User:
+        id = 123
+
+    class Message:
+        def __init__(self) -> None:
+            self.replies: list[str] = []
+
+        async def reply_text(self, text: str, reply_markup: object | None = None) -> None:
+            del reply_markup
+            self.replies.append(text)
+
+    class Update:
+        effective_user = User()
+
+        def __init__(self) -> None:
+            self.effective_message = Message()
+
+    class Context:
+        args = ["openrouter:xiaomi/mimo-v2.5-pro", "--global"]
+
+    update = Update()
+
+    await handlers.model(update, Context())  # type: ignore[arg-type]
+
+    persisted = tmp_path / ".libre-claw" / "config.toml"
+    assert daemon.model_updates == [("openrouter", "xiaomi/mimo-v2.5-pro", True)]
+    assert update.effective_message.replies == [
+        f"Model set to openrouter:xiaomi/mimo-v2.5-pro.\n"
+        f"Saved as global default in {persisted}.\n"
+        "Daemon default updated for new daemon-backed runs. Updated 1 scheduled automation(s)."
     ]
 
 

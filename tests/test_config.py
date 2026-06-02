@@ -256,6 +256,8 @@ def test_set_global_default_model_updates_user_config(monkeypatch, tmp_path: Pat
     config = load_config()
     assert config.general.default_provider == "openrouter"
     assert config.general.default_model == "qwen/qwen3.7-max"
+    assert config.telegram.default_provider == "openrouter"
+    assert config.telegram.default_model == "qwen/qwen3.7-max"
     assert config.providers["openrouter"]["default_model"] == "qwen/qwen3.7-max"
     assert config.tui.show_file_tree is False
 

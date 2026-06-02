@@ -271,6 +271,39 @@ async def test_daemon_updates_runtime_model(monkeypatch, tmp_path: Path) -> None
     assert server.config.providers["openrouter"]["default_model"] == "deepseek/deepseek-v4-pro"
 
 
+async def test_daemon_global_model_update_updates_scheduled_automations(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    server.automation_store = AutomationStore(tmp_path / "automations")
+    automation = await server.automation_store.create(
+        name="Hacker News watch",
+        prompt="Fetch HN",
+        schedule="hourly",
+        provider="openrouter",
+        model="minimax/minimax-m3",
+    )
+
+    response = await server.update_model(  # type: ignore[arg-type]
+        RequestStub(body={"provider": "openrouter", "model": "xiaomi/mimo-v2.5-pro", "persist_global": True})
+    )
+    payload = _response_payload(response)
+    updated = await server.automation_store.load(automation.automation_id)
+
+    assert response.status == 200
+    assert payload["provider"] == "openrouter"
+    assert payload["model"] == "xiaomi/mimo-v2.5-pro"
+    assert payload["automations_updated"] == 1
+    assert updated is not None
+    assert updated.provider == "openrouter"
+    assert updated.model == "xiaomi/mimo-v2.5-pro"
+
+
 async def test_daemon_serves_packaged_dashboard_lobster_icon(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

@@ -349,16 +349,21 @@ class DaemonServer:
             return _json_error("Field 'model' is required.")
 
         persisted_path: str | None = None
+        automations_updated = 0
         if bool(payload.get("persist_global", False)):
             try:
                 path = set_global_default_model(provider, model, config_path=global_config_path(self.config))
+                automations_updated = await self.automation_store.update_global_model(provider, model)
             except ConfigError as exc:
+                return _json_error(str(exc), status=400)
+            except AutomationError as exc:
                 return _json_error(str(exc), status=400)
             persisted_path = str(path)
 
         self.config = _config_with_model(self.config, provider, model)
         response = _model_payload(self.config)
         response["persisted_path"] = persisted_path
+        response["automations_updated"] = automations_updated
         return web.json_response(response)
 
     async def start_run(self, request: web.Request) -> web.Response:
@@ -1396,7 +1401,8 @@ def _config_with_model(config: LibreClawConfig, provider: str, model: str) -> Li
         updated["default_model"] = model
         provider_configs[provider] = updated
     general = replace(config.general, default_provider=provider, default_model=model)
-    return replace(config, general=general, providers=provider_configs)
+    telegram = replace(config.telegram, default_provider=provider, default_model=model)
+    return replace(config, general=general, telegram=telegram, providers=provider_configs)
 
 
 def _model_payload(config: LibreClawConfig) -> dict[str, Any]:

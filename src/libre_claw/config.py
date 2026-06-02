@@ -266,6 +266,10 @@ def set_global_default_model(
             "default_provider": clean_provider,
             "default_model": clean_model,
         },
+        "telegram": {
+            "default_provider": clean_provider,
+            "default_model": clean_model,
+        },
         f"providers.{clean_provider}": {
             "default_model": clean_model,
         },

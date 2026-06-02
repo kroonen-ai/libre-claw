@@ -1760,7 +1760,6 @@ class LibreClawApp(App[None]):
 
         provider, selected_model = parsed
         self.config = _replace_model_selection(self.config, provider, selected_model)
-        self._sync_daemon_model_after_selection(provider, selected_model)
         persisted_path: Path | None = None
         if persist_global:
             try:
@@ -1772,6 +1771,9 @@ class LibreClawApp(App[None]):
                 self.config = self._verified_global_model_config(provider, selected_model, persisted_path)
             except ConfigError as exc:
                 self._append_system(f"Model set for this session, but global config was not updated: {exc}")
+        self._sync_daemon_model_after_selection(provider, selected_model, persist_global=persist_global)
+        if persist_global and self.daemon_client is None:
+            self._track_run_background_task(self._update_local_scheduled_models(provider, selected_model))
         self._rebuild_agent()
         self._update_status()
         suffix = f"\nSaved as global default in {persisted_path}." if persisted_path is not None else ""
@@ -1783,18 +1785,32 @@ class LibreClawApp(App[None]):
         else:
             self._append_system(f"Model set to {provider}:{selected_model}.{suffix}")
 
-    def _sync_daemon_model_after_selection(self, provider: str, model: str) -> None:
+    def _sync_daemon_model_after_selection(self, provider: str, model: str, *, persist_global: bool = False) -> None:
         if self.daemon_client is None:
             return
-        self._track_run_background_task(self._update_daemon_model_runtime(provider, model))
+        self._track_run_background_task(self._update_daemon_model_runtime(provider, model, persist_global=persist_global))
 
-    async def _update_daemon_model_runtime(self, provider: str, model: str) -> None:
+    async def _update_daemon_model_runtime(self, provider: str, model: str, *, persist_global: bool = False) -> None:
         if self.daemon_client is None:
             return
         try:
-            await self.daemon_client.update_model(provider, model)
+            payload = await self.daemon_client.update_model(provider, model, persist_global=persist_global)
         except Exception as exc:
             self._append_system(f"Daemon model was not updated: {exc}")
+            return
+        if persist_global:
+            automations_updated = int(payload.get("automations_updated") or 0)
+            if automations_updated:
+                self._append_system(f"Updated {automations_updated} scheduled automation(s) to {provider}:{model}.")
+
+    async def _update_local_scheduled_models(self, provider: str, model: str) -> None:
+        try:
+            automations_updated = await self.automation_store.update_global_model(provider, model)
+        except AutomationError as exc:
+            self._append_system(f"Scheduled automations were not updated: {exc}")
+            return
+        if automations_updated:
+            self._append_system(f"Updated {automations_updated} scheduled automation(s) to {provider}:{model}.")
 
     def _verified_global_model_config(
         self,

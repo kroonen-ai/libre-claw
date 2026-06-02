@@ -136,6 +136,10 @@ class AutomationStore:
                 telegram_chat_id,
             )
 
+    async def update_global_model(self, provider: str, model: str) -> int:
+        async with self._lock:
+            return await asyncio.to_thread(self._update_global_model_sync, provider, model)
+
     async def delete(self, automation_id: str) -> bool:
         async with self._lock:
             return await asyncio.to_thread(self._delete_sync, automation_id)
@@ -313,6 +317,32 @@ class AutomationStore:
         )
         _write_record(record.path, updated)
         return updated
+
+    def _update_global_model_sync(self, provider: str, model: str) -> int:
+        clean_provider = "ollama" if provider.strip().lower() == "local" else provider.strip().lower()
+        clean_model = model.strip()
+        if not clean_provider:
+            raise AutomationError("Provider cannot be empty.")
+        if not clean_model:
+            raise AutomationError("Model cannot be empty.")
+        if not self.root.exists():
+            return 0
+
+        now = _iso(_now_dt())
+        updated_count = 0
+        for path in self.root.glob("*.json"):
+            record = _load_record(path)
+            if record is None:
+                continue
+            updated = _replace_record(
+                record,
+                provider=clean_provider,
+                model=clean_model,
+                updated_at=now,
+            )
+            _write_record(record.path, updated)
+            updated_count += 1
+        return updated_count
 
     def _delete_sync(self, automation_id: str) -> bool:
         if not _safe_id(automation_id):

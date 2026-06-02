@@ -118,6 +118,36 @@ async def test_automation_store_updates_editable_fields(tmp_path: Path) -> None:
     assert loaded.next_run_at != record.next_run_at
 
 
+async def test_automation_store_updates_global_model_for_all_records(tmp_path: Path) -> None:
+    store = AutomationStore(tmp_path / "automations")
+    first = await store.create(
+        name="HN watch",
+        prompt="Brief HN",
+        schedule="daily 09:00",
+        provider="openrouter",
+        model="minimax/minimax-m3",
+    )
+    second = await store.create(
+        name="Repo health",
+        prompt="Check repo",
+        schedule="hourly",
+        provider="anthropic",
+        model="claude-opus-4-8",
+    )
+
+    updated_count = await store.update_global_model("openrouter", "xiaomi/mimo-v2.5-pro")
+    loaded_first = await store.load(first.automation_id)
+    loaded_second = await store.load(second.automation_id)
+
+    assert updated_count == 2
+    assert loaded_first is not None
+    assert loaded_second is not None
+    assert loaded_first.provider == "openrouter"
+    assert loaded_first.model == "xiaomi/mimo-v2.5-pro"
+    assert loaded_second.provider == "openrouter"
+    assert loaded_second.model == "xiaomi/mimo-v2.5-pro"
+
+
 def test_automation_examples_include_required_workflows() -> None:
     examples = {name for name, _schedule, _prompt in automation_examples()}
 

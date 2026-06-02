@@ -12,11 +12,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from libre_claw.config import ConfigError, global_config_path, set_global_default_model
+from libre_claw.core.automations import AutomationError
+from libre_claw.core.heartbeat import HeartbeatError, heartbeat_prompt, parse_heartbeat_interval
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
 from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
-from libre_claw.core.heartbeat import HeartbeatError, heartbeat_prompt, parse_heartbeat_interval
 from libre_claw.telegram.auth import TelegramAuth
 from libre_claw.telegram.bridge import (
     TelegramBridge,
@@ -198,7 +199,7 @@ class TelegramHandlers:
             return
         self.bridge.config = _replace_general(self.bridge.config, default_provider=provider, default_model=selected_model)
         response = f"Model set to {provider}:{selected_model}."
-        daemon_note = await self._sync_daemon_model(provider, selected_model)
+        daemon_note = await self._sync_daemon_model(provider, selected_model, persist_global=persist_global)
         if persist_global:
             try:
                 path = set_global_default_model(
@@ -207,8 +208,14 @@ class TelegramHandlers:
                     config_path=global_config_path(self.bridge.config),
                 )
                 response += f"\nSaved as global default in {path}."
+                if self.bridge.daemon_client is None:
+                    automations_updated = await self.bridge.automation_store.update_global_model(provider, selected_model)
+                    if automations_updated:
+                        response += f"\nUpdated {automations_updated} scheduled automation(s)."
             except ConfigError as exc:
                 response += f"\nModel set for this Telegram session, but global config was not updated: {exc}"
+            except AutomationError as exc:
+                response += f"\nGlobal config was updated, but scheduled automations were not: {exc}"
         elif self.bridge.daemon_client is None:
             response += "\nTelegram session only. Add --global to update the TUI/default config."
         if daemon_note:
@@ -607,14 +614,18 @@ class TelegramHandlers:
                 text += "\n\nTelegram session only. Use /model <provider>:<model> --global to update the TUI/default config."
             await query.edit_message_text(text)
 
-    async def _sync_daemon_model(self, provider: str, model: str) -> str:
+    async def _sync_daemon_model(self, provider: str, model: str, *, persist_global: bool = False) -> str:
         if self.bridge.daemon_client is None:
             return ""
         try:
-            await self.bridge.daemon_client.update_model(provider, model)
+            payload = await self.bridge.daemon_client.update_model(provider, model, persist_global=persist_global)
         except Exception as exc:
             return f"Daemon default was not updated: {exc}"
-        return "Daemon default updated for new daemon-backed runs."
+        note = "Daemon default updated for new daemon-backed runs."
+        automations_updated = int(payload.get("automations_updated") or 0)
+        if persist_global and automations_updated:
+            note += f" Updated {automations_updated} scheduled automation(s)."
+        return note
 
     async def _authorized(self, update: Update) -> bool:
         user_id = update.effective_user.id if update.effective_user else None
