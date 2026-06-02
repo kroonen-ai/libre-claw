@@ -73,7 +73,7 @@ def create_provider(
         raise ProviderConfigurationError(msg)
 
     resolved_model = model or _resolve_model(config, resolved_provider_name, provider_config)
-    max_tokens = _int_provider_value(provider_config, "max_tokens", 16384)
+    max_tokens = _provider_max_tokens(provider_config)
     try:
         if resolved_provider_name == "anthropic":
             return AnthropicProvider(api_key=api_key_lookup.value, model=resolved_model, max_tokens=max_tokens)
@@ -204,6 +204,14 @@ def _bool_provider_value(config: Mapping[str, Any], key: str, default: bool) -> 
     if isinstance(value, bool):
         return value
     return default
+
+
+def _provider_max_tokens(config: Mapping[str, Any]) -> int:
+    configured = _int_provider_value(config, "max_tokens", 16384)
+    detected = _int_provider_value(config, "detected_max_completion_tokens", 0)
+    if detected > 0:
+        return min(configured, detected)
+    return configured
 
 
 def _default_api_key_env(provider_name: str) -> str:

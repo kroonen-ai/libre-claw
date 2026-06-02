@@ -358,7 +358,13 @@ async def test_tui_daemon_mode_syncs_daemon_model(monkeypatch, tmp_path: Path) -
     config = replace(config, tui=replace(config.tui, use_daemon=True))
     app = LibreClawApp(config=config)
     daemon = FakeDaemonClient()
-    daemon.model_payload = {"provider": "openrouter", "model": "deepseek/deepseek-v4-pro"}
+    daemon.model_payload = {
+        "provider": "openrouter",
+        "model": "deepseek/deepseek-v4-pro",
+        "context_window_tokens": 524_288,
+        "detected_max_completion_tokens": 16_384,
+        "detected_context_source": "models",
+    }
     app.daemon_client = daemon  # type: ignore[assignment]
 
     async with app.run_test():
@@ -366,6 +372,8 @@ async def test_tui_daemon_mode_syncs_daemon_model(monkeypatch, tmp_path: Path) -
 
     assert app.config.general.default_provider == "openrouter"
     assert app.config.general.default_model == "deepseek/deepseek-v4-pro"
+    assert app.config.agent.context_window_tokens == 524_288
+    assert app.config.providers["openrouter"]["detected_max_completion_tokens"] == 16_384
     assert app.config.providers["openrouter"]["default_model"] == "deepseek/deepseek-v4-pro"
     assert "openrouter:deepseek/deepseek-v4-pro" in app._status_text()
     assert any("Daemon model changed to openrouter:deepseek/deepseek-v4-pro" in entry.content for entry in app.transcript)

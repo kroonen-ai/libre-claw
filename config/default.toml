@@ -48,6 +48,7 @@ api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
 default_model = "openrouter/auto"
 max_tokens = 16384
+auto_context_window = true
 
 [providers.codex]
 default_model = "gpt-5.5"

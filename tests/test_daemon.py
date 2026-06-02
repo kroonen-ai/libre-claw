@@ -19,6 +19,7 @@ from libre_claw.core.session import ChatMessage
 from libre_claw.core.tools import BaseTool, ToolContext, ToolRegistry, ToolResult
 from libre_claw.daemon import DaemonClient, DaemonServer, _automation_finalizer_prompt, _automation_telegram_message
 from libre_claw.providers.base import Done, LLMProvider, ProviderError, StreamEvent, TextDelta, ToolCallReady, ToolSchema, Usage
+from libre_claw.providers.openrouter_metadata import OpenRouterModelLimits
 
 
 class RequestStub:
@@ -249,6 +250,11 @@ async def test_daemon_shutdown_endpoint_sets_shutdown_event(monkeypatch, tmp_pat
 async def test_daemon_updates_runtime_model(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
+
+    async def fake_limits(*_args: Any, **_kwargs: Any) -> OpenRouterModelLimits:
+        return OpenRouterModelLimits(context_window_tokens=1_048_576, max_completion_tokens=32_768, source="models")
+
+    monkeypatch.setattr("libre_claw.daemon.detect_openrouter_model_limits", fake_limits)
     server = DaemonServer(
         load_config(),
         run_store=RunStore(tmp_path / "runs"),
@@ -262,18 +268,28 @@ async def test_daemon_updates_runtime_model(monkeypatch, tmp_path: Path) -> None
     )
     after = _response_payload(response)
 
-    assert before == {"provider": "anthropic", "model": "claude-opus-4-8"}
+    assert before["provider"] == "anthropic"
+    assert before["model"] == "claude-opus-4-8"
     assert response.status == 200
     assert after["provider"] == "openrouter"
     assert after["model"] == "deepseek/deepseek-v4-pro"
+    assert after["context_window_tokens"] == 1_048_576
+    assert after["detected_max_completion_tokens"] == 32_768
+    assert after["detected_context_source"] == "models"
     assert server.config.general.default_provider == "openrouter"
     assert server.config.general.default_model == "deepseek/deepseek-v4-pro"
+    assert server.config.agent.context_window_tokens == 1_048_576
     assert server.config.providers["openrouter"]["default_model"] == "deepseek/deepseek-v4-pro"
 
 
 async def test_daemon_global_model_update_updates_scheduled_automations(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
+
+    async def fake_limits(*_args: Any, **_kwargs: Any) -> OpenRouterModelLimits:
+        return OpenRouterModelLimits(context_window_tokens=262_144, max_completion_tokens=16_384, source="models")
+
+    monkeypatch.setattr("libre_claw.daemon.detect_openrouter_model_limits", fake_limits)
     server = DaemonServer(
         load_config(),
         run_store=RunStore(tmp_path / "runs"),
@@ -421,6 +437,11 @@ async def test_daemon_blocks_and_resumes_on_permission_approval(monkeypatch, tmp
 async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
+
+    async def fake_limits(*_args: Any, **_kwargs: Any) -> OpenRouterModelLimits:
+        return OpenRouterModelLimits(context_window_tokens=524_288, max_completion_tokens=16_384, source="models")
+
+    monkeypatch.setattr("libre_claw.daemon.detect_openrouter_model_limits", fake_limits)
     provider = ScriptedProvider([[TextDelta("ok"), Done()]])
     server = DaemonServer(
         load_config(),
@@ -450,9 +471,11 @@ async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> Non
     await _wait_for_state(server, started["run"]["run_id"], "done")
 
     assert health["ok"] is True
-    assert model_before == {"provider": "anthropic", "model": "claude-opus-4-8"}
+    assert model_before["provider"] == "anthropic"
+    assert model_before["model"] == "claude-opus-4-8"
     assert model_after["provider"] == "openrouter"
     assert model_after["model"] == "deepseek/deepseek-v4-pro"
+    assert model_after["context_window_tokens"] == 524_288
     assert started["run"]["state"] == "queued"
 
 

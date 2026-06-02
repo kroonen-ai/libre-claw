@@ -6,7 +6,8 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any
 from uuid import uuid4
 
@@ -51,6 +52,7 @@ from libre_claw.providers import (
     create_fallback_providers,
     create_provider,
 )
+from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.tools_builtin import create_builtin_registry
 
 
@@ -166,6 +168,7 @@ class TelegramBridge:
             return
 
         state = self.state_for(chat_id)
+        self.config = await self._with_openrouter_model_limits(self.config)
         try:
             agent = self._create_agent(state)
         except ProviderConfigurationError as exc:
@@ -319,6 +322,18 @@ class TelegramBridge:
         if state.daemon_run_id:
             lines.extend(["", "**Run**", f"- Active daemon run: `{_short_run_id(state.daemon_run_id)}`"])
         return "\n".join(lines)
+
+    async def status_text_async(self, chat_id: int) -> str:
+        if self.daemon_client is not None:
+            try:
+                payload = await self.daemon_client.current_model()
+            except Exception:
+                payload = {}
+            if payload:
+                self.config = _config_with_model_payload(self.config, payload)
+        else:
+            self.config = await self._with_openrouter_model_limits(self.config)
+        return self.status_text(chat_id)
 
     async def usage_command_text(self, chat_id: int, argument: str) -> str:
         provider = argument.strip().lower()
@@ -523,6 +538,12 @@ class TelegramBridge:
             memory_provider=lambda user_message: self.relevant_memory_texts(user_message),
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
         )
+
+    async def _with_openrouter_model_limits(self, config: LibreClawConfig) -> LibreClawConfig:
+        if config.general.default_provider.lower() != "openrouter":
+            return config
+        limits = await detect_openrouter_model_limits(config, model=config.general.default_model)
+        return apply_openrouter_model_limits(config, limits, model=config.general.default_model)
 
     async def relevant_memory_texts(self, user_message: str) -> list[str]:
         if not self._memory_enabled() or not self.config.memory.inject_relevant:
@@ -833,6 +854,48 @@ def _provider_default_model(config: LibreClawConfig, provider: str) -> str:
         if model:
             return model
     return config.general.default_model
+
+
+def _config_with_model_payload(config: LibreClawConfig, payload: Mapping[str, Any]) -> LibreClawConfig:
+    provider = _canonical_provider(str(payload.get("provider") or config.general.default_provider))
+    model = str(payload.get("model") or config.general.default_model)
+    general = replace(config.general, default_provider=provider, default_model=model)
+    telegram = replace(config.telegram, default_provider=provider, default_model=model)
+    providers: dict[str, Mapping[str, Any]] = {}
+    for name, value in config.providers.items():
+        providers[name] = dict(value) if isinstance(value, Mapping) else value
+    openrouter_config = dict(providers.get("openrouter", {}))
+    for key in (
+        "detected_context_window_tokens",
+        "detected_max_completion_tokens",
+        "detected_context_source",
+        "detected_context_model",
+    ):
+        value = payload.get(key)
+        if value not in (None, ""):
+            openrouter_config[key] = value
+    providers["openrouter"] = openrouter_config
+    agent = config.agent
+    context_window = _positive_int(payload.get("detected_context_window_tokens")) or _positive_int(
+        payload.get("context_window_tokens")
+    )
+    if provider == "openrouter" and context_window is not None:
+        agent = replace(agent, context_window_tokens=context_window)
+    return replace(config, general=general, telegram=telegram, agent=agent, providers=providers)
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        integer = int(value)
+        return integer if integer > 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        integer = int(value)
+        return integer if integer > 0 else None
+    return None
 
 
 def _combine_prompt_extra(existing: str, addition: str) -> str:

@@ -106,6 +106,7 @@ from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
 from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
+from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
 
@@ -1774,6 +1775,8 @@ class LibreClawApp(App[None]):
         self._sync_daemon_model_after_selection(provider, selected_model, persist_global=persist_global)
         if persist_global and self.daemon_client is None:
             self._track_run_background_task(self._update_local_scheduled_models(provider, selected_model))
+        if self.daemon_client is None and provider == "openrouter":
+            self._track_run_background_task(self._refresh_openrouter_model_limits())
         self._rebuild_agent()
         self._update_status()
         suffix = f"\nSaved as global default in {persisted_path}." if persisted_path is not None else ""
@@ -1802,6 +1805,18 @@ class LibreClawApp(App[None]):
             automations_updated = int(payload.get("automations_updated") or 0)
             if automations_updated:
                 self._append_system(f"Updated {automations_updated} scheduled automation(s) to {provider}:{model}.")
+        self._apply_daemon_model_payload(payload, announce_model_change=False)
+
+    async def _refresh_openrouter_model_limits(self) -> None:
+        if _canonical_tui_provider(self.config.general.default_provider) != "openrouter":
+            return
+        limits = await detect_openrouter_model_limits(self.config, model=self.config.general.default_model)
+        updated = apply_openrouter_model_limits(self.config, limits, model=self.config.general.default_model)
+        if not _runtime_model_metadata_changed(self.config, updated):
+            return
+        self.config = updated
+        self._rebuild_agent()
+        self._update_status()
 
     async def _update_local_scheduled_models(self, provider: str, model: str) -> None:
         try:
@@ -3471,15 +3486,27 @@ class LibreClawApp(App[None]):
         model = str(payload.get("model", "")).strip()
         if not provider or not model:
             return
-        if (
-            provider == _canonical_tui_provider(self.config.general.default_provider)
-            and model == self.config.general.default_model
-        ):
+
+        self._apply_daemon_model_payload(payload, announce_model_change=True)
+
+    def _apply_daemon_model_payload(self, payload: Mapping[str, Any], *, announce_model_change: bool) -> None:
+        provider = _canonical_tui_provider(str(payload.get("provider", "")).strip())
+        model = str(payload.get("model", "")).strip()
+        if not provider or not model:
             return
 
-        self.config = _replace_model_selection(self.config, provider, model)
+        updated = _config_with_daemon_model_payload(self.config, payload)
+        model_changed = (
+            provider != _canonical_tui_provider(self.config.general.default_provider)
+            or model != self.config.general.default_model
+        )
+        if not model_changed and not _runtime_model_metadata_changed(self.config, updated):
+            return
+
+        self.config = updated
         self._rebuild_agent()
-        self._append_system(f"Daemon model changed to {provider}:{model}; TUI session updated.")
+        if announce_model_change and model_changed:
+            self._append_system(f"Daemon model changed to {provider}:{model}; TUI session updated.")
         if self.config.tui.show_status_bar:
             self.query_one("#status", Static).update(self._status_text())
 
@@ -3580,6 +3607,71 @@ def _replace_model_selection(
         next_providers[clean_provider] = updated_provider
     updated = _replace_general(config, default_provider=clean_provider, default_model=clean_model)
     return replace(updated, providers=next_providers)
+
+
+def _config_with_daemon_model_payload(config: LibreClawConfig, payload: Mapping[str, Any]) -> LibreClawConfig:
+    provider = _canonical_tui_provider(str(payload.get("provider") or config.general.default_provider))
+    model = str(payload.get("model") or config.general.default_model).strip()
+    updated = _replace_model_selection(config, provider, model)
+    if provider != "openrouter":
+        return updated
+
+    context_window = _positive_int(payload.get("detected_context_window_tokens")) or _positive_int(
+        payload.get("context_window_tokens")
+    )
+    if context_window is not None:
+        updated = replace(updated, agent=replace(updated.agent, context_window_tokens=context_window))
+
+    providers: dict[str, Mapping[str, Any]] = {
+        name: dict(value) if isinstance(value, Mapping) else value for name, value in updated.providers.items()
+    }
+    openrouter_config = dict(providers.get("openrouter", {}))
+    for key in (
+        "detected_context_window_tokens",
+        "detected_max_completion_tokens",
+        "detected_context_source",
+        "detected_context_model",
+    ):
+        value = payload.get(key)
+        if value not in (None, ""):
+            openrouter_config[key] = value
+    providers["openrouter"] = openrouter_config
+    return replace(updated, providers=providers)
+
+
+def _runtime_model_metadata_changed(before: LibreClawConfig, after: LibreClawConfig) -> bool:
+    if before.agent.context_window_tokens != after.agent.context_window_tokens:
+        return True
+    return _openrouter_metadata_tuple(before) != _openrouter_metadata_tuple(after)
+
+
+def _openrouter_metadata_tuple(config: LibreClawConfig) -> tuple[object, ...]:
+    openrouter_config = config.providers.get("openrouter", {})
+    if not isinstance(openrouter_config, Mapping):
+        return ()
+    return tuple(
+        openrouter_config.get(key)
+        for key in (
+            "detected_context_window_tokens",
+            "detected_max_completion_tokens",
+            "detected_context_source",
+            "detected_context_model",
+        )
+    )
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        integer = int(value)
+        return integer if integer > 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        integer = int(value)
+        return integer if integer > 0 else None
+    return None
 
 
 def _path_mtime_ns(path: Path) -> int | None:

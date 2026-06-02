@@ -139,9 +139,10 @@ class TelegramHandlers:
     async def cost(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
+        status = await self.bridge.status_text_async(update.effective_chat.id)
         await _reply_text_chunks(
             update.effective_message,
-            self.bridge.status_text(update.effective_chat.id),
+            status,
             self.bridge.config.telegram.max_message_length,
         )
 

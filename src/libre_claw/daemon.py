@@ -56,6 +56,7 @@ from libre_claw.core.usage import (
 )
 from libre_claw.core.session import ChatMessage, session_from_payload, text_block
 from libre_claw.providers import Done, LLMProvider, ProviderError, TextDelta, Usage, create_fallback_providers, create_provider
+from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.telegram.formatting import clean_final_answer_for_telegram, plain_text_chunks, telegram_html_chunks
 from libre_claw.tools_builtin import create_builtin_registry
 from libre_claw.web import dashboard_html
@@ -329,6 +330,7 @@ class DaemonServer:
         )
 
     async def current_model(self, _request: web.Request) -> web.Response:
+        self.config = await self._with_openrouter_model_limits(self.config)
         return web.json_response(_model_payload(self.config))
 
     async def update_model(self, request: web.Request) -> web.Response:
@@ -360,7 +362,7 @@ class DaemonServer:
                 return _json_error(str(exc), status=400)
             persisted_path = str(path)
 
-        self.config = _config_with_model(self.config, provider, model)
+        self.config = await self._with_openrouter_model_limits(_config_with_model(self.config, provider, model))
         response = _model_payload(self.config)
         response["persisted_path"] = persisted_path
         response["automations_updated"] = automations_updated
@@ -381,7 +383,7 @@ class DaemonServer:
             return _json_error("Field 'kind' must be 'chat' or 'goal'.")
 
         try:
-            run_config = self._config_for_payload(payload)
+            run_config = await self._config_for_payload(payload)
         except ValueError as exc:
             return _json_error(str(exc), status=403)
         run = await self.run_store.create_run(
@@ -558,7 +560,7 @@ class DaemonServer:
             return _json_error("Unknown automation.", status=404)
         return web.json_response({"deleted": True})
 
-    def _config_for_payload(self, payload: Mapping[str, Any]) -> LibreClawConfig:
+    async def _config_for_payload(self, payload: Mapping[str, Any]) -> LibreClawConfig:
         provider = str(payload.get("provider") or self.config.general.default_provider)
         model = str(payload.get("model") or self.config.general.default_model)
         _reject_working_directory_override(self.config, payload)
@@ -569,7 +571,7 @@ class DaemonServer:
             theme=self.config.general.theme,
             log_level=self.config.general.log_level,
         )
-        return LibreClawConfig(
+        config = LibreClawConfig(
             general=general,
             agent=self.config.agent,
             permissions=self.config.permissions,
@@ -588,6 +590,7 @@ class DaemonServer:
             providers=self.config.providers,
             source_paths=self.config.source_paths,
         )
+        return await self._with_openrouter_model_limits(config)
 
     async def _run_agent(
         self,
@@ -716,7 +719,7 @@ class DaemonServer:
                 await self._record_automation_error(automation, exc)
 
     async def _start_automation_run(self, automation: AutomationRecord) -> RunRecord:
-        config = self._config_for_automation(automation)
+        config = await self._config_for_automation(automation)
         title = f"Scheduled: {automation.name}"
         run = await self.run_store.create_run(
             title,
@@ -805,7 +808,7 @@ class DaemonServer:
         await self.run_store.update_state(run.run_id, state)
         await self.run_store.append_event(run.run_id, "run_finished", {"state": state})
 
-    def _config_for_automation(self, automation: AutomationRecord) -> LibreClawConfig:
+    async def _config_for_automation(self, automation: AutomationRecord) -> LibreClawConfig:
         provider = automation.provider or self.config.general.default_provider
         model = automation.model or self.config.general.default_model
         general = GeneralConfig(
@@ -815,7 +818,7 @@ class DaemonServer:
             theme=self.config.general.theme,
             log_level=self.config.general.log_level,
         )
-        return LibreClawConfig(
+        config = LibreClawConfig(
             general=general,
             agent=self.config.agent,
             permissions=self.config.permissions,
@@ -834,6 +837,7 @@ class DaemonServer:
             providers=self.config.providers,
             source_paths=self.config.source_paths,
         )
+        return await self._with_openrouter_model_limits(config)
 
     async def _record_automation_error(self, automation: AutomationRecord, exc: Exception) -> None:
         run = await self.run_store.create_run(
@@ -884,6 +888,15 @@ class DaemonServer:
             memory_provider=lambda user_message: self._relevant_memory_texts(config, user_message),
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
         )
+
+    async def _with_openrouter_model_limits(self, config: LibreClawConfig) -> LibreClawConfig:
+        if config.general.default_provider.lower() not in {"openrouter"}:
+            return config
+        limits = await detect_openrouter_model_limits(config, model=config.general.default_model)
+        updated = apply_openrouter_model_limits(config, limits, model=config.general.default_model)
+        if updated is not config and config is self.config:
+            self.config = updated
+        return updated
 
     async def _relevant_memory_texts(self, config: LibreClawConfig, user_message: str) -> list[str]:
         if not config.memory.enabled or not config.memory.inject_relevant:
@@ -1406,10 +1419,23 @@ def _config_with_model(config: LibreClawConfig, provider: str, model: str) -> Li
 
 
 def _model_payload(config: LibreClawConfig) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "provider": "ollama" if config.general.default_provider.lower() == "local" else config.general.default_provider,
         "model": config.general.default_model,
+        "context_window_tokens": config.agent.context_window_tokens,
     }
+    openrouter_config = config.providers.get("openrouter")
+    if isinstance(openrouter_config, Mapping):
+        for source_key, payload_key in (
+            ("detected_context_window_tokens", "detected_context_window_tokens"),
+            ("detected_max_completion_tokens", "detected_max_completion_tokens"),
+            ("detected_context_source", "detected_context_source"),
+            ("detected_context_model", "detected_context_model"),
+        ):
+            value = openrouter_config.get(source_key)
+            if value not in (None, ""):
+                payload[payload_key] = value
+    return payload
 
 
 def _run_payload(run: RunRecord) -> dict[str, Any]:

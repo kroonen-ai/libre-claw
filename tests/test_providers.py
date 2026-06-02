@@ -227,6 +227,33 @@ def test_create_provider_supports_openrouter(monkeypatch, tmp_path: Path) -> Non
     }
 
 
+def test_create_provider_caps_openrouter_max_tokens_from_detected_metadata(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[general]",
+                'default_provider = "openrouter"',
+                "",
+                "[providers.openrouter]",
+                'default_model = "minimax/minimax-m3"',
+                "max_tokens = 16384",
+                "detected_max_completion_tokens = 4096",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    config = load_config(config_path=config_path)
+
+    provider = create_provider(config)
+
+    assert isinstance(provider, OpenRouterProvider)
+    assert provider.max_tokens == 4096
+
+
 def test_create_fallback_providers_supports_provider_model_and_key_env(monkeypatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(

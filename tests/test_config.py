@@ -86,6 +86,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.providers["openrouter"]["api_key_env"] == "OPENROUTER_API_KEY"
     assert config.providers["openrouter"]["base_url"] == "https://openrouter.ai/api/v1"
     assert config.providers["openrouter"]["default_model"] == "openrouter/auto"
+    assert config.providers["openrouter"]["auto_context_window"] is True
     assert "http_referer" not in config.providers["openrouter"]
     assert "app_title" not in config.providers["openrouter"]
     assert "local" not in config.providers

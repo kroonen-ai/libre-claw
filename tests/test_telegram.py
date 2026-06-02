@@ -95,6 +95,10 @@ class FakeDaemonClient:
         self.resolutions: list[tuple[str, str, str]] = []
         self.start_payloads: list[dict[str, Any]] = []
         self.model_updates: list[tuple[str, str, bool]] = []
+        self.model_payload: dict[str, Any] = {
+            "provider": "openrouter",
+            "model": "deepseek/deepseek-v4-flash",
+        }
         self.with_permission = with_permission
         self._events_served: set[str] = set()
         self._run_count = 0
@@ -161,8 +165,12 @@ class FakeDaemonClient:
     async def shutdown(self) -> dict[str, Any]:
         return {"ok": True, "stopping": True}
 
+    async def current_model(self) -> dict[str, Any]:
+        return self.model_payload
+
     async def update_model(self, provider: str, model: str, *, persist_global: bool = False) -> dict[str, Any]:
         self.model_updates.append((provider, model, persist_global))
+        self.model_payload = {"provider": provider, "model": model}
         return {"provider": provider, "model": model, "persisted_path": None, "automations_updated": 1 if persist_global else 0}
 
     async def resolve_permission(self, run_id: str, tool_call_id: str, resolution: str) -> dict[str, Any]:
@@ -1256,6 +1264,32 @@ async def test_telegram_daemon_bridge_preserves_chat_session_between_messages(mo
     assert "- Fill: `[" in status
     assert "10 total" in status
     assert "Last turn: 5 tokens (3 input, 2 output)" in status
+
+
+async def test_telegram_status_uses_daemon_openrouter_context_metadata(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    daemon = FakeDaemonClient(with_permission=False)
+    daemon.model_payload = {
+        "provider": "openrouter",
+        "model": "minimax/minimax-m3",
+        "context_window_tokens": 1_048_576,
+        "detected_context_window_tokens": 1_048_576,
+        "detected_max_completion_tokens": 32_768,
+        "detected_context_source": "models",
+        "detected_context_model": "minimax/minimax-m3",
+    }
+    bridge = TelegramBridge(config, daemon_client=daemon)  # type: ignore[arg-type]
+    await bridge.initialize()
+
+    status = await bridge.status_text_async(1)
+
+    assert "- Provider: `openrouter`" in status
+    assert "- Model: `minimax/minimax-m3`" in status
+    assert "- Window: 1M tokens" in status
+    assert bridge.config.agent.context_window_tokens == 1_048_576
+    assert bridge.config.providers["openrouter"]["detected_max_completion_tokens"] == 32_768
 
 
 async def test_telegram_bridge_schedule_command_creates_telegram_route(monkeypatch, tmp_path: Path) -> None:
