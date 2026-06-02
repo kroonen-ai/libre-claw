@@ -92,6 +92,9 @@ class FakeDaemonClient:
         self.cancelled.append(run_id)
         return {"run_id": run_id, "cancelled": True}
 
+    async def health(self):
+        return {"ok": True, "active_runs": 1, "telegram_bridge": "running"}
+
     async def resolve_permission(self, run_id: str, tool_call_id: str, resolution: str):
         self.resolutions.append((run_id, tool_call_id, resolution))
         return {"run_id": run_id, "tool_call_id": tool_call_id, "resolution": resolution}
@@ -148,6 +151,7 @@ def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
 
     assert "0.1.0" in app.SUB_TITLE
     assert app._palette_matches("cost")[0].name == "/cost"
+    assert app._palette_matches("status")[0].name == "/status"
     assert "provider:model" not in app._status_text()
     assert "ctx [" in app._status_text()
     assert app._palette_matches("memory")[0].name == "/memory"
@@ -155,7 +159,7 @@ def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
     assert app._slash_suggestion_matches("/")[0].name == "/help"
     assert app._slash_suggestion_matches("/bt")[0].name == "/btw"
     assert app._slash_suggestion_matches("/ste")[0].name == "/steer"
-    assert [command.name for command in app._slash_suggestion_matches("/m")] == ["/model", "/memory"]
+    assert [command.name for command in app._slash_suggestion_matches("/m")] == ["/model", "/models", "/memory"]
     assert app._slash_suggestion_matches("/g")[0].name == "/goal"
     assert app._slash_suggestion_matches("/memory ")[0].name == "/memory status"
     assert app._slash_suggestion_matches("/w")[0].name == "/workspace"
@@ -377,6 +381,31 @@ async def test_tui_daemon_mode_syncs_daemon_model(monkeypatch, tmp_path: Path) -
     assert app.config.providers["openrouter"]["default_model"] == "deepseek/deepseek-v4-pro"
     assert "openrouter:deepseek/deepseek-v4-pro" in app._status_text()
     assert any("Daemon model changed to openrouter:deepseek/deepseek-v4-pro" in entry.content for entry in app.transcript)
+
+
+async def test_tui_accepts_telegram_style_status_and_alias_commands(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config = load_config()
+    config = replace(config, tui=replace(config.tui, use_daemon=True))
+    app = LibreClawApp(config=config)
+    daemon = FakeDaemonClient()
+    app.daemon_client = daemon  # type: ignore[assignment]
+
+    async with app.run_test():
+        await app._handle_command("/new")
+        await app._handle_command("/status")
+        await app._handle_command("/models")
+        await app._handle_command("/daemon")
+
+    system_text = "\n".join(entry.content for entry in app.transcript if entry.role == "system")
+    assert "Libre Claw status" in system_text
+    assert "- Provider: `openrouter`" in system_text
+    assert "Daemon" in system_text
+    assert "- Telegram bridge: running" in system_text
+    assert "Suggested models:" in system_text
+    assert "Transcript cleared." in system_text
 
 
 async def test_tui_daemon_mode_model_command_updates_daemon(monkeypatch, tmp_path: Path) -> None:

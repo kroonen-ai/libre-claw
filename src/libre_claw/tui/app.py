@@ -204,7 +204,10 @@ class ProcessCapture:
 
 SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/help", "/help", "Show available commands"),
+    SlashCommand("/status", "/status", "Show model, context, token, cost, and daemon status"),
     SlashCommand("/clear", "/clear", "Clear transcript and session history"),
+    SlashCommand("/new", "/new", "Start a fresh TUI session"),
+    SlashCommand("/restart", "/restart", "Start a fresh TUI session"),
     SlashCommand("/cancel", "/cancel", "Cancel active generation or tool execution"),
     SlashCommand("/stop", "/stop [run_id]", "Stop the current turn without exiting Libre Claw"),
     SlashCommand("/btw", "/btw <note>", "Add a side note for future turns"),
@@ -212,6 +215,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/usage", "/usage openrouter|attribution|presets", "Show provider usage analytics"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
+    SlashCommand("/models", "/models", "Show model presets"),
     SlashCommand("/provider", "/provider anthropic|openai|openrouter|ollama|codex", "Switch provider for new turns"),
     SlashCommand("/setup", "/setup status|provider|key|model|openrouter|ollama-cloud|codex", "First-run provider and key setup"),
     SlashCommand("/codex", "/codex login|status|logout|use [model]", "Manage Codex/ChatGPT login"),
@@ -231,6 +235,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/heartbeat", "/heartbeat status|once|start [every 30 minutes]|stop", "Run recurring check-ins"),
     SlashCommand("/memory", "/memory status|list|search|add|forget|summarize", "Manage persistent memory"),
     SlashCommand("/workspace", "/workspace status|init|use <path>", "Manage the Libre Claw runtime workspace"),
+    SlashCommand("/daemon", "/daemon", "Show daemon connection health"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
     SlashCommand("/tools", "/tools list|expand|collapse|toggle <index>", "Inspect and control tool details"),
     SlashCommand("/exit", "/exit", "Exit Libre Claw"),
@@ -866,7 +871,7 @@ class LibreClawApp(App[None]):
             self._cancel_active_generation(cancel_daemon_run=False)
             self.exit()
             return
-        if command == "/clear":
+        if command in {"/clear", "/new", "/restart"}:
             self._clear_transcript()
             return
         if command in {"/cancel", "/stop"}:
@@ -884,6 +889,9 @@ class LibreClawApp(App[None]):
         if command == "/help":
             self._append_system(self._help_text())
             return
+        if command == "/status":
+            self._append_system(await self._status_report_text())
+            return
         if command == "/cost":
             self._append_system(self._cost_text())
             return
@@ -892,6 +900,9 @@ class LibreClawApp(App[None]):
             return
         if command == "/model":
             self._set_model(argument)
+            return
+        if command == "/models":
+            self._append_system(_model_help_text(self.config))
             return
         if command == "/provider":
             self._set_provider(argument)
@@ -949,6 +960,9 @@ class LibreClawApp(App[None]):
             return
         if command == "/workspace":
             await self._handle_workspace_command(argument)
+            return
+        if command == "/daemon":
+            self._append_system(await self._daemon_status_text())
             return
         if command == "/telegram":
             self._append_system(self._telegram_status())
@@ -3095,11 +3109,13 @@ class LibreClawApp(App[None]):
         normalized = query.lower().strip()
         if not normalized:
             return list(SLASH_COMMANDS)
-        return [
+        name_matches = [command for command in SLASH_COMMANDS if normalized in command.name.lower()]
+        description_matches = [
             command
             for command in SLASH_COMMANDS
-            if normalized in command.name.lower() or normalized in command.description.lower()
+            if command not in name_matches and normalized in command.description.lower()
         ]
+        return [*name_matches, *description_matches]
 
     def _palette_text(self, query: str) -> str:
         lines = ["Command palette - type a command name and press Enter"]
@@ -3378,6 +3394,62 @@ class LibreClawApp(App[None]):
                 "Codex CLI currently does not return usage, so Libre Claw shows estimated context tokens instead."
             )
         return "\n".join(lines)
+
+    async def _status_report_text(self) -> str:
+        if self.daemon_client is not None:
+            await self._sync_daemon_model_if_changed()
+        meter = self._context_meter()
+        provider = _canonical_tui_provider(self.config.general.default_provider)
+        model = _effective_model(self.config)
+        active = "running" if self._active_task is not None and not self._active_task.done() else "idle"
+        if self._goal_description is not None and active == "running":
+            active = f"goal {self._goal_turn}/{self._goal_max_turns}"
+        lines = [
+            "Libre Claw status",
+            "",
+            "Model",
+            f"- Provider: `{provider}`",
+            f"- Model: `{model}`",
+            "",
+            "Context",
+            f"- Window: {_format_token_count(meter.context_window_tokens)} tokens",
+            f"- Used: ~{_format_token_count(meter.estimated_tokens)} estimated tokens",
+            f"- Fill: `{_context_bar(meter)}` {meter.display_percent}",
+            "",
+            "Usage",
+            f"- Tokens: {_format_token_count(self.usage.total_tokens)} total ({self.usage.input_tokens} input, {self.usage.output_tokens} output)",
+            f"- Cost: {_format_usage_cost(self.usage)}",
+            "",
+            "Run",
+            f"- State: {active}",
+        ]
+        if self._active_run_id:
+            lines.append(f"- Active run: `{self._active_run_id}`")
+        if self.daemon_client is not None:
+            lines.extend(["", await self._daemon_status_text()])
+        return "\n".join(lines)
+
+    async def _daemon_status_text(self) -> str:
+        if self.daemon_client is None:
+            return (
+                "Daemon\n"
+                "- Mode: disabled for this TUI session\n"
+                f"- URL: {daemon_base_url(self.config)}\n"
+                "- Start it with `libre-claw start -d` or launch the TUI with daemon mode enabled."
+            )
+        try:
+            health = await self.daemon_client.health()
+        except Exception as exc:
+            return f"Daemon\n- URL: {daemon_base_url(self.config)}\n- State: unreachable\n- Error: {exc}"
+        return "\n".join(
+            [
+                "Daemon",
+                f"- URL: {daemon_base_url(self.config)}",
+                f"- State: {'ok' if health.get('ok') else 'not ok'}",
+                f"- Active runs: {health.get('active_runs', 0)}",
+                f"- Telegram bridge: {health.get('telegram_bridge', 'unknown')}",
+            ]
+        )
 
     async def _handle_usage_command(self, argument: str) -> None:
         normalized = argument.strip().lower()
