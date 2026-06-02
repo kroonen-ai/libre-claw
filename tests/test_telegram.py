@@ -199,7 +199,7 @@ def test_telegram_help_text_lists_slash_commands() -> None:
     assert "/daemon - Show daemon connection health" in text
     assert "/runs [N] - List recent daemon runs" in text
     assert "/run <id> - Inspect a daemon run" in text
-    assert "/status - Show token and cost usage" in text
+    assert "/status - Show model, context, token, and cost usage" in text
     assert "/stop - Cancel the active generation" in text
     assert "/shutdown - Shut down the daemon/bridge" in text
     assert "/btw <note> - Add a side note for future turns" in text
@@ -555,7 +555,7 @@ def test_telegram_command_specs_drive_bot_menu() -> None:
     assert "start" in commands
     assert commands["restart"] == "Start a fresh chat session"
     assert commands["models"] == "Open model configuration"
-    assert commands["status"] == "Show session info"
+    assert commands["status"] == "Show model, context, tokens, and cost"
     assert commands["usage"] == "Show provider usage analytics"
     assert commands["daemon"] == "Show daemon health"
     assert commands["runs"] == "List recent daemon runs"
@@ -1246,7 +1246,16 @@ async def test_telegram_daemon_bridge_preserves_chat_session_between_messages(mo
     ]
     assert any(isinstance(event, TelegramText) and event.text == "hi" for event in first)
     assert any(isinstance(event, TelegramText) and event.text == "again" for event in second)
-    assert "10 total" in bridge.status_text(1)
+    status = bridge.status_text(1)
+    assert "## Libre Claw Status" in status
+    assert "**Model**" in status
+    assert "- Provider:" in status
+    assert "- Model:" in status
+    assert "**Context**" in status
+    assert "- Window: 200k tokens" in status
+    assert "- Fill: `[" in status
+    assert "10 total" in status
+    assert "Last turn: 5 tokens (3 input, 2 output)" in status
 
 
 async def test_telegram_bridge_schedule_command_creates_telegram_route(monkeypatch, tmp_path: Path) -> None:

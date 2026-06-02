@@ -39,7 +39,7 @@ from libre_claw.core.memory import (
 )
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.runs import RunRecord, RunStore
-from libre_claw.core.session import session_to_payload
+from libre_claw.core.session import estimate_context_tokens, session_to_payload
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.soul import SoulStore
 from libre_claw.core.tools import ToolCall
@@ -100,11 +100,30 @@ class TelegramChatState:
     chat_id: int
     session: Session = field(default_factory=Session)
     usage: Usage = field(default_factory=Usage)
+    last_usage: Usage = field(default_factory=Usage)
     task: asyncio.Task[None] | None = None
     pending_permissions: dict[str, AgentPermissionRequest] = field(default_factory=dict)
     daemon_run_id: str | None = None
     daemon_event_id: int = 0
     archive_id: str = field(default_factory=lambda: new_session_archive_id("telegram"))
+
+
+@dataclass(frozen=True)
+class TelegramContextMeter:
+    used_tokens: int
+    context_window_tokens: int
+    ratio: float
+    source: str
+
+    @property
+    def percent(self) -> int:
+        return min(999, int(round(self.ratio * 100)))
+
+    @property
+    def display_percent(self) -> str:
+        if self.used_tokens > 0 and self.ratio < 0.01:
+            return "<1%"
+        return f"{self.percent}%"
 
 
 class TelegramBridge:
@@ -201,6 +220,7 @@ class TelegramBridge:
             if isinstance(event, AgentDone):
                 if event.usage is not None:
                     state.usage = combine_usage(state.usage, event.usage) or state.usage
+                    state.last_usage = event.usage
                 assistant_text = _latest_assistant_text(state.session)
                 if assistant_text:
                     await self._archive_event(chat_id, "assistant_message", {"content": assistant_text})
@@ -266,11 +286,39 @@ class TelegramBridge:
 
     def status_text(self, chat_id: int) -> str:
         state = self.state_for(chat_id)
-        return (
-            f"Tokens: {state.usage.total_tokens} total "
-            f"({state.usage.input_tokens} input, {state.usage.output_tokens} output). "
-            f"Cost: {_format_usage_cost(state.usage)}."
-        )
+        provider = _canonical_provider(self.config.general.default_provider)
+        model = self.config.general.default_model or _provider_default_model(self.config, provider)
+        meter = _telegram_context_meter(self.config, state, self.soul_store, self._memory_facts)
+        usage = state.usage
+        last_usage = state.last_usage
+        lines = [
+            "## Libre Claw Status",
+            "",
+            "**Model**",
+            f"- Provider: `{provider}`",
+            f"- Model: `{model}`",
+            "",
+            "**Context**",
+            f"- Window: {_format_token_count(meter.context_window_tokens)} tokens",
+            f"- Used: ~{_format_token_count(meter.used_tokens)} tokens ({meter.source})",
+            f"- Fill: `{_context_bar(meter)}` {meter.display_percent}",
+            "",
+            "**Usage**",
+            f"- Tokens: {usage.total_tokens} total ({usage.input_tokens} input, {usage.output_tokens} output)",
+        ]
+        if last_usage.total_tokens:
+            lines.append(
+                f"- Last turn: {last_usage.total_tokens} tokens "
+                f"({last_usage.input_tokens} input, {last_usage.output_tokens} output)"
+            )
+        if usage.cached_tokens:
+            lines.append(f"- Cached input: {usage.cached_tokens}")
+        if usage.reasoning_tokens:
+            lines.append(f"- Reasoning output: {usage.reasoning_tokens}")
+        lines.append(f"- Cost: {_format_usage_cost(usage)}")
+        if state.daemon_run_id:
+            lines.extend(["", "**Run**", f"- Active daemon run: `{_short_run_id(state.daemon_run_id)}`"])
+        return "\n".join(lines)
 
     async def usage_command_text(self, chat_id: int, argument: str) -> str:
         provider = argument.strip().lower()
@@ -682,6 +730,7 @@ class TelegramBridge:
                 if str(event.get("type", "")) == "usage":
                     usage = _usage_from_payload(data)
                     state.usage = combine_usage(state.usage, usage) or state.usage
+                    state.last_usage = usage
                     continue
                 async for mapped in _telegram_events_from_daemon_event(run_id, event):
                     if isinstance(mapped, TelegramText):
@@ -718,6 +767,72 @@ def _format_usage_cost(usage: Usage) -> str:
     if usage.cost < 0.01:
         return f"${usage.cost:.6f}"
     return f"${usage.cost:.2f}"
+
+
+def _telegram_context_meter(
+    config: LibreClawConfig,
+    state: TelegramChatState,
+    soul_store: SoulStore,
+    memory_facts: list[str],
+) -> TelegramContextMeter:
+    extra_texts = tuple(
+        text
+        for text in (
+            config.agent.system_prompt,
+            config.agent.system_prompt_extra,
+            TELEGRAM_SYSTEM_PROMPT_EXTRA,
+            *soul_store.soul_texts(),
+            *memory_facts,
+        )
+        if text
+    )
+    estimated_tokens = estimate_context_tokens(
+        state.session.messages,
+        summary=state.session.summary,
+        extra_texts=extra_texts,
+    )
+    if state.last_usage.input_tokens:
+        used_tokens = max(estimated_tokens, state.last_usage.input_tokens)
+        source = "last provider input"
+    else:
+        used_tokens = estimated_tokens
+        source = "estimated"
+    context_window = max(1, config.agent.context_window_tokens)
+    return TelegramContextMeter(
+        used_tokens=used_tokens,
+        context_window_tokens=context_window,
+        ratio=used_tokens / context_window,
+        source=source,
+    )
+
+
+def _context_bar(meter: TelegramContextMeter, width: int = 10) -> str:
+    filled = max(0, min(width, int(round(min(meter.ratio, 1.0) * width))))
+    if meter.used_tokens > 0 and filled == 0:
+        filled = 1
+    return "[" + ("#" * filled) + ("-" * (width - filled)) + "]"
+
+
+def _format_token_count(value: int) -> str:
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}".rstrip("0").rstrip(".") + "k"
+    return str(value)
+
+
+def _canonical_provider(provider: str) -> str:
+    cleaned = provider.strip().lower()
+    return "ollama" if cleaned == "local" else cleaned
+
+
+def _provider_default_model(config: LibreClawConfig, provider: str) -> str:
+    provider_config = config.providers.get(provider)
+    if isinstance(provider_config, dict):
+        model = str(provider_config.get("default_model", "")).strip()
+        if model:
+            return model
+    return config.general.default_model
 
 
 def _combine_prompt_extra(existing: str, addition: str) -> str:

@@ -139,7 +139,11 @@ class TelegramHandlers:
     async def cost(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
-        await update.effective_message.reply_text(self.bridge.status_text(update.effective_chat.id))
+        await _reply_text_chunks(
+            update.effective_message,
+            self.bridge.status_text(update.effective_chat.id),
+            self.bridge.config.telegram.max_message_length,
+        )
 
     async def usage(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -1204,9 +1208,9 @@ def _telegram_help_text() -> str:
             "/model <provider>:<name> - Switch model by text",
             "/models - Open provider/model buttons",
             "/provider - Open provider buttons",
-            "/cost - Show token and cost usage",
+            "/cost - Show model, context, token, and cost usage",
             "/usage [provider] - Show provider usage analytics",
-            "/status - Show token and cost usage",
+            "/status - Show model, context, token, and cost usage",
             "/daemon - Show daemon connection health",
             "/runs [N] - List recent daemon runs",
             "/run <id> - Inspect a daemon run",
@@ -1234,9 +1238,9 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("model", "Open model configuration"),
         ("models", "Open model configuration"),
         ("provider", "Open provider selector"),
-        ("cost", "Show token and cost usage"),
+        ("cost", "Show model, context, tokens, and cost"),
         ("usage", "Show provider usage analytics"),
-        ("status", "Show session info"),
+        ("status", "Show model, context, tokens, and cost"),
         ("daemon", "Show daemon health"),
         ("runs", "List recent daemon runs"),
         ("run", "Inspect one daemon run"),
