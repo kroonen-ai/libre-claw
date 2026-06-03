@@ -8,7 +8,7 @@ import difflib
 import json
 import shlex
 import time
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +24,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.color import Color
 from textual.containers import Horizontal, Vertical
+from textual.selection import Selection
 from textual.widgets import Button, DirectoryTree, Input, RichLog, Static
 
 from libre_claw import __version__
@@ -132,6 +133,18 @@ class SlashCommand:
     name: str
     usage: str
     description: str
+
+
+class SelectableRichLog(RichLog):
+    """RichLog variant that exposes rendered lines to Textual text selection."""
+
+    ALLOW_SELECT = True
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        text = _rich_log_selection_text(self.lines)
+        if not text:
+            return None
+        return selection.extract(text), "\n"
 
 
 @dataclass(frozen=True)
@@ -701,7 +714,7 @@ class LibreClawApp(App[None]):
             with Vertical(id="main"):
                 yield Static("", id="palette", classes="hidden")
                 yield Static("", id="startup-panel")
-                yield RichLog(id="chat", wrap=True, highlight=True, markup=True)
+                yield SelectableRichLog(id="chat", wrap=True, highlight=True, markup=True)
                 yield Static("", id="suggestions", classes="hidden")
                 with Vertical(id="permission-panel", classes="hidden"):
                     yield Static("", id="permission-title")
@@ -720,7 +733,7 @@ class LibreClawApp(App[None]):
                         yield Button("Browser", id="artifact-browser", compact=True)
                         yield Button("Close", id="artifact-close", compact=True)
                     yield Static("", id="artifact-title")
-                    yield RichLog(id="artifact-content", wrap=True, highlight=True, markup=True)
+                    yield SelectableRichLog(id="artifact-content", wrap=True, highlight=True, markup=True)
                 yield Input(placeholder=self._input_placeholder(), id="input")
 
     async def on_mount(self) -> None:
@@ -1082,6 +1095,8 @@ class LibreClawApp(App[None]):
         self._cancel_active_generation()
 
     def action_quit_app(self) -> None:
+        if self._copy_selected_text_to_clipboard():
+            return
         self._cancel_active_generation(quiet=True, cancel_daemon_run=False)
         self.exit()
 
@@ -1106,11 +1121,21 @@ class LibreClawApp(App[None]):
         self._accept_selected_suggestion(self.query_one("#input", Input))
 
     def action_copy_last_response(self) -> None:
+        if self._copy_selected_text_to_clipboard():
+            return
         if not self._last_assistant_response:
             self._append_system("No assistant response to copy.")
             return
         self.copy_to_clipboard(self._last_assistant_response)
         self._append_system("Copied last assistant response to clipboard.")
+
+    def _copy_selected_text_to_clipboard(self) -> bool:
+        selected_text = self.screen.get_selected_text()
+        if not selected_text:
+            return False
+        self.copy_to_clipboard(selected_text)
+        self._append_system("Copied selected text to clipboard.")
+        return True
 
     async def _stream_agent_response(self, user_message: str, assistant_index: int) -> None:
         if self.agent is None:
@@ -4744,6 +4769,10 @@ def _bounded_menu_index(index: int, size: int) -> int:
     if size <= 0:
         return 0
     return max(0, min(index, size - 1))
+
+
+def _rich_log_selection_text(lines: Sequence[Any]) -> str:
+    return "\n".join(str(getattr(line, "text", line)).rstrip() for line in lines)
 
 
 def _menu_line(command: SlashCommand, *, selected: bool, usage_width: int) -> str:

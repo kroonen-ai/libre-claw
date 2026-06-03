@@ -9,6 +9,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from rich.console import Console
+from rich.segment import Segment
+from textual.geometry import Offset
+from textual.selection import Selection
+from textual.strip import Strip
 
 from libre_claw.auth.api_keys import ApiKeyLookup
 from libre_claw.auth.codex import CodexStatus
@@ -30,6 +34,7 @@ from libre_claw.tui.app import (
     ContextMeter,
     LibreClawApp,
     PROJECT_NOTICE,
+    SelectableRichLog,
     STARTUP_ASCII,
     STREAM_RENDER_MAX_BUFFERED_CHARS,
     StreamRenderBuffer,
@@ -45,6 +50,7 @@ from libre_claw.tui.app import (
     _parse_model_argument,
     _replace_general,
     _run_verification_text,
+    _rich_log_selection_text,
     _startup_message,
     _startup_renderable,
     _tool_preview,
@@ -263,6 +269,36 @@ async def test_command_palette_supports_arrow_selection(monkeypatch, tmp_path: P
 
     assert app.palette_open is False
     assert any("Libre Claw status" in entry.content for entry in app.transcript)
+
+
+def test_selectable_rich_log_extracts_rendered_text() -> None:
+    log = SelectableRichLog()
+    log.lines = [
+        Strip([Segment("System: selectable text    ")]),
+        Strip([Segment("next line")]),
+    ]
+
+    selected = log.get_selection(Selection(Offset(8, 0), Offset(18, 0)))
+
+    assert _rich_log_selection_text(log.lines) == "System: selectable text\nnext line"
+    assert selected == ("selectable", "\n")
+
+
+async def test_copy_shortcut_prefers_active_text_selection(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        chat = app.query_one("#chat", SelectableRichLog)
+        chat.clear()
+        chat.write("copy this text")
+        app.screen.selections = {chat: Selection(Offset(0, 0), Offset(4, 0))}
+        app.action_copy_last_response()
+
+    assert app.clipboard == "copy"
+    assert any("Copied selected text to clipboard." in entry.content for entry in app.transcript)
 
 
 def test_model_argument_parses_provider_and_colon_model() -> None:
