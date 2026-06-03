@@ -223,6 +223,48 @@ def test_slash_suggestion_completion(monkeypatch, tmp_path: Path) -> None:
     assert app._should_complete_on_submit("/model") is False
 
 
+async def test_slash_suggestions_support_arrow_selection(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        input_widget = app.query_one("#input")
+        input_widget.value = "/m"
+        app._update_slash_suggestions(input_widget.value)
+
+        assert app._slash_suggestions[0].name == "/model"
+        assert app._slash_suggestion_text(app._slash_suggestions).splitlines()[0].startswith("> /model")
+
+        assert app._move_menu_selection(1) is True
+        assert app._slash_suggestion_text(app._slash_suggestions).splitlines()[1].startswith("> /models")
+
+        app.action_accept_suggestion()
+
+    assert input_widget.value == "/models"
+
+
+async def test_command_palette_supports_arrow_selection(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        app.action_command_palette()
+        assert app.palette_open is True
+        assert app._palette_text("").splitlines()[1].startswith("> /help")
+
+        assert app._move_menu_selection(1) is True
+        assert app._palette_text("").splitlines()[2].startswith("> /status")
+
+        await app._handle_palette_input("")
+
+    assert app.palette_open is False
+    assert any("Libre Claw status" in entry.content for entry in app.transcript)
+
+
 def test_model_argument_parses_provider_and_colon_model() -> None:
     assert _parse_model_argument("kimi-k2.6:cloud", "ollama") == ("ollama", "kimi-k2.6:cloud")
     assert _parse_model_argument("openrouter:openai/gpt-4o", "ollama") == ("openrouter", "openai/gpt-4o")

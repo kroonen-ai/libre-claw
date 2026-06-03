@@ -655,6 +655,8 @@ class LibreClawApp(App[None]):
         self.startup_expanded = False
         self.palette_open = False
         self._slash_suggestions: list[SlashCommand] = []
+        self._slash_suggestion_index = 0
+        self._palette_selected_index = 0
         self._active_task: asyncio.Task[None] | None = None
         self._pending_permission: AgentPermissionRequest | None = None
         self._pending_key_setup: PendingProviderKeySetup | None = None
@@ -815,7 +817,7 @@ class LibreClawApp(App[None]):
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         if self._should_complete_on_submit(text):
-            self._accept_first_suggestion(event.input)
+            self._accept_selected_suggestion(event.input)
             return
 
         event.input.value = ""
@@ -839,6 +841,13 @@ class LibreClawApp(App[None]):
         self._update_startup_panel()
 
     def on_key(self, event: events.Key) -> None:
+        if event.key == "up" and self._move_menu_selection(-1):
+            event.stop()
+            return
+        if event.key == "down" and self._move_menu_selection(1):
+            event.stop()
+            return
+
         if self._pending_permission is None:
             return
 
@@ -1056,15 +1065,13 @@ class LibreClawApp(App[None]):
 
     async def _handle_palette_input(self, query: str) -> None:
         matches = self._palette_matches(query)
-        if not query:
-            self._close_palette()
-            return
         if not matches:
             self._append_system(f"No command palette match for: {query}")
             self._close_palette()
             return
 
-        slash = matches[0].usage.split()[0]
+        index = _bounded_menu_index(self._palette_selected_index, len(matches))
+        slash = matches[index].usage.split()[0]
         self._close_palette()
         await self._handle_command(slash)
 
@@ -1094,8 +1101,9 @@ class LibreClawApp(App[None]):
 
     def action_accept_suggestion(self) -> None:
         if self.palette_open:
+            self._accept_selected_palette_command(self.query_one("#input", Input))
             return
-        self._accept_first_suggestion(self.query_one("#input", Input))
+        self._accept_selected_suggestion(self.query_one("#input", Input))
 
     def action_copy_last_response(self) -> None:
         if not self._last_assistant_response:
@@ -3203,17 +3211,23 @@ class LibreClawApp(App[None]):
     def _sidebar_root_text(self) -> str:
         return f"cwd: {self.config.general.working_directory}"
 
-    def _update_palette(self, query: str = "") -> None:
+    def _update_palette(self, query: str = "", *, reset_selection: bool = True) -> None:
         palette = self.query_one("#palette", Static)
         if not self.palette_open:
             palette.add_class("hidden")
             palette.update("")
+            self._palette_selected_index = 0
             return
         palette.remove_class("hidden")
+        matches = self._palette_matches(query)
+        if reset_selection:
+            self._palette_selected_index = 0
+        self._palette_selected_index = _bounded_menu_index(self._palette_selected_index, len(matches))
         palette.update(self._palette_text(query))
 
     def _close_palette(self) -> None:
         self.palette_open = False
+        self._palette_selected_index = 0
         self._update_palette()
         self.query_one("#input", Input).placeholder = self._input_placeholder()
 
@@ -3230,20 +3244,32 @@ class LibreClawApp(App[None]):
         return [*name_matches, *description_matches]
 
     def _palette_text(self, query: str) -> str:
-        lines = ["Command palette - type a command name and press Enter"]
-        lines.extend(f"{command.usage:<26} {command.description}" for command in self._palette_matches(query))
+        matches = self._palette_matches(query)
+        lines = ["Command palette - Up/Down select, Enter run, Tab fill"]
+        lines.extend(
+            _menu_line(command, selected=index == self._palette_selected_index, usage_width=26)
+            for index, command in enumerate(matches)
+        )
         return "\n".join(lines)
 
     def _help_text(self) -> str:
         command_lines = "\n".join(f"{command.usage} - {command.description}" for command in SLASH_COMMANDS)
-        return f"{command_lines}\nCtrl+C exits. Esc or /cancel interrupts. Permission prompts support buttons plus y, n, a, ! shortcuts."
+        return (
+            f"{command_lines}\n"
+            "Ctrl+C exits. Esc or /cancel interrupts. Menus support Up/Down, Enter, and Tab. "
+            "Permission prompts support buttons plus y, n, a, ! shortcuts."
+        )
 
-    def _update_slash_suggestions(self, text: str) -> None:
+    def _update_slash_suggestions(self, text: str, *, reset_selection: bool = True) -> None:
         self._slash_suggestions = self._slash_suggestion_matches(text)
+        if reset_selection:
+            self._slash_suggestion_index = 0
+        self._slash_suggestion_index = _bounded_menu_index(self._slash_suggestion_index, len(self._slash_suggestions))
         suggestions = self.query_one("#suggestions", Static)
         if not self._slash_suggestions:
             suggestions.add_class("hidden")
             suggestions.update("")
+            self._slash_suggestion_index = 0
             return
         suggestions.remove_class("hidden")
         suggestions.update(self._slash_suggestion_text(self._slash_suggestions))
@@ -3469,7 +3495,10 @@ class LibreClawApp(App[None]):
         return []
 
     def _slash_suggestion_text(self, suggestions: list[SlashCommand]) -> str:
-        return "\n".join(f"{command.usage:<30} {command.description}" for command in suggestions)
+        return "\n".join(
+            _menu_line(command, selected=index == self._slash_suggestion_index, usage_width=30)
+            for index, command in enumerate(suggestions)
+        )
 
     def _should_complete_on_submit(self, text: str) -> bool:
         if not self._slash_suggestions:
@@ -3481,13 +3510,44 @@ class LibreClawApp(App[None]):
             return stripped.lower() not in {command.name.lower() for command in self._slash_suggestions}
         return all(stripped.lower() != command.name for command in SLASH_COMMANDS)
 
-    def _accept_first_suggestion(self, input_widget: Input) -> None:
+    def _accept_selected_suggestion(self, input_widget: Input) -> None:
         if not self._slash_suggestions:
             return
-        command = self._slash_suggestions[0]
+        command = self._slash_suggestions[_bounded_menu_index(self._slash_suggestion_index, len(self._slash_suggestions))]
         input_widget.value = self._completion_text(command)
         input_widget.cursor_position = len(input_widget.value)
         self._update_slash_suggestions(input_widget.value)
+
+    def _accept_first_suggestion(self, input_widget: Input) -> None:
+        self._slash_suggestion_index = 0
+        self._accept_selected_suggestion(input_widget)
+
+    def _accept_selected_palette_command(self, input_widget: Input) -> None:
+        if not self.palette_open:
+            return
+        matches = self._palette_matches(input_widget.value)
+        if not matches:
+            return
+        command = matches[_bounded_menu_index(self._palette_selected_index, len(matches))]
+        input_widget.value = self._completion_text(command)
+        input_widget.cursor_position = len(input_widget.value)
+        self._close_palette()
+        self._update_slash_suggestions(input_widget.value)
+
+    def _move_menu_selection(self, delta: int) -> bool:
+        input_widget = self.query_one("#input", Input)
+        if self.palette_open:
+            matches = self._palette_matches(input_widget.value)
+            if not matches:
+                return False
+            self._palette_selected_index = (self._palette_selected_index + delta) % len(matches)
+            self._update_palette(input_widget.value, reset_selection=False)
+            return True
+        if self._slash_suggestions:
+            self._slash_suggestion_index = (self._slash_suggestion_index + delta) % len(self._slash_suggestions)
+            self._update_slash_suggestions(input_widget.value, reset_selection=False)
+            return True
+        return False
 
     def _completion_text(self, command: SlashCommand) -> str:
         if " " in command.name:
@@ -4678,6 +4738,17 @@ def _model_suggestion_commands(config: LibreClawConfig) -> list[SlashCommand]:
                 )
             )
     return suggestions
+
+
+def _bounded_menu_index(index: int, size: int) -> int:
+    if size <= 0:
+        return 0
+    return max(0, min(index, size - 1))
+
+
+def _menu_line(command: SlashCommand, *, selected: bool, usage_width: int) -> str:
+    marker = ">" if selected else " "
+    return f"{marker} {command.usage:<{usage_width}} {command.description}"
 
 
 def _theme_suggestion_commands() -> list[SlashCommand]:
