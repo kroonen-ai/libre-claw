@@ -125,6 +125,7 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "google/gemini-3.5-flash",
         "openai/gpt-5.5",
         "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
         "stepfun/step-3.5-flash",
         "openai/gpt-4o-mini",
         "openrouter/auto",

@@ -94,6 +94,7 @@ First shippable Libre Claw release, built by Kroonen AI.
   catalog for TUI, Telegram, and usage reports, including
   `deepseek/deepseek-v4-flash`, `qwen/qwen3.7-max`,
   `moonshotai/kimi-k2.6`, `minimax/minimax-m3`,
+  `nvidia/nemotron-3-ultra-550b-a55b:free`,
   `anthropic/claude-opus-4.8`, and `openai/gpt-5.5`.
 - Provider fallback routes can fail over to backup provider/model/account
   combinations when the primary provider is unavailable before it starts

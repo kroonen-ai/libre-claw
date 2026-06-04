@@ -95,6 +95,11 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "NVIDIA Nemotron free-tier preset.",
     ),
     OpenRouterModelPreset(
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "Nemotron 3 Ultra 550B Free",
+        "NVIDIA Nemotron Ultra free-tier preset.",
+    ),
+    OpenRouterModelPreset(
         "stepfun/step-3.5-flash",
         "Step 3.5 Flash",
         "StepFun fast model preset.",
