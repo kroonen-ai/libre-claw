@@ -112,6 +112,7 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "deepseek/deepseek-v4-flash",
         "tencent/hy3-preview",
         "qwen/qwen3.7-max",
+        "qwen/qwen3.7-plus",
         "deepseek/deepseek-v4-pro",
         "moonshotai/kimi-k2.6",
         "minimax/minimax-m2.7",

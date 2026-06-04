@@ -643,8 +643,13 @@ def test_telegram_openrouter_keyboard_promotes_current_model(tmp_path: Path, mon
     model_keyboard = _model_keyboard(config, "openrouter")
 
     first = model_keyboard.inline_keyboard[0][0]
+    minimax_index = next(
+        index
+        for index, preset in enumerate(TELEGRAM_MODEL_PRESETS["openrouter"])
+        if preset.model == "minimax/minimax-m3"
+    )
     assert first.text == "✓ MiniMax M3"
-    assert first.callback_data == "cfg:model:openrouter:11"
+    assert first.callback_data == f"cfg:model:openrouter:{minimax_index}"
 
 
 async def test_telegram_model_command_strips_global_flag_and_persists(monkeypatch, tmp_path: Path) -> None:

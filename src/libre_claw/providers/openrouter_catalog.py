@@ -30,6 +30,11 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Primary high-capacity coding preset.",
     ),
     OpenRouterModelPreset(
+        "qwen/qwen3.7-plus",
+        "Qwen3.7 Plus",
+        "Qwen plus-tier coding and agent preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
         "deepseek/deepseek-v4-pro",
         "DeepSeek V4 Pro",
         "Higher-capacity DeepSeek V4 agent preset.",
