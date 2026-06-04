@@ -1482,14 +1482,14 @@ async def test_tui_scrollbars_use_brand_accent(monkeypatch, tmp_path: Path) -> N
         for selector in ("#workspace", "#sidebar", "#file-tree", "#main", "#input"):
             styles = app.query_one(selector).styles
 
-            assert styles.scrollbar_color.hex == "#EF4444"
-            assert styles.scrollbar_color_hover.hex == "#EF4444"
-            assert styles.scrollbar_color_active.hex == "#EF4444"
+            assert styles.scrollbar_color.hex == "#FF5C5C"
+            assert styles.scrollbar_color_hover.hex == "#FF5C5C"
+            assert styles.scrollbar_color_active.hex == "#FF5C5C"
             assert styles.scrollbar_size_vertical == 1
             assert styles.scrollbar_size_horizontal == 1
 
         chat_styles = app.query_one("#chat").styles
-        assert chat_styles.scrollbar_color.hex == "#EF4444"
+        assert chat_styles.scrollbar_color.hex == "#FF5C5C"
         assert chat_styles.scrollbar_size_vertical == 0
         assert chat_styles.scrollbar_size_horizontal == 0
 

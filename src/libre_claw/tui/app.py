@@ -304,7 +304,7 @@ PERMISSION_KEYS: dict[str, PermissionResolution] = {
     "exclamation_mark": "always_allow_call",
 }
 
-ASSISTANT_ACCENT = "#EF4444"
+ASSISTANT_ACCENT = "#FF5C5C"
 PROJECT_NOTICE = "Apache-2.0 | Kroonen AI | hello@kroonen.ai"
 PROJECT_LINKS = "Website: https://libreclaw.sh | GitHub: https://github.com/kroonen-ai/libre-claw"
 STREAM_RENDER_INTERVAL = 0.05
@@ -338,25 +338,25 @@ class LibreClawApp(App[None]):
     CSS = """
     Screen {
         layout: vertical;
-        background: #101418;
-        color: #dce3ea;
-        scrollbar-color: #EF4444;
-        scrollbar-color-hover: #EF4444;
-        scrollbar-color-active: #EF4444;
-        scrollbar-background: #101418;
-        scrollbar-background-hover: #101418;
-        scrollbar-background-active: #101418;
-        scrollbar-corner-color: #101418;
+        background: #0b1020;
+        color: #e4e4e7;
+        scrollbar-color: #FF5C5C;
+        scrollbar-color-hover: #FF5C5C;
+        scrollbar-color-active: #FF5C5C;
+        scrollbar-background: #0b1020;
+        scrollbar-background-hover: #0b1020;
+        scrollbar-background-active: #0b1020;
+        scrollbar-corner-color: #0b1020;
         scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 1;
     }
 
     Screen.light {
         background: #f7f7f2;
-        color: #18212a;
-        scrollbar-color: #EF4444;
-        scrollbar-color-hover: #EF4444;
-        scrollbar-color-active: #EF4444;
+        color: #111827;
+        scrollbar-color: #FF5C5C;
+        scrollbar-color-hover: #FF5C5C;
+        scrollbar-color-active: #FF5C5C;
         scrollbar-background: #f7f7f2;
         scrollbar-background-hover: #f7f7f2;
         scrollbar-background-active: #f7f7f2;
@@ -367,22 +367,22 @@ class LibreClawApp(App[None]):
 
     #status {
         height: 1;
-        background: #18212a;
+        background: #111827;
         color: #f2f5f8;
         padding: 0 1;
     }
 
     Screen.light #status {
         background: #d9e2ec;
-        color: #101418;
+        color: #0b1020;
     }
 
     #workspace {
         height: 1fr;
         border: none;
-        border-top: solid #EF4444;
-        border-bottom: solid #EF4444;
-        background: #111820;
+        border-top: solid #FF5C5C;
+        border-bottom: solid #FF5C5C;
+        background: #111827;
     }
 
     Screen.light #workspace {
@@ -396,13 +396,13 @@ class LibreClawApp(App[None]):
         min-width: 22;
         height: 1fr;
         border: none;
-        background: #0f151c;
+        background: #0b1020;
     }
 
     #sidebar-rail {
         width: 8;
         height: 1fr;
-        background: #0f151c;
+        background: #0b1020;
         border: none;
         padding: 1 0;
     }
@@ -435,7 +435,7 @@ class LibreClawApp(App[None]):
 
     #file-tree {
         height: 1fr;
-        background: #0f151c;
+        background: #0b1020;
     }
 
     Screen.light #sidebar {
@@ -456,7 +456,7 @@ class LibreClawApp(App[None]):
         width: 1fr;
         height: 1fr;
         border: none;
-        background: #111820;
+        background: #111827;
     }
 
     #palette {
@@ -476,8 +476,8 @@ class LibreClawApp(App[None]):
         height: auto;
         max-height: 8;
         padding: 0 2;
-        border: solid #EF4444;
-        background: #0b1726;
+        border: solid #FF5C5C;
+        background: #111827;
         color: #dbeafe;
     }
 
@@ -489,7 +489,7 @@ class LibreClawApp(App[None]):
         height: 1fr;
         padding: 1 2;
         border: none;
-        background: #111820;
+        background: #111827;
     }
 
     Screen.light #main {
@@ -505,8 +505,8 @@ class LibreClawApp(App[None]):
     #permission-panel {
         height: auto;
         padding: 1 2;
-        border-top: solid #EF4444;
-        background: #0b1726;
+        border-top: solid #FF5C5C;
+        background: #111827;
         color: #dbeafe;
     }
 
@@ -538,17 +538,17 @@ class LibreClawApp(App[None]):
 
     Screen.light #permission-panel {
         background: #edf5ff;
-        color: #101418;
+        color: #0b1020;
     }
 
     Screen.light #permission-title {
-        color: #101418;
+        color: #0b1020;
     }
 
     #artifact-panel {
         height: 16;
-        border-top: solid #EF4444;
-        background: #0f151c;
+        border-top: solid #FF5C5C;
+        background: #0b1020;
         padding: 0 1;
     }
 
@@ -574,14 +574,14 @@ class LibreClawApp(App[None]):
 
     #artifact-content {
         height: 1fr;
-        background: #0f151c;
+        background: #0b1020;
         border: none;
     }
 
     Screen.light #artifact-panel,
     Screen.light #artifact-content {
         background: #f8fbff;
-        color: #101418;
+        color: #0b1020;
     }
 
     #workspace,
@@ -596,13 +596,13 @@ class LibreClawApp(App[None]):
     #artifact-content,
     #chat,
     #input {
-        scrollbar-color: #EF4444;
-        scrollbar-color-hover: #EF4444;
-        scrollbar-color-active: #EF4444;
-        scrollbar-background: #101418;
-        scrollbar-background-hover: #101418;
-        scrollbar-background-active: #101418;
-        scrollbar-corner-color: #101418;
+        scrollbar-color: #FF5C5C;
+        scrollbar-color-hover: #FF5C5C;
+        scrollbar-color-active: #FF5C5C;
+        scrollbar-background: #0b1020;
+        scrollbar-background-hover: #0b1020;
+        scrollbar-background-active: #0b1020;
+        scrollbar-corner-color: #0b1020;
         scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 1;
     }
@@ -619,9 +619,9 @@ class LibreClawApp(App[None]):
     Screen.light #artifact-content,
     Screen.light #chat,
     Screen.light #input {
-        scrollbar-color: #EF4444;
-        scrollbar-color-hover: #EF4444;
-        scrollbar-color-active: #EF4444;
+        scrollbar-color: #FF5C5C;
+        scrollbar-color-hover: #FF5C5C;
+        scrollbar-color-active: #FF5C5C;
         scrollbar-background: #f7f7f2;
         scrollbar-background-hover: #f7f7f2;
         scrollbar-background-active: #f7f7f2;
@@ -638,8 +638,8 @@ class LibreClawApp(App[None]):
     #input {
         height: 3;
         border: none;
-        border-top: solid #EF4444;
-        background: #121a22;
+        border-top: solid #FF5C5C;
+        background: #1f2937;
     }
 
     Screen.light #input {
@@ -5132,8 +5132,8 @@ def _tool_style(status: str) -> str:
     if status == "error":
         return "red"
     if status == "pending":
-        return "#EF4444"
-    return "#EF4444"
+        return "#3b82f6"
+    return "#FF5C5C"
 
 
 def _tool_timeline_title(name: str, *, is_error: bool, metadata: dict[str, Any]) -> str:

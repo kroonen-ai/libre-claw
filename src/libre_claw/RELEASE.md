@@ -127,7 +127,7 @@ First shippable Libre Claw release, built by Kroonen AI.
 - Interactive TUI permission panel with approve, deny, always allow tool, and
   always allow exact command options. Dangerous sandbox-blocked commands show a
   warning and require one-time approval or denial.
-- TUI polish: lobster-red `#EF4444` scrollbars, user labels, Libre Claw
+- TUI polish: Lobster `#FF5C5C` scrollbars, user labels, Libre Claw
   assistant labels, dark/light theme support, and cleaner panel borders.
 - TUI image attachments: paste or drag a local image path into a prompt, use
   `/attach <path>`, or use `/attach paste` / `/paste-image` to attach an image

@@ -34,28 +34,28 @@ _DASHBOARD_HTML = r"""<!doctype html>
   <style>
     :root {
       color-scheme: dark light;
-      --font-ui: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #000000;
-      --surface: #050505;
-      --surface-2: #0a0a0a;
-      --panel: rgba(10, 10, 10, 0.86);
-      --panel-strong: rgba(16, 16, 16, 0.94);
-      --panel-hover: rgba(255, 255, 255, 0.05);
+      --font-ui: "Satoshi", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "Jetbrains Mono", "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+      --bg: #0b1020;
+      --surface: #111827;
+      --surface-2: #1f2937;
+      --panel: rgba(17, 24, 39, 0.86);
+      --panel-strong: rgba(31, 41, 55, 0.94);
+      --panel-hover: rgba(255, 92, 92, 0.08);
       --line: rgba(255, 255, 255, 0.11);
       --line-strong: rgba(255, 255, 255, 0.18);
-      --text: #ffffff;
-      --soft: #d4d4d8;
+      --text: #e4e4e7;
+      --soft: #e4e4e7;
       --muted: #a1a1aa;
-      --accent: #ef4444;
-      --accent-soft: rgba(239, 68, 68, 0.15);
+      --accent: #ff5c5c;
+      --accent-soft: rgba(255, 92, 92, 0.15);
       --accent-strong: #fecaca;
-      --tool-accent: #fb7185;
-      --tool-soft: rgba(251, 113, 133, 0.14);
-      --danger: #ff4d4f;
-      --danger-soft: rgba(255, 77, 79, 0.14);
-      --ok: #42d392;
-      --ok-soft: rgba(66, 211, 146, 0.13);
+      --tool-accent: #3b82f6;
+      --tool-soft: rgba(59, 130, 246, 0.14);
+      --danger: #ff5c5c;
+      --danger-soft: rgba(255, 92, 92, 0.14);
+      --ok: #22c55e;
+      --ok-soft: rgba(34, 197, 94, 0.13);
       --warn: #f59e0b;
       --warn-soft: rgba(245, 158, 11, 0.13);
       --grid-dot: rgba(255, 255, 255, 0.12);
@@ -1082,13 +1082,13 @@ _DASHBOARD_HTML = r"""<!doctype html>
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 999px; }
     @media (prefers-color-scheme: light) {
-      html:not([data-theme]), html[data-theme="lobster"], html[data-theme="libre-default"] {
+      html:not([data-theme]) {
         --bg: #f7f8fb;
         --surface: #ffffff;
         --surface-2: #f5f7fb;
         --panel: rgba(255, 255, 255, 0.88);
         --panel-strong: #ffffff;
-        --panel-hover: rgba(239, 68, 68, 0.06);
+        --panel-hover: rgba(255, 92, 92, 0.06);
         --line: rgba(15, 23, 42, 0.12);
         --line-strong: rgba(15, 23, 42, 0.2);
         --text: #09090b;
