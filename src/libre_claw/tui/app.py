@@ -115,7 +115,7 @@ from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
 
 
-TranscriptRole = Literal["user", "assistant", "system", "tool", "permission", "file"]
+TranscriptRole = Literal["startup", "user", "assistant", "system", "tool", "permission", "file"]
 ArtifactTab = Literal["plan", "summary", "verify", "diff", "browser"]
 
 
@@ -293,6 +293,7 @@ PERMISSION_KEYS: dict[str, PermissionResolution] = {
 
 ASSISTANT_ACCENT = "#EF4444"
 PROJECT_NOTICE = "Apache-2.0 | Kroonen AI | hello@kroonen.ai"
+PROJECT_LINKS = "Website: https://libreclaw.sh | GitHub: https://github.com/kroonen-ai/libre-claw"
 STREAM_RENDER_INTERVAL = 0.05
 STREAM_RENDER_MAX_BUFFERED_CHARS = 240
 RUN_ARTIFACT_TIMEOUT = 10.0
@@ -467,18 +468,6 @@ class LibreClawApp(App[None]):
         display: none;
     }
 
-    #startup-panel {
-        height: auto;
-        padding: 1 2;
-        background: #111820;
-        color: #dce3ea;
-    }
-
-    Screen.light #startup-panel {
-        background: #ffffff;
-        color: #18212a;
-    }
-
     #chat {
         height: 1fr;
         padding: 1 2;
@@ -642,6 +631,7 @@ class LibreClawApp(App[None]):
         Binding("escape", "interrupt", "Interrupt", show=False),
         Binding("ctrl+b", "toggle_sidebar", "Files", show=True),
         Binding("ctrl+p", "command_palette", "Palette", show=True),
+        Binding("ctrl+r", "toggle_release_notes", "Release Notes", show=True),
         Binding("ctrl+shift+c", "copy_last_response", "Copy Last", show=True),
         Binding("tab", "accept_suggestion", "Complete", show=False),
     ]
@@ -666,6 +656,7 @@ class LibreClawApp(App[None]):
         self.transcript: list[TranscriptEntry] = []
         self.sidebar_visible = False
         self.startup_expanded = False
+        self._startup_entry_index: int | None = None
         self.palette_open = False
         self._slash_suggestions: list[SlashCommand] = []
         self._slash_suggestion_index = 0
@@ -713,7 +704,6 @@ class LibreClawApp(App[None]):
                 yield DirectoryTree(self.config.general.working_directory, id="file-tree")
             with Vertical(id="main"):
                 yield Static("", id="palette", classes="hidden")
-                yield Static("", id="startup-panel")
                 yield SelectableRichLog(id="chat", wrap=True, highlight=True, markup=True)
                 yield Static("", id="suggestions", classes="hidden")
                 with Vertical(id="permission-panel", classes="hidden"):
@@ -743,7 +733,7 @@ class LibreClawApp(App[None]):
         self._apply_tui_theme()
         self.query_one("#input", Input).focus()
         self._sync_sidebar_visibility()
-        self._update_startup_panel()
+        self._append_startup_entry()
         self._update_palette()
         self._update_slash_suggestions("")
         self.set_interval(1, self._update_status)
@@ -797,7 +787,6 @@ class LibreClawApp(App[None]):
             ("#sidebar-root", sidebar, muted),
             ("#file-tree", sidebar, text),
             ("#main", surface, text),
-            ("#startup-panel", surface, text),
             ("#chat", surface, text),
             ("#input", surface_2, text),
             ("#suggestions", panel, text),
@@ -823,6 +812,9 @@ class LibreClawApp(App[None]):
                 widget.styles.border_top = ("solid", accent)
         for widget in self.query("#workspace"):
             widget.styles.border_bottom = ("solid", accent)
+        for selector in ("#suggestions", "#palette"):
+            for widget in self.query(selector):
+                widget.styles.border = ("solid", accent)
 
         self.query_one("#permission-warning", Static).styles.color = Color.parse(palette.warn)
         self.query_one("#artifact-title", Static).styles.color = Color.parse(palette.accent_strong)
@@ -845,13 +837,6 @@ class LibreClawApp(App[None]):
             self._update_palette(event.value)
             return
         self._update_slash_suggestions(event.value)
-
-    def on_click(self, event: events.Click) -> None:
-        if getattr(event.widget, "id", None) != "startup-panel":
-            return
-        event.stop()
-        self.startup_expanded = not self.startup_expanded
-        self._update_startup_panel()
 
     def on_key(self, event: events.Key) -> None:
         if event.key == "up" and self._move_menu_selection(-1):
@@ -1119,6 +1104,10 @@ class LibreClawApp(App[None]):
             self._accept_selected_palette_command(self.query_one("#input", Input))
             return
         self._accept_selected_suggestion(self.query_one("#input", Input))
+
+    def action_toggle_release_notes(self) -> None:
+        self.startup_expanded = not self.startup_expanded
+        self._refresh_startup_entry()
 
     def action_copy_last_response(self) -> None:
         if self._copy_selected_text_to_clipboard():
@@ -1863,7 +1852,8 @@ class LibreClawApp(App[None]):
         self.session.clear()
         self._last_assistant_response = ""
         self._tool_entry_by_call_id.clear()
-        self._render_transcript()
+        self._startup_entry_index = None
+        self._append_startup_entry()
         self._append_system("Transcript cleared.")
 
     def _handle_theme_command(self, argument: str) -> None:
@@ -1903,7 +1893,6 @@ class LibreClawApp(App[None]):
         if self._theme.is_light:
             self.add_class("light")
         self._apply_tui_theme()
-        self._update_startup_panel()
         self._render_transcript()
         self._update_status()
 
@@ -2130,7 +2119,8 @@ class LibreClawApp(App[None]):
         self.session.messages = stored.messages
         self.session.summary = stored.summary or None
         self.transcript = self._transcript_from_messages(stored.messages)
-        self._render_transcript()
+        self._startup_entry_index = None
+        self._append_startup_entry()
         self._update_status()
         self._rebuild_agent()
         self._append_system(f"Session loaded from {name}.")
@@ -2715,9 +2705,10 @@ class LibreClawApp(App[None]):
         last_seen = _read_last_seen_event_id(run)
         changes = run_changes_text(run, events, last_seen)
         self.transcript = _transcript_from_run_events(events)
+        self._startup_entry_index = None
+        self._append_startup_entry()
         self._tool_entry_by_call_id.clear()
         self._active_run_id = run.run_id if run.state in {"running", "blocked"} else None
-        self._render_transcript()
         self._append_system(changes)
         _write_last_seen_event_id(run, _max_event_id(events))
         await self._show_artifact_panel(run, "summary")
@@ -3090,6 +3081,8 @@ class LibreClawApp(App[None]):
         return True
 
     def _format_entry(self, entry: TranscriptEntry, index: int = 0) -> RenderableType:
+        if entry.role == "startup":
+            return _startup_renderable(self.startup_expanded, accent=self._theme.accent)
         if entry.role == "user":
             return Text.assemble(("User: ", f"bold {self._theme.accent}"), entry.content)
         if entry.role == "assistant":
@@ -3118,7 +3111,7 @@ class LibreClawApp(App[None]):
             return Text.assemble(("Permission: ", "bold yellow"), entry.content)
         if entry.role == "file":
             title = entry.title or "File"
-            return Group(Text(f"File: {title}", style="bold #EF4444"), Syntax(entry.content, "text"))
+            return Group(Text(f"File: {title}", style=f"bold {self._theme.accent}"), Syntax(entry.content, "text"))
         return Text("System: " + entry.content, style="dim")
 
     def _tool_display_index(self, transcript_index: int) -> int:
@@ -3230,8 +3223,20 @@ class LibreClawApp(App[None]):
         self.query_one("#sidebar", Vertical).display = self.sidebar_visible
         self.query_one("#sidebar-rail", Vertical).display = not self.sidebar_visible
 
-    def _update_startup_panel(self) -> None:
-        self.query_one("#startup-panel", Static).update(_startup_renderable(self.startup_expanded, accent=self._theme.accent))
+    def _append_startup_entry(self) -> None:
+        if self.transcript and self.transcript[0].role == "startup":
+            self._startup_entry_index = 0
+            return
+        self.transcript = [entry for entry in self.transcript if entry.role != "startup"]
+        self.transcript.insert(0, TranscriptEntry(role="startup", content=""))
+        self._startup_entry_index = 0
+        self._render_transcript()
+
+    def _refresh_startup_entry(self) -> None:
+        if self._startup_entry_index is None or self._startup_entry_index >= len(self.transcript):
+            self._append_startup_entry()
+            return
+        self._render_transcript()
 
     def _sidebar_root_text(self) -> str:
         return f"cwd: {self.config.general.working_directory}"
@@ -3281,7 +3286,8 @@ class LibreClawApp(App[None]):
         command_lines = "\n".join(f"{command.usage} - {command.description}" for command in SLASH_COMMANDS)
         return (
             f"{command_lines}\n"
-            "Ctrl+C exits. Esc or /cancel interrupts. Menus support Up/Down, Enter, and Tab. "
+            "Ctrl+C exits. Ctrl+R toggles release notes. Esc or /cancel interrupts. "
+            "Menus support Up/Down, Enter, and Tab. "
             "Permission prompts support buttons plus y, n, a, ! shortcuts."
         )
 
@@ -3837,7 +3843,7 @@ class LibreClawApp(App[None]):
             return "Permission prompt active: click a choice or press y/n/a/!"
         if self._goal_description is not None:
             return "Goal mode active... (/goal status, /goal stop)"
-        return "Type a message... (/help, Ctrl+B files, Ctrl+P palette, Ctrl+C exit)"
+        return "Type a message... (/help, Ctrl+B files, Ctrl+P palette, Ctrl+R release, Ctrl+C exit)"
 
 
 def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig:
@@ -4937,23 +4943,25 @@ def _startup_renderable(expanded: bool, accent: str = ASSISTANT_ACCENT) -> Rende
     if not expanded:
         return Group(
             banner,
+            Text(PROJECT_LINKS, style="dim"),
             Text(
-                f"Libre Claw v{__version__} - release notes collapsed. Click this header to expand.",
+                f"Libre Claw v{__version__} - release notes collapsed. Press Ctrl+R to expand.",
                 style="dim",
             ),
             Text(PROJECT_NOTICE, style="dim"),
         )
     return Group(
         banner,
+        Text(PROJECT_LINKS, style="dim"),
         Text(f"Libre Claw v{__version__}", style=f"bold {accent}"),
         Text(PROJECT_NOTICE, style="dim"),
         Markdown(latest_release_notes()),
-        Text("Click this header to collapse. Type /help for commands.", style="dim"),
+        Text("Press Ctrl+R to collapse. Type /help for commands.", style="dim"),
     )
 
 
 def _startup_message() -> str:
-    return f"{STARTUP_ASCII.strip()}\n\n{latest_release_notes()}\n\nType /help for commands."
+    return f"{STARTUP_ASCII.strip()}\n\n{PROJECT_LINKS}\n\n{latest_release_notes()}\n\nType /help for commands."
 
 
 def _permission_label(resolution: PermissionResolution) -> str:

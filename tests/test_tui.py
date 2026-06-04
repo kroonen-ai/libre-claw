@@ -34,6 +34,7 @@ from libre_claw.tui.app import (
     ContextMeter,
     LibreClawApp,
     PROJECT_NOTICE,
+    PROJECT_LINKS,
     SelectableRichLog,
     STARTUP_ASCII,
     STREAM_RENDER_MAX_BUFFERED_CHARS,
@@ -842,6 +843,7 @@ def test_startup_message_includes_ascii_art_and_release_notes() -> None:
     message = _startup_message()
 
     assert STARTUP_ASCII.strip() in message
+    assert PROJECT_LINKS in message
     assert "## 0.1.0" in message
     assert "Type /help for commands." in message
 
@@ -856,10 +858,14 @@ def test_startup_renderable_collapses_release_notes() -> None:
 
     assert STARTUP_ASCII.strip().splitlines()[0] in collapsed
     assert "release notes collapsed" in collapsed
+    assert "Press Ctrl+R to expand" in collapsed
+    assert PROJECT_LINKS in collapsed
     assert PROJECT_NOTICE in collapsed
     assert "## 0.1.0" not in collapsed
+    assert PROJECT_LINKS in expanded
     assert PROJECT_NOTICE in expanded
     assert "0.1.0 - 2026-05-24" in expanded
+    assert "Press Ctrl+R to collapse" in expanded
 
 
 def test_stream_render_buffer_flushes_first_delta_then_throttles() -> None:
@@ -1106,6 +1112,13 @@ def test_ctrl_c_binding_exits_app() -> None:
     assert binding.description == "Exit"
 
 
+def test_ctrl_r_binding_toggles_release_notes() -> None:
+    binding = next(binding for binding in LibreClawApp.BINDINGS if binding.key == "ctrl+r")
+
+    assert binding.action == "toggle_release_notes"
+    assert binding.description == "Release Notes"
+
+
 async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -1114,7 +1127,7 @@ async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None
 
     async with app.run_test():
         assert app.query_one("#chat")
-        assert app.query_one("#startup-panel")
+        assert app.transcript[0].role == "startup"
         assert app.query_one("#input")
         assert app.query_one("#sidebar-rail")
         assert app.query_one("#sidebar")
@@ -1126,6 +1139,22 @@ async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None
         assert app.query_one("#sidebar-up")
         assert app.query_one("#palette")
         assert app.query_one("#permission-panel").has_class("hidden")
+
+
+async def test_tui_release_notes_toggle_uses_startup_transcript_entry(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        assert app.transcript[0].role == "startup"
+        assert app.startup_expanded is False
+
+        app.action_toggle_release_notes()
+
+        assert app.transcript[0].role == "startup"
+        assert app.startup_expanded is True
 
 
 async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_path: Path) -> None:
@@ -1213,10 +1242,19 @@ async def test_tui_uses_configured_theme_palette(monkeypatch, tmp_path: Path) ->
     async with app.run_test(size=(120, 45)):
         workspace = app.query_one("#workspace")
         chat = app.query_one("#chat")
+        suggestions = app.query_one("#suggestions")
+        input_box = app.query_one("#input")
         renderable = app._format_entry(TranscriptEntry(role="assistant", content="hello"))
 
         assert workspace.styles.background.hex == "#06100A"
+        assert workspace.styles.border.top[1].hex == "#00FF41"
+        assert workspace.styles.border.bottom[1].hex == "#00FF41"
         assert chat.styles.scrollbar_color.hex == "#00FF41"
+        assert suggestions.styles.border.top[1].hex == "#00FF41"
+        assert suggestions.styles.border.right[1].hex == "#00FF41"
+        assert suggestions.styles.border.bottom[1].hex == "#00FF41"
+        assert suggestions.styles.border.left[1].hex == "#00FF41"
+        assert input_box.styles.border.top[1].hex == "#00FF41"
         assert "#00ff41" in str(renderable.renderables[0].style).lower()
 
 
