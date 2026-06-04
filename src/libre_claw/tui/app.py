@@ -613,6 +613,11 @@ class LibreClawApp(App[None]):
         scrollbar-size-horizontal: 1;
     }
 
+    #chat {
+        scrollbar-size-vertical: 0;
+        scrollbar-size-horizontal: 0;
+    }
+
     #input {
         height: 3;
         border: none;
@@ -632,10 +637,10 @@ class LibreClawApp(App[None]):
         Binding("ctrl+b", "toggle_sidebar", "Files", show=True),
         Binding("ctrl+p", "command_palette", "Palette", show=True),
         Binding("ctrl+r", "toggle_release_notes", "Release Notes", show=True),
-        Binding("pageup", "scroll_chat_up", "Scroll Up", show=True),
-        Binding("pagedown", "scroll_chat_down", "Scroll Down", show=True),
-        Binding("ctrl+home", "scroll_chat_top", "Top", show=False),
-        Binding("ctrl+end", "scroll_chat_bottom", "Bottom", show=False),
+        Binding("pageup", "scroll_chat_up", "Scroll Up", show=True, priority=True),
+        Binding("pagedown", "scroll_chat_down", "Scroll Down", show=True, priority=True),
+        Binding("ctrl+home", "scroll_chat_top", "Top", show=False, priority=True),
+        Binding("ctrl+end", "scroll_chat_bottom", "Bottom", show=False, priority=True),
         Binding("ctrl+shift+c", "copy_last_response", "Copy Last", show=True),
         Binding("tab", "accept_suggestion", "Complete", show=False),
     ]
@@ -672,6 +677,7 @@ class LibreClawApp(App[None]):
         self._tool_entry_by_call_id: dict[str, int] = {}
         self._chat_entry_spans: dict[int, tuple[int, int]] = {}
         self._started_at = time.monotonic()
+        self._last_status_text: str | None = None
         self._last_assistant_response = ""
         self._goal_description: str | None = None
         self._goal_turn = 0
@@ -851,6 +857,9 @@ class LibreClawApp(App[None]):
         if event.key == "down" and self._move_menu_selection(1):
             event.stop()
             return
+        if self._scroll_chat_with_arrow_key(event):
+            event.stop()
+            return
 
         if self._pending_permission is None:
             return
@@ -861,6 +870,16 @@ class LibreClawApp(App[None]):
 
         event.stop()
         self._resolve_pending_permission(resolution)
+
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        if self._event_targets_chat(event):
+            event.stop()
+            self.query_one("#chat", RichLog).scroll_up(animate=False, immediate=True)
+
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        if self._event_targets_chat(event):
+            event.stop()
+            self.query_one("#chat", RichLog).scroll_down(animate=False, immediate=True)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -1126,6 +1145,25 @@ class LibreClawApp(App[None]):
 
     def action_scroll_chat_bottom(self) -> None:
         self.query_one("#chat", RichLog).scroll_end(animate=False, immediate=True)
+
+    def _scroll_chat_with_arrow_key(self, event: events.Key) -> bool:
+        if self.palette_open or self._slash_suggestions or self._pending_permission is not None:
+            return False
+        if event.key not in {"up", "down"}:
+            return False
+        input_widget = self.query_one("#input", Input)
+        if input_widget.value:
+            return False
+        chat = self.query_one("#chat", RichLog)
+        if event.key == "up":
+            chat.scroll_up(animate=False, immediate=True)
+        else:
+            chat.scroll_down(animate=False, immediate=True)
+        return True
+
+    def _event_targets_chat(self, event: events.MouseEvent) -> bool:
+        widget = getattr(event, "widget", None)
+        return widget is self.query_one("#chat", RichLog)
 
     def action_copy_last_response(self) -> None:
         if self._copy_selected_text_to_clipboard():
@@ -3778,16 +3816,20 @@ class LibreClawApp(App[None]):
             active = f"goal {self._goal_turn}/{self._goal_max_turns}"
         else:
             active = "running" if self._active_task is not None and not self._active_task.done() else "idle"
+        activity = f"{elapsed}s | {active}" if active != "idle" else "idle"
         return (
             f"Libre Claw v{__version__} | {provider}:{model} | {_format_usage_cost(self.usage)} | "
-            f"{_token_status_text(self.usage, meter)} | ctx {_context_status_text(meter)} | {elapsed}s | {active}"
+            f"{_token_status_text(self.usage, meter)} | ctx {_context_status_text(meter)} | {activity}"
         )
 
     def _update_status(self) -> None:
         self._sync_global_model_if_changed()
         self._sync_daemon_model_later()
         if self.config.tui.show_status_bar:
-            self.query_one("#status", Static).update(self._status_text())
+            status = self._status_text()
+            if status != self._last_status_text:
+                self.query_one("#status", Static).update(status)
+                self._last_status_text = status
 
     def _sync_daemon_model_later(self) -> None:
         if self.daemon_client is None:

@@ -88,7 +88,7 @@ def test_cli_tui_uses_native_terminal_selection_by_default(monkeypatch, tmp_path
 
     assert result.exit_code == 0
     assert seen["mouse"] is False
-    assert seen["inline"] is False
+    assert seen["inline"] is True
 
 
 def test_cli_tui_allows_mouse_and_inline_overrides(monkeypatch, tmp_path) -> None:
@@ -113,6 +113,30 @@ def test_cli_tui_allows_mouse_and_inline_overrides(monkeypatch, tmp_path) -> Non
     assert result.exit_code == 0
     assert seen["mouse"] is True
     assert seen["inline"] is True
+
+
+def test_cli_tui_allows_fullscreen_override(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    seen: dict[str, object] = {}
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    class FakeApp:
+        def __init__(self, config) -> None:  # type: ignore[no-untyped-def]
+            seen["config"] = config
+
+        def run(self, *, mouse: bool = True, inline: bool = False, **kwargs: object) -> None:
+            seen["mouse"] = mouse
+            seen["inline"] = inline
+            seen["kwargs"] = kwargs
+
+    monkeypatch.setattr("libre_claw.cli.LibreClawApp", FakeApp)
+
+    result = runner.invoke(main, ["tui", "--fullscreen"])
+
+    assert result.exit_code == 0
+    assert seen["mouse"] is False
+    assert seen["inline"] is False
 
 
 def test_cli_start_exposes_daemon_options() -> None:

@@ -161,6 +161,7 @@ def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
     assert app._palette_matches("status")[0].name == "/status"
     assert "provider:model" not in app._status_text()
     assert "ctx [" in app._status_text()
+    assert app._status_text().endswith(" | idle")
     assert app._palette_matches("memory")[0].name == "/memory"
     assert app._palette_matches("telegram")[0].name == "/telegram"
     assert app._slash_suggestion_matches("/")[0].name == "/help"
@@ -1020,6 +1021,29 @@ def test_status_text_falls_back_to_estimated_tokens(monkeypatch, tmp_path: Path)
     assert "ctx [" in status
 
 
+async def test_idle_status_refresh_does_not_repaint_when_text_is_unchanged(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(100, 20)):
+        status = app.query_one("#status")
+        calls: list[str] = []
+        original_update = status.update
+
+        def update_once(renderable: object = "") -> object:
+            calls.append(str(renderable))
+            return original_update(renderable)
+
+        status.update = update_once  # type: ignore[method-assign]
+
+        app._update_status()
+        app._update_status()
+
+    assert len(calls) == 1
+
+
 def test_context_bar_shows_small_nonzero_usage() -> None:
     meter = ContextMeter(estimated_tokens=1, context_window_tokens=200000, ratio=1 / 200000)
 
@@ -1123,9 +1147,13 @@ def test_transcript_scroll_bindings_are_available() -> None:
     bindings = {binding.key: binding for binding in LibreClawApp.BINDINGS}
 
     assert bindings["pageup"].action == "scroll_chat_up"
+    assert bindings["pageup"].priority is True
     assert bindings["pagedown"].action == "scroll_chat_down"
+    assert bindings["pagedown"].priority is True
     assert bindings["ctrl+home"].action == "scroll_chat_top"
+    assert bindings["ctrl+home"].priority is True
     assert bindings["ctrl+end"].action == "scroll_chat_bottom"
+    assert bindings["ctrl+end"].priority is True
 
 
 async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None:
@@ -1270,7 +1298,7 @@ async def test_tui_scrollbars_use_brand_accent(monkeypatch, tmp_path: Path) -> N
     app = LibreClawApp(config=load_config())
 
     async with app.run_test(size=(120, 45)):
-        for selector in ("#workspace", "#sidebar", "#file-tree", "#main", "#chat", "#input"):
+        for selector in ("#workspace", "#sidebar", "#file-tree", "#main", "#input"):
             styles = app.query_one(selector).styles
 
             assert styles.scrollbar_color.hex == "#EF4444"
@@ -1278,6 +1306,11 @@ async def test_tui_scrollbars_use_brand_accent(monkeypatch, tmp_path: Path) -> N
             assert styles.scrollbar_color_active.hex == "#EF4444"
             assert styles.scrollbar_size_vertical == 1
             assert styles.scrollbar_size_horizontal == 1
+
+        chat_styles = app.query_one("#chat").styles
+        assert chat_styles.scrollbar_color.hex == "#EF4444"
+        assert chat_styles.scrollbar_size_vertical == 0
+        assert chat_styles.scrollbar_size_horizontal == 0
 
 
 async def test_tui_uses_configured_theme_palette(monkeypatch, tmp_path: Path) -> None:

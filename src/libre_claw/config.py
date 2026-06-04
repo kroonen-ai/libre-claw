@@ -524,7 +524,7 @@ def _load_default_config() -> ConfigTable:
             "vim_keybindings": False,
             "use_daemon": False,
             "mouse": False,
-            "inline": False,
+            "inline": True,
         },
         "telegram": {
             "enabled": False,

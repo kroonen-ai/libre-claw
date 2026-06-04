@@ -126,18 +126,19 @@ vision-capable providers.
 
 ## Terminal Selection
 
-Libre Claw disables Textual mouse capture by default so normal terminal text
-selection works like other coding CLIs: drag over visible output and copy with
-your terminal shortcut. Enable clickable mouse controls with:
+Libre Claw runs inline in normal terminal scrollback by default and disables
+Textual mouse capture, so scrolling and text selection work like other coding
+CLIs: scroll your terminal, drag over visible output, and copy with your
+terminal shortcut. Enable clickable mouse controls with:
 
 ```bash
 libre-claw tui --mouse
 ```
 
-For terminal scrollback-friendly rendering, use:
+For the full-screen alternate-screen layout, use:
 
 ```bash
-libre-claw tui --inline
+libre-claw tui --fullscreen
 ```
 
 The same defaults can be persisted in `~/.libre-claw/config.toml`:
@@ -145,5 +146,5 @@ The same defaults can be persisted in `~/.libre-claw/config.toml`:
 ```toml
 [tui]
 mouse = false
-inline = false
+inline = true
 ```
