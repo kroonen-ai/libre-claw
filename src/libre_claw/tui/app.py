@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import difflib
 import json
+import mimetypes
 import shlex
 import time
 from collections.abc import Coroutine, Mapping, Sequence
@@ -13,6 +15,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
+from urllib.parse import unquote, urlparse
 
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown
@@ -80,7 +83,7 @@ from libre_claw.core.memory import (
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, pending_approvals, run_changes_text, run_plan_text
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
-from libre_claw.core.session import ChatMessage, estimate_context_tokens, session_to_payload
+from libre_claw.core.session import ChatMessage, UserAttachment, estimate_context_tokens, session_to_payload
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
 from libre_claw.core.soul import SoulError, SoulStore
 from libre_claw.core.themes import THEME_ALIASES, THEME_PALETTES, normalize_theme, tui_theme_palette
@@ -115,7 +118,7 @@ from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
 
 
-TranscriptRole = Literal["startup", "user", "assistant", "system", "tool", "permission", "file"]
+TranscriptRole = Literal["startup", "user", "assistant", "system", "tool", "permission", "file", "attachment"]
 ArtifactTab = Literal["plan", "summary", "verify", "diff", "browser"]
 
 
@@ -133,6 +136,13 @@ class SlashCommand:
     name: str
     usage: str
     description: str
+
+
+@dataclass(frozen=True)
+class ParsedTUIInput:
+    message: str
+    attachments: tuple[UserAttachment, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 class SelectableRichLog(RichLog):
@@ -228,6 +238,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/stop", "/stop [run_id]", "Stop the current turn without exiting Libre Claw"),
     SlashCommand("/btw", "/btw <note>", "Add a side note for future turns"),
     SlashCommand("/steer", "/steer <instruction>", "Steer future agent turns"),
+    SlashCommand("/attach", "/attach <image-path>|list|clear", "Attach images to the next TUI message"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/usage", "/usage openrouter|attribution|presets", "Show provider usage analytics"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
@@ -257,6 +268,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/tools", "/tools list|expand|collapse|toggle <index>", "Inspect and control tool details"),
     SlashCommand("/exit", "/exit", "Exit Libre Claw"),
 )
+SLASH_COMMAND_NAMES = frozenset(command.name for command in SLASH_COMMANDS)
 
 SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "ollama", "codex")
 MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -300,6 +312,9 @@ RUN_ARTIFACT_TIMEOUT = 10.0
 RUN_DIFF_MAX_CHARS = 750_000
 RUN_STATUS_MAX_CHARS = 50_000
 RUN_ARTIFACT_STDERR_MAX_CHARS = 20_000
+TUI_IMAGE_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+TUI_IMAGE_ATTACHMENT_PROMPT = "Please inspect the attached image."
+TUI_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 STARTUP_ASCII = r"""
  █████        ███  █████                             █████████  ████
 ░░███        ░░░  ░░███                             ███░░░░░███░░███
@@ -679,6 +694,7 @@ class LibreClawApp(App[None]):
         self._started_at = time.monotonic()
         self._last_status_text: str | None = None
         self._last_assistant_response = ""
+        self._pending_attachments: list[UserAttachment] = []
         self._goal_description: str | None = None
         self._goal_turn = 0
         self._goal_max_turns = self.config.goal.max_turns
@@ -935,23 +951,52 @@ class LibreClawApp(App[None]):
             self._handle_permission_input(text)
             return
 
+        parsed: ParsedTUIInput | None = None
         if text.startswith("/"):
-            await self._handle_command(text)
-            return
+            command_name = text.split(maxsplit=1)[0].lower()
+            if command_name not in SLASH_COMMAND_NAMES:
+                parsed = _parse_tui_image_input(text, self.config.general.working_directory)
+                if not parsed.attachments:
+                    await self._handle_command(text)
+                    return
+            else:
+                await self._handle_command(text)
+                return
+
+        if parsed is None:
+            parsed = _parse_tui_image_input(text, self.config.general.working_directory)
 
         if self._active_task is not None and not self._active_task.done():
             self._append_system("A response is already streaming. Use /cancel to stop it.")
             return
 
-        self._append_user(text)
-        self._archive_session_event_later("user_message", {"content": text})
+        for warning in parsed.warnings:
+            self._append_system(warning)
+        attachments = tuple((*self._pending_attachments, *parsed.attachments))
+        self._pending_attachments.clear()
+        user_message = parsed.message.strip() if attachments else text
+        if attachments and not user_message:
+            user_message = TUI_IMAGE_ATTACHMENT_PROMPT
+        if attachments and _canonical_tui_provider(self.config.general.default_provider) == "codex":
+            self._append_system("Codex CLI provider currently receives text only; switch to Anthropic, OpenAI, OpenRouter, or Ollama for image inputs.")
+
+        self._append_user(user_message)
+        for attachment in attachments:
+            self._append_attachment(attachment)
+        self._archive_session_event_later(
+            "user_message",
+            {"content": user_message, "attachments": [_attachment_metadata(attachment) for attachment in attachments]},
+        )
         if self.daemon_client is not None:
             assistant_index = self._append_assistant("")
-            self._active_task = asyncio.create_task(self._stream_daemon_response(text, assistant_index))
+            self._active_task = asyncio.create_task(self._stream_daemon_response(user_message, assistant_index, attachments=attachments))
             return
 
-        run = await self._start_run("chat", text)
-        await self._record_run_event("user_message", {"content": text})
+        run = await self._start_run("chat", user_message)
+        await self._record_run_event(
+            "user_message",
+            {"content": user_message, "attachments": [_attachment_metadata(attachment) for attachment in attachments]},
+        )
         if self.agent is None:
             self._append_system(self.provider_error or "No provider is available.")
             await self._record_run_event("error", {"message": self.provider_error or "No provider is available."})
@@ -960,7 +1005,7 @@ class LibreClawApp(App[None]):
 
         assistant_index = self._append_assistant("")
         self._append_system(f"Run {run.run_id} started.")
-        self._active_task = asyncio.create_task(self._stream_agent_response(text, assistant_index))
+        self._active_task = asyncio.create_task(self._stream_agent_response(user_message, assistant_index, attachments=attachments))
 
     async def _handle_command(self, text: str) -> None:
         parts = text.split(maxsplit=1)
@@ -985,6 +1030,9 @@ class LibreClawApp(App[None]):
             return
         if command == "/steer":
             self._handle_steering_note("steer", argument)
+            return
+        if command == "/attach":
+            self._handle_attach_command(argument)
             return
         if command == "/help":
             self._append_system(self._help_text())
@@ -1075,6 +1123,36 @@ class LibreClawApp(App[None]):
             return
 
         self._append_system(f"Unknown command: {command}")
+
+    def _handle_attach_command(self, argument: str) -> None:
+        normalized = argument.strip().lower()
+        if normalized in {"", "list", "status"}:
+            if not self._pending_attachments:
+                self._append_system("No pending image attachments. Use `/attach <image-path>` or paste an image path in a message.")
+                return
+            lines = ["Pending image attachments for the next message:"]
+            lines.extend(f"- {attachment.filename or attachment.path or attachment.media_type}" for attachment in self._pending_attachments)
+            self._append_system("\n".join(lines))
+            return
+        if normalized in {"clear", "reset"}:
+            count = len(self._pending_attachments)
+            self._pending_attachments.clear()
+            self._append_system(f"Cleared {count} pending image attachment{'s' if count != 1 else ''}.")
+            return
+
+        parsed = _parse_tui_image_input(argument, self.config.general.working_directory)
+        for warning in parsed.warnings:
+            self._append_system(warning)
+        if not parsed.attachments:
+            self._append_system("No image attachments found. Use a PNG, JPEG, WebP, or GIF path.")
+            return
+        self._pending_attachments.extend(parsed.attachments)
+        for attachment in parsed.attachments:
+            self._append_attachment(attachment, pending=True)
+        suffix = " They will be sent with your next message."
+        self._append_system(f"Attached {len(parsed.attachments)} image{'s' if len(parsed.attachments) != 1 else ''}.{suffix}")
+        if parsed.message:
+            self._append_system(f"Ignored non-image text after /attach: {parsed.message}")
 
     def _handle_steering_note(self, kind: Literal["btw", "steer"], argument: str) -> None:
         note = argument.strip()
@@ -1182,7 +1260,13 @@ class LibreClawApp(App[None]):
         self._append_system("Copied selected text to clipboard.")
         return True
 
-    async def _stream_agent_response(self, user_message: str, assistant_index: int) -> None:
+    async def _stream_agent_response(
+        self,
+        user_message: str,
+        assistant_index: int,
+        *,
+        attachments: Sequence[UserAttachment] = (),
+    ) -> None:
         if self.agent is None:
             return
 
@@ -1194,7 +1278,7 @@ class LibreClawApp(App[None]):
         run_summary = ""
 
         try:
-            async for event in self.agent.run(user_message):
+            async for event in self.agent.run(user_message, attachments=attachments):
                 handled, should_stop = self._handle_agent_stream_event(
                     event,
                     assistant_index,
@@ -1219,7 +1303,13 @@ class LibreClawApp(App[None]):
             await self._finish_active_run(run_state, summary=run_summary)
             self.query_one("#input", Input).focus()
 
-    async def _stream_daemon_response(self, user_message: str, assistant_index: int) -> None:
+    async def _stream_daemon_response(
+        self,
+        user_message: str,
+        assistant_index: int,
+        *,
+        attachments: Sequence[UserAttachment] = (),
+    ) -> None:
         if self.daemon_client is None:
             return
 
@@ -1231,6 +1321,7 @@ class LibreClawApp(App[None]):
                 model=_effective_model(self.config),
                 surface="tui:daemon",
                 session=session_to_payload(self.session),
+                attachments=[attachment.as_payload() for attachment in attachments],
             )
             run = _object_payload(started.get("run"))
             run_id = str(run.get("run_id", ""))
@@ -3053,6 +3144,16 @@ class LibreClawApp(App[None]):
     def _append_permission(self, text: str) -> int:
         return self._append_entry("permission", text)
 
+    def _append_attachment(self, attachment: UserAttachment, *, pending: bool = False) -> int:
+        title = attachment.filename or Path(attachment.path).name or "image"
+        state = "pending image" if pending else "image"
+        return self._append_entry(
+            "attachment",
+            _attachment_summary(attachment),
+            title=f"{state}: {title}",
+            metadata={"attachment": attachment.as_payload(), "pending": pending},
+        )
+
     def _append_tool_call(self, call: ToolCall) -> int:
         index = self._append_entry(
             "tool",
@@ -3182,6 +3283,8 @@ class LibreClawApp(App[None]):
             )
         if entry.role == "permission":
             return Text.assemble(("Permission: ", "bold yellow"), entry.content)
+        if entry.role == "attachment":
+            return _attachment_renderable(entry, accent=self._theme.accent)
         if entry.role == "file":
             title = entry.title or "File"
             return Group(Text(f"File: {title}", style=f"bold {self._theme.accent}"), Syntax(entry.content, "text"))
@@ -3284,6 +3387,24 @@ class LibreClawApp(App[None]):
                             content=str(block.get("content", "")),
                             title=f"tool result {block.get('tool_use_id', '')}",
                             collapsed=False,
+                        )
+                    )
+                elif block_type == "image":
+                    attachment = UserAttachment(
+                        media_type=str(block.get("media_type", "image/*")),
+                        data=str(block.get("data", "")),
+                        filename=str(block.get("filename", "")),
+                        path=str(block.get("path", "")),
+                    )
+                    tool_parts.append(
+                        TranscriptEntry(
+                            role="attachment",
+                            content=_attachment_summary(attachment),
+                            title=(
+                                "image: "
+                                f"{attachment.filename or Path(attachment.path).name or attachment.media_type}"
+                            ),
+                            metadata={"attachment": attachment.as_payload()},
                         )
                     )
 
@@ -5040,6 +5161,245 @@ def _startup_renderable(expanded: bool, accent: str = ASSISTANT_ACCENT) -> Rende
 
 def _startup_message() -> str:
     return f"{STARTUP_ASCII.strip()}\n\n{PROJECT_LINKS}\n\n{latest_release_notes()}\n\nType /help for commands."
+
+
+def _parse_tui_image_input(text: str, working_directory: Path) -> ParsedTUIInput:
+    """Extract image paths/data URLs from a TUI input line."""
+    tokens = _split_tui_input_tokens(text)
+    if not tokens:
+        return ParsedTUIInput(message=text)
+
+    message_tokens: list[str] = []
+    attachments: list[UserAttachment] = []
+    warnings: list[str] = []
+
+    for token in tokens:
+        data_attachment, data_warning = _attachment_from_data_url(token)
+        if data_attachment is not None:
+            attachments.append(data_attachment)
+            continue
+        if data_warning is not None:
+            warnings.append(data_warning)
+            continue
+
+        image_path = _resolve_tui_image_path(token, working_directory)
+        if image_path is None:
+            if _looks_like_tui_image_reference(token):
+                warnings.append(f"Image path not found or unsupported: {token}")
+            else:
+                message_tokens.append(token)
+            continue
+
+        attachment, warning = _load_tui_image_attachment(image_path)
+        if attachment is None:
+            warnings.append(warning or f"Could not attach image: {image_path}")
+            continue
+        attachments.append(attachment)
+
+    return ParsedTUIInput(
+        message=" ".join(message_tokens).strip(),
+        attachments=tuple(attachments),
+        warnings=tuple(warnings),
+    )
+
+
+def _split_tui_input_tokens(text: str) -> list[str]:
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+
+def _attachment_from_data_url(token: str) -> tuple[UserAttachment | None, str | None]:
+    if not token.startswith("data:image/"):
+        return None, None
+    try:
+        header, encoded = token.split(",", 1)
+    except ValueError:
+        return None, "Image data URL is missing the base64 payload."
+    if ";base64" not in header:
+        return None, "Only base64 image data URLs are supported."
+    media_type = header.removeprefix("data:").split(";", 1)[0]
+    if media_type not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+        return None, f"Unsupported image media type: {media_type}"
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except Exception:
+        return None, "Image data URL is not valid base64."
+    if len(raw) > TUI_IMAGE_ATTACHMENT_MAX_BYTES:
+        return None, (
+            f"Image attachment is too large: {_format_bytes(len(raw))} > "
+            f"{_format_bytes(TUI_IMAGE_ATTACHMENT_MAX_BYTES)}"
+        )
+    extension = {
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/webp": "webp",
+        "image/gif": "gif",
+    }.get(media_type, "img")
+    return UserAttachment(
+        media_type=media_type,
+        data=base64.b64encode(raw).decode("ascii"),
+        filename=f"pasted-image.{extension}",
+    ), None
+
+
+def _resolve_tui_image_path(token: str, working_directory: Path) -> Path | None:
+    candidate = token.strip()
+    if not candidate:
+        return None
+    if candidate.startswith("file://"):
+        parsed = urlparse(candidate)
+        candidate = unquote(parsed.path)
+    path = Path(candidate).expanduser()
+    if not path.is_absolute():
+        path = working_directory / path
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    if not resolved.is_file():
+        return None
+    if resolved.suffix.lower() not in TUI_IMAGE_EXTENSIONS:
+        return None
+    return resolved
+
+
+def _looks_like_tui_image_reference(token: str) -> bool:
+    if token.startswith("file://") or token.startswith("data:image/"):
+        return True
+    try:
+        suffix = Path(token).suffix.lower()
+    except Exception:
+        return False
+    return suffix in TUI_IMAGE_EXTENSIONS
+
+
+def _load_tui_image_attachment(path: Path) -> tuple[UserAttachment | None, str | None]:
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return None, f"Could not inspect image {path}: {exc}"
+    if size > TUI_IMAGE_ATTACHMENT_MAX_BYTES:
+        return None, (
+            f"Image attachment is too large: {_format_bytes(size)} > "
+            f"{_format_bytes(TUI_IMAGE_ATTACHMENT_MAX_BYTES)}"
+        )
+    media_type = mimetypes.guess_type(path.name)[0]
+    if media_type not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+        return None, f"Unsupported image media type for {path}: {media_type or 'unknown'}"
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        return None, f"Could not read image {path}: {exc}"
+    return UserAttachment(
+        media_type=media_type,
+        data=base64.b64encode(raw).decode("ascii"),
+        filename=path.name,
+        path=str(path),
+    ), None
+
+
+def _attachment_metadata(attachment: UserAttachment) -> dict[str, str]:
+    payload: dict[str, str] = {"media_type": attachment.media_type}
+    if attachment.filename:
+        payload["filename"] = attachment.filename
+    if attachment.path:
+        payload["path"] = attachment.path
+    return payload
+
+
+def _attachment_summary(attachment: UserAttachment) -> str:
+    lines = [
+        f"type: {attachment.media_type}",
+        f"size: {_format_bytes(_attachment_byte_count(attachment))}",
+    ]
+    if attachment.path:
+        lines.append(f"path: {attachment.path}")
+    return "\n".join(lines)
+
+
+def _attachment_renderable(entry: TranscriptEntry, *, accent: str) -> RenderableType:
+    metadata = entry.metadata or {}
+    attachment = _attachment_from_metadata(metadata.get("attachment"))
+    title = entry.title or "image"
+    header = Text(title, style=f"bold {accent}")
+    summary = Text(entry.content, style="dim")
+    if attachment is None:
+        return Group(header, summary)
+
+    preview = _attachment_preview_renderable(attachment)
+    if preview is None:
+        hint = Text("Preview unavailable here; attachment will still be sent to the model.", style="dim")
+        return Group(header, summary, hint)
+    return Group(header, preview, summary)
+
+
+def _attachment_from_metadata(value: object) -> UserAttachment | None:
+    if not isinstance(value, dict):
+        return None
+    media_type = value.get("media_type")
+    data = value.get("data")
+    if not isinstance(media_type, str) or not isinstance(data, str):
+        return None
+    filename = value.get("filename")
+    path = value.get("path")
+    return UserAttachment(
+        media_type=media_type,
+        data=data,
+        filename=filename if isinstance(filename, str) else "",
+        path=path if isinstance(path, str) else "",
+    )
+
+
+def _attachment_preview_renderable(attachment: UserAttachment) -> RenderableType | None:
+    if not attachment.path:
+        return None
+    path = Path(attachment.path)
+    if not path.is_file():
+        return None
+    try:
+        from PIL import Image
+    except Exception:
+        return None
+    try:
+        with Image.open(path) as image:
+            image = image.convert("RGB")
+            image.thumbnail((56, 32))
+            width, height = image.size
+            if width <= 0 or height <= 0:
+                return None
+            text = Text()
+            for y in range(0, height, 2):
+                for x in range(width):
+                    top = image.getpixel((x, y))
+                    bottom = image.getpixel((x, min(y + 1, height - 1)))
+                    text.append(
+                        "▀",
+                        style=(
+                            f"#{top[0]:02x}{top[1]:02x}{top[2]:02x} "
+                            f"on #{bottom[0]:02x}{bottom[1]:02x}{bottom[2]:02x}"
+                        ),
+                    )
+                text.append("\n")
+            return text
+    except Exception:
+        return None
+
+
+def _attachment_byte_count(attachment: UserAttachment) -> int:
+    try:
+        return len(base64.b64decode(attachment.data, validate=True))
+    except Exception:
+        return 0
+
+
+def _format_bytes(value: int) -> str:
+    if value >= 1024 * 1024:
+        return f"{value / (1024 * 1024):.1f} MiB"
+    if value >= 1024:
+        return f"{value / 1024:.1f} KiB"
+    return f"{value} B"
 
 
 def _permission_label(resolution: PermissionResolution) -> str:

@@ -82,6 +82,17 @@ For longer autonomous work:
 /goal Implement the feature, run tests, and stop when verified.
 ```
 
+You can also attach images from the TUI. Drag an image into the terminal or
+paste its local path in a message, or queue one explicitly:
+
+```text
+/attach ~/Desktop/screenshot.png
+What is wrong in this UI?
+```
+
+Use `/attach list` and `/attach clear` to manage queued images. Vision-capable
+providers receive the image block; Codex CLI currently receives text only.
+
 Libre Claw automatically keeps local persistent memory. Raw session archives
 stay in `~/.libre-claw/sessions/`, durable runs stay in `~/.libre-claw/runs/`,
 and searchable memory lives in `~/.libre-claw/memory.db`. Use `/memory list`,

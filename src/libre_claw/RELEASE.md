@@ -129,6 +129,9 @@ First shippable Libre Claw release, built by Kroonen AI.
   warning and require one-time approval or denial.
 - TUI polish: lobster-red `#EF4444` scrollbars, user labels, Libre Claw
   assistant labels, dark/light theme support, and cleaner panel borders.
+- TUI image attachments: paste or drag a local image path into a prompt, or use
+  `/attach <path>`, and Libre Claw renders a compact terminal preview before
+  sending the image to vision-capable providers.
 - Automatic persistent memory with append-only JSONL session archives,
   durable-run import, searchable SQLite `memory_items`, FTS5/fallback search,
   relevance-based prompt injection, redaction of credential-looking content,

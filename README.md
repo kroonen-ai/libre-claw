@@ -74,6 +74,12 @@ current Textual selection. If you want normal terminal scrollback instead, launc
 with `libre-claw tui --inline`. If you want clickable Textual mouse controls,
 launch with `libre-claw tui --mouse` or set `[tui].mouse = true`.
 
+You can attach images in the TUI by dragging an image into the terminal or
+pasting its local path into a message. Use `/attach <image-path>` to queue an
+image for the next prompt, `/attach list` to inspect queued images, and
+`/attach clear` to reset them. Libre Claw renders a small terminal preview and
+sends the image to vision-capable providers.
+
 Inside the app, run:
 
 ```text

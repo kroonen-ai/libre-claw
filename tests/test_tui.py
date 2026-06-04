@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -39,12 +40,16 @@ from libre_claw.tui.app import (
     STARTUP_ASCII,
     STREAM_RENDER_MAX_BUFFERED_CHARS,
     StreamRenderBuffer,
+    TUI_IMAGE_ATTACHMENT_PROMPT,
     TranscriptEntry,
     _effective_model,
+    _attachment_metadata,
+    _attachment_summary,
     _context_bar,
     _format_token_count,
     _collect_run_artifacts,
     _model_help_text,
+    _parse_tui_image_input,
     _parse_compact_options,
     _parse_schedule_command,
     _parse_skills_command,
@@ -56,6 +61,11 @@ from libre_claw.tui.app import (
     _startup_renderable,
     _tool_preview,
     _transcript_from_run_events,
+)
+
+
+TINY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
 
 
@@ -122,6 +132,16 @@ class FakeApiKeyStore:
 
     def key_status(self, providers: list[tuple[str, str | None]]) -> dict[str, str]:
         return {provider: "encrypted_file" if provider in self.keys else "missing" for provider, _env in providers}
+
+
+class FakeAttachmentAgent:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def run(self, user_message: str, attachments=()):
+        self.calls.append((user_message, tuple(attachments)))
+        yield AgentTextDelta("seen")
+        yield AgentDone()
 
 
 def test_tui_can_start_without_anthropic_api_key(monkeypatch, tmp_path: Path) -> None:
@@ -341,6 +361,83 @@ def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_pat
     ollama_suggestions = app._slash_suggestion_matches("/model minimax-m3")
     assert any(suggestion.name == "/model ollama:minimax-m3:cloud" for suggestion in ollama_suggestions)
     assert any(suggestion.name == "/model openrouter:minimax/minimax-m3" for suggestion in ollama_suggestions)
+
+
+def test_tui_parses_pasted_image_path(tmp_path: Path) -> None:
+    image = tmp_path / "shot.png"
+    image.write_bytes(TINY_PNG)
+
+    parsed = _parse_tui_image_input(f"inspect {image}", tmp_path)
+
+    assert parsed.message == "inspect"
+    assert parsed.warnings == ()
+    assert len(parsed.attachments) == 1
+    attachment = parsed.attachments[0]
+    assert attachment.media_type == "image/png"
+    assert attachment.filename == "shot.png"
+    assert attachment.path == str(image)
+    assert base64.b64decode(attachment.data).startswith(b"\x89PNG")
+    assert _attachment_metadata(attachment) == {
+        "media_type": "image/png",
+        "filename": "shot.png",
+        "path": str(image),
+    }
+    assert "type: image/png" in _attachment_summary(attachment)
+
+
+def test_tui_parses_image_data_url() -> None:
+    encoded = base64.b64encode(TINY_PNG).decode("ascii")
+
+    parsed = _parse_tui_image_input(f"look data:image/png;base64,{encoded}", Path.cwd())
+
+    assert parsed.message == "look"
+    assert parsed.warnings == ()
+    assert len(parsed.attachments) == 1
+    assert parsed.attachments[0].filename == "pasted-image.png"
+    assert parsed.attachments[0].media_type == "image/png"
+
+
+async def test_tui_attach_command_queues_image_for_next_prompt(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    image = tmp_path / "shot.png"
+    image.write_bytes(TINY_PNG)
+    app = LibreClawApp(config=load_config())
+    fake_agent = FakeAttachmentAgent()
+
+    async with app.run_test(size=(120, 45)):
+        app.agent = fake_agent  # type: ignore[assignment]
+        await app._handle_command(f"/attach {image}")
+        assert len(app._pending_attachments) == 1
+        await app.handle_user_input("what is this?")
+        assert app._active_task is not None
+        await app._active_task
+
+    assert fake_agent.calls
+    user_message, attachments = fake_agent.calls[0]
+    assert user_message == "what is this?"
+    assert attachments[0].filename == "shot.png"  # type: ignore[attr-defined]
+    assert any(entry.role == "attachment" and "shot.png" in (entry.title or "") for entry in app.transcript)
+
+
+async def test_tui_pasted_image_only_uses_default_prompt(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    image = tmp_path / "shot.png"
+    image.write_bytes(TINY_PNG)
+    app = LibreClawApp(config=load_config())
+    fake_agent = FakeAttachmentAgent()
+
+    async with app.run_test(size=(120, 45)):
+        app.agent = fake_agent  # type: ignore[assignment]
+        await app.handle_user_input(str(image))
+        assert app._active_task is not None
+        await app._active_task
+
+    assert fake_agent.calls[0][0] == TUI_IMAGE_ATTACHMENT_PROMPT
+    assert fake_agent.calls[0][1][0].filename == "shot.png"  # type: ignore[attr-defined]
 
 
 def test_heartbeat_suggestions(monkeypatch, tmp_path: Path) -> None:
