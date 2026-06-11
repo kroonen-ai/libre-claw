@@ -858,9 +858,10 @@ class TelegramHandlers:
         ]
         if not paths:
             return False
-        sent = await _reply_document_paths(message, paths[:3])
+        sent, errors = await _reply_document_paths(message, paths[:3])
         if sent == 0:
-            await message.reply_text("I found a recent file path, but Telegram could not upload it.")
+            detail = "\n".join(errors[:3]) if errors else "unknown upload error"
+            await message.reply_text(f"I found a recent file path, but Telegram could not upload it:\n{detail}")
             return True
         return True
 
@@ -869,7 +870,9 @@ class TelegramHandlers:
         if not paths:
             return
         self._remember_document_paths(chat_id, paths)
-        await _reply_document_paths(message, paths[:3])
+        sent, errors = await _reply_document_paths(message, paths[:3])
+        if errors and sent < len(paths[:3]):
+            await message.reply_text("Telegram file upload warning:\n" + "\n".join(errors[:3]))
 
     def _remember_document_paths(self, chat_id: int, paths: Sequence[Path]) -> None:
         existing = self._recent_document_paths.get(chat_id, [])
@@ -1114,8 +1117,9 @@ def _telegram_document_path_is_sendable(path: Path, working_directory: Path) -> 
         return False
 
 
-async def _reply_document_paths(message: Any, paths: Sequence[Path]) -> int:
+async def _reply_document_paths(message: Any, paths: Sequence[Path]) -> tuple[int, list[str]]:
     sent = 0
+    errors: list[str] = []
     for path in paths:
         try:
             with path.open("rb") as handle:
@@ -1123,15 +1127,22 @@ async def _reply_document_paths(message: Any, paths: Sequence[Path]) -> int:
                     document=handle,
                     filename=path.name,
                     caption=f"📎 {path.name}",
+                    connect_timeout=30,
+                    pool_timeout=30,
+                    read_timeout=120,
+                    write_timeout=120,
                 )
             sent += 1
         except TypeError:
-            with path.open("rb") as handle:
-                await message.reply_document(handle)
-            sent += 1
-        except Exception:
-            continue
-    return sent
+            try:
+                with path.open("rb") as handle:
+                    await message.reply_document(handle)
+                sent += 1
+            except Exception as exc:
+                errors.append(f"{path.name}: {exc}")
+        except Exception as exc:
+            errors.append(f"{path.name}: {exc}")
+    return sent, errors
 
 
 def _path_is_relative_to(path: Path, root: Path) -> bool:
