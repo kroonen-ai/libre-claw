@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -498,8 +499,8 @@ async def test_web_search_returns_normalized_searxng_results(monkeypatch, tmp_pa
 
     assert result.error is None
     assert "web_search: libre claw" in result.content
-    assert "https://libreclaw.sh" in result.content
-    assert "https://kroonen.ai" not in result.content
+    returned_urls = [urlparse(str(item["url"])) for item in result.metadata["results"]]
+    assert [(url.scheme, url.netloc, url.path) for url in returned_urls] == [("https", "libreclaw.sh", "")]
     assert result.metadata["returned_results"] == 1
     assert result.metadata["result_count"] == 2
     assert client.last_request["params"]["categories"] == "general,it"
