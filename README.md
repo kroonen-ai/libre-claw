@@ -139,6 +139,7 @@ Key lookup order:
 /model list
 /model openrouter:qwen/qwen3.7-max --global
 /model openrouter:deepseek/deepseek-v4-flash --global
+/model openrouter:moonshotai/kimi-k2.7-code --global
 /model openrouter:minimax/minimax-m3 --global
 /model openrouter:nvidia/nemotron-3-ultra-550b-a55b:free --global
 /model ollama:minimax-m3:cloud --global

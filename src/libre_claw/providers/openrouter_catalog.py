@@ -45,6 +45,11 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Moonshot Kimi K2.6 coding and long-horizon agent preset.",
     ),
     OpenRouterModelPreset(
+        "moonshotai/kimi-k2.7-code",
+        "Kimi K2.7 Code",
+        "Moonshot Kimi K2.7 coding-specialized agent preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
         "minimax/minimax-m2.7",
         "MiniMax M2.7",
         "MiniMax coding, agentic, and productivity preset.",
