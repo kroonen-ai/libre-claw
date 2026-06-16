@@ -60,6 +60,11 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Z.ai GLM agentic engineering preset.",
     ),
     OpenRouterModelPreset(
+        "z-ai/glm-5.2",
+        "GLM 5.2",
+        "Z.ai GLM 5.2 long-context agentic engineering preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
         "xiaomi/mimo-v2.5-pro",
         "MiMo V2.5 Pro",
         "Xiaomi MiMo pro model preset.",

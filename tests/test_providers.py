@@ -118,6 +118,7 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "moonshotai/kimi-k2.7-code",
         "minimax/minimax-m2.7",
         "z-ai/glm-5.1",
+        "z-ai/glm-5.2",
         "xiaomi/mimo-v2.5-pro",
         "qwen/qwen3.6-plus",
         "anthropic/claude-opus-4.8",
