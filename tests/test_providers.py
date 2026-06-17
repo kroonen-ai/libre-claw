@@ -44,6 +44,7 @@ def test_ollama_cloud_presets_include_current_library_names() -> None:
         "qwen3.5:397b-cloud",
         "gemma4:31b-cloud",
         "glm-5.1:cloud",
+        "glm-5.2:cloud",
         "minimax-m3:cloud",
         "minimax-m2.7:cloud",
         "nemotron-3-super:cloud",

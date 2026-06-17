@@ -402,6 +402,8 @@ def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_pat
     ollama_suggestions = app._slash_suggestion_matches("/model minimax-m3")
     assert any(suggestion.name == "/model ollama:minimax-m3:cloud" for suggestion in ollama_suggestions)
     assert any(suggestion.name == "/model openrouter:minimax/minimax-m3" for suggestion in ollama_suggestions)
+    glm_suggestions = app._slash_suggestion_matches("/model glm-5.2")
+    assert any(suggestion.name == "/model ollama:glm-5.2:cloud" for suggestion in glm_suggestions)
 
 
 def test_tui_parses_pasted_image_path(tmp_path: Path) -> None:

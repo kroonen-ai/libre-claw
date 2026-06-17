@@ -21,6 +21,7 @@ OLLAMA_CLOUD_MODEL_PRESETS: tuple[OllamaModelPreset, ...] = (
     OllamaModelPreset("qwen3.5:397b-cloud", "Qwen3.5 397B Cloud"),
     OllamaModelPreset("gemma4:31b-cloud", "Gemma 4 31B Cloud"),
     OllamaModelPreset("glm-5.1:cloud", "GLM 5.1 Cloud"),
+    OllamaModelPreset("glm-5.2:cloud", "GLM 5.2 Cloud"),
     OllamaModelPreset("minimax-m3:cloud", "MiniMax M3 Cloud"),
     OllamaModelPreset("minimax-m2.7:cloud", "MiniMax M2.7 Cloud"),
     OllamaModelPreset("nemotron-3-super:cloud", "Nemotron 3 Super Cloud"),

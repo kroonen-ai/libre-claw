@@ -143,6 +143,7 @@ Key lookup order:
 /model openrouter:z-ai/glm-5.2 --global
 /model openrouter:minimax/minimax-m3 --global
 /model openrouter:nvidia/nemotron-3-ultra-550b-a55b:free --global
+/model ollama:glm-5.2:cloud --global
 /model ollama:minimax-m3:cloud --global
 /model ollama:kimi-k2.6:cloud --global
 /model anthropic:claude-opus-4-8 --global

@@ -710,6 +710,8 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
     assert any("MiniMax M3" in button.text for row in model_keyboard.inline_keyboard for button in row)
     assert any("MiniMax M3" in button.text for row in ollama_keyboard.inline_keyboard for button in row)
     assert any(preset.model == "minimax-m3:cloud" for preset in TELEGRAM_MODEL_PRESETS["ollama"])
+    assert any("GLM 5.2" in button.text for row in ollama_keyboard.inline_keyboard for button in row)
+    assert any(preset.model == "glm-5.2:cloud" for preset in TELEGRAM_MODEL_PRESETS["ollama"])
 
 
 def test_telegram_openrouter_keyboard_promotes_current_model(tmp_path: Path, monkeypatch) -> None:
