@@ -113,3 +113,24 @@ async def test_openrouter_metadata_can_be_disabled(monkeypatch, tmp_path: Path) 
 
     assert limits.source == "disabled"
     assert limits.detected is False
+
+
+async def test_openrouter_metadata_client_construction_failure_is_nonfatal(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = load_config(
+        config_path=_config_path(
+            tmp_path,
+            base_url="https://openrouter-client-failure.test/api/v1",
+            model="moonshotai/kimi-k2.7-code",
+        )
+    )
+
+    def broken_client(*_args: object, **_kwargs: object) -> httpx.AsyncClient:
+        raise PermissionError("ssl context blocked")
+
+    monkeypatch.setattr("libre_claw.providers.openrouter_metadata.httpx.AsyncClient", broken_client)
+
+    limits = await detect_openrouter_model_limits(config)
+
+    assert limits.source == "unavailable"
+    assert limits.detected is False

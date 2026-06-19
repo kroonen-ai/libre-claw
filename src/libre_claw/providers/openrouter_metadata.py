@@ -58,14 +58,19 @@ async def detect_openrouter_model_limits(
 
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     close_client = client is None
-    active_client = client or httpx.AsyncClient(timeout=OPENROUTER_METADATA_TIMEOUT_SECONDS)
+    active_client: httpx.AsyncClient | None = client
     try:
+        if active_client is None:
+            active_client = httpx.AsyncClient(timeout=OPENROUTER_METADATA_TIMEOUT_SECONDS)
         limits = await _fetch_limits(active_client, base_url, selected_model, headers)
     except Exception:
         limits = OpenRouterModelLimits(source="unavailable")
     finally:
-        if close_client:
-            await active_client.aclose()
+        if close_client and active_client is not None:
+            try:
+                await active_client.aclose()
+            except Exception:
+                pass
     _CACHE[cache_key] = (now, limits)
     return limits
 

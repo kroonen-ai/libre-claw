@@ -2383,7 +2383,11 @@ class LibreClawApp(App[None]):
     async def _refresh_openrouter_model_limits(self) -> None:
         if _canonical_tui_provider(self.config.general.default_provider) != "openrouter":
             return
-        limits = await detect_openrouter_model_limits(self.config, model=self.config.general.default_model)
+        try:
+            limits = await detect_openrouter_model_limits(self.config, model=self.config.general.default_model)
+        except Exception as exc:
+            self._append_system(f"OpenRouter model metadata unavailable; using configured context window. ({exc})")
+            return
         updated = apply_openrouter_model_limits(self.config, limits, model=self.config.general.default_model)
         if not _runtime_model_metadata_changed(self.config, updated):
             return

@@ -343,6 +343,35 @@ async def test_daemon_updates_runtime_model(monkeypatch, tmp_path: Path) -> None
     assert server.config.providers["openrouter"]["default_model"] == "deepseek/deepseek-v4-pro"
 
 
+async def test_daemon_openrouter_metadata_failure_is_nonfatal(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    async def broken_limits(*_args: Any, **_kwargs: Any) -> OpenRouterModelLimits:
+        raise PermissionError("ssl context blocked")
+
+    monkeypatch.setattr("libre_claw.daemon.detect_openrouter_model_limits", broken_limits)
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    config = replace(
+        server.config,
+        general=replace(
+            server.config.general,
+            default_provider="openrouter",
+            default_model="moonshotai/kimi-k2.7-code",
+        ),
+    )
+
+    updated = await server._with_openrouter_model_limits(config)
+
+    assert updated is config
+    assert updated.agent.context_window_tokens == config.agent.context_window_tokens
+
+
 async def test_daemon_global_model_update_updates_scheduled_automations(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

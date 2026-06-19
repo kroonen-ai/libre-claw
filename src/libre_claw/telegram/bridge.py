@@ -560,7 +560,10 @@ class TelegramBridge:
     async def _with_openrouter_model_limits(self, config: LibreClawConfig) -> LibreClawConfig:
         if config.general.default_provider.lower() != "openrouter":
             return config
-        limits = await detect_openrouter_model_limits(config, model=config.general.default_model)
+        try:
+            limits = await detect_openrouter_model_limits(config, model=config.general.default_model)
+        except Exception:
+            return config
         return apply_openrouter_model_limits(config, limits, model=config.general.default_model)
 
     async def relevant_memory_texts(self, user_message: str) -> list[str]:

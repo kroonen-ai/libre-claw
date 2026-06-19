@@ -974,7 +974,15 @@ class DaemonServer:
     async def _with_openrouter_model_limits(self, config: LibreClawConfig) -> LibreClawConfig:
         if config.general.default_provider.lower() not in {"openrouter"}:
             return config
-        limits = await detect_openrouter_model_limits(config, model=config.general.default_model)
+        try:
+            limits = await detect_openrouter_model_limits(config, model=config.general.default_model)
+        except Exception as exc:
+            LOGGER.warning(
+                "openrouter_metadata_detection_failed",
+                model=config.general.default_model,
+                error=str(exc),
+            )
+            return config
         updated = apply_openrouter_model_limits(config, limits, model=config.general.default_model)
         if updated is not config and config is self.config:
             self.config = updated
