@@ -61,6 +61,7 @@ class TelegramBot:
         application.add_handler(CommandHandler("usage", handlers.usage))
         application.add_handler(CommandHandler("status", handlers.cost))
         application.add_handler(CommandHandler("daemon", handlers.daemon))
+        application.add_handler(CommandHandler("petdex", handlers.petdex))
         application.add_handler(CommandHandler("runs", handlers.runs))
         application.add_handler(CommandHandler("run", handlers.run))
         application.add_handler(CommandHandler("compact", handlers.compact))

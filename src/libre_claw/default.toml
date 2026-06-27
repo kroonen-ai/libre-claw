@@ -200,6 +200,17 @@ default_safesearch = 0
 default_categories = ["general"]
 default_engines = []
 
+[petdex]
+enabled = false
+base_url = "http://127.0.0.1:7777"
+token_path = "~/.petdex/runtime/update-token"
+source = "libre-claw"
+timeout = 1.0
+notify_tui = true
+notify_daemon = true
+notify_telegram = true
+notify_automations = true
+
 [browser]
 allowed_domains = [] # empty allows any http(s) host not in denied_domains
 denied_domains = []

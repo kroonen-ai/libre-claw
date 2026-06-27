@@ -106,6 +106,7 @@ from libre_claw.core.workspace import (
     workspace_status_text,
 )
 from libre_claw.daemon import DaemonClient, daemon_base_url
+from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
 from libre_claw.providers import (
     LLMProvider,
     ProviderConfigurationError,
@@ -272,6 +273,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/workspace", "/workspace status|init|use <path>", "Manage the Libre Claw runtime workspace"),
     SlashCommand("/daemon", "/daemon", "Show daemon connection health"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
+    SlashCommand("/petdex", "/petdex status|state <name> [message]", "Inspect or update the Petdex companion"),
     SlashCommand("/tools", "/tools list|expand|collapse|toggle <index>", "Inspect and control tool details"),
     SlashCommand("/exit", "/exit", "Exit Libre Claw"),
 )
@@ -826,6 +828,7 @@ class LibreClawApp(App[None]):
         self.soul_store = SoulStore(self.config.general.working_directory)
         self.run_store = RunStore()
         self.automation_store = AutomationStore(self.config.automations.root)
+        self.petdex_client = PetdexClient(self.config.petdex)
         self.daemon_client = DaemonClient(daemon_base_url(self.config)) if self.config.tui.use_daemon else None
         self.memory_facts: list[str] = []
         self.memory_enabled = self.config.memory.enabled
@@ -1280,11 +1283,34 @@ class LibreClawApp(App[None]):
         if command == "/telegram":
             self._append_system(self._telegram_status())
             return
+        if command == "/petdex":
+            await self._handle_petdex_command(argument)
+            return
         if command == "/tools":
             self._handle_tools_command(argument)
             return
 
         self._append_system(f"Unknown command: {command}")
+
+    async def _handle_petdex_command(self, argument: str) -> None:
+        parts = argument.split(maxsplit=2)
+        action = parts[0].lower() if parts else "status"
+        if action in {"", "status"}:
+            self._append_system(self.petdex_client.status_text())
+            return
+        if action == "state":
+            if len(parts) < 2:
+                self._append_system("Usage: /petdex state <idle|ready|running|working|success|error> [message]")
+                return
+            message = parts[2] if len(parts) > 2 else ""
+            result = await self.petdex_client.send_state(parts[1], message=message, details={"surface": "tui", "manual": True})
+            if result.ok:
+                self._append_system(f"Petdex state sent: {parts[1].strip().lower()}")
+                return
+            prefix = "Petdex update skipped" if result.skipped else "Petdex update failed"
+            self._append_system(f"{prefix}: {result.message}")
+            return
+        self._append_system("Usage: /petdex status|state <state> [message]")
 
     def _handle_attach_command(self, argument: str) -> None:
         normalized = argument.strip().lower()
@@ -1753,6 +1779,11 @@ class LibreClawApp(App[None]):
         if isinstance(event, AgentToolCall):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             self._append_tool_call(event.call)
+            self._petdex_state_later(
+                "command" if event.call.name == "bash" else "working",
+                message=f"Calling {event.call.name}",
+                details=petdex_tool_details(event.call.name, event.call.arguments),
+            )
             self._archive_session_event_later(
                 "tool_call",
                 {"run_id": self._active_run_id or "", "name": event.call.name, "arguments": dict(event.call.arguments)},
@@ -1767,6 +1798,11 @@ class LibreClawApp(App[None]):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             self._pending_permission = event
             self._show_permission_prompt(event)
+            self._petdex_state_later(
+                "waving",
+                message=f"Approval needed: {event.call.name}",
+                details=petdex_tool_details(event.call.name, event.call.arguments),
+            )
             self._archive_session_event_later(
                 "permission_request",
                 {"run_id": self._active_run_id or "", "name": event.call.name, "arguments": dict(event.call.arguments)},
@@ -1781,6 +1817,11 @@ class LibreClawApp(App[None]):
         if isinstance(event, AgentToolResult):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             self._append_tool_result(event.call, event.result)
+            self._petdex_state_later(
+                "error" if event.result.is_error else "success",
+                message=f"{event.call.name} {'failed' if event.result.is_error else 'finished'}",
+                details={"tool": event.call.name, "is_error": event.result.is_error},
+            )
             self._archive_session_event_later(
                 "tool_result",
                 {
@@ -1821,6 +1862,7 @@ class LibreClawApp(App[None]):
 
         if isinstance(event, AgentError):
             self._flush_stream_buffer(assistant_index, stream_buffer)
+            self._petdex_state_later("error", message=event.message, details={"surface": self._current_user_surface()})
             if assistant_index < len(self.transcript) and not self.transcript[assistant_index].content:
                 self.transcript.pop(assistant_index)
                 self._render_transcript()
@@ -1831,6 +1873,11 @@ class LibreClawApp(App[None]):
 
         if isinstance(event, AgentFallback):
             self._flush_stream_buffer(assistant_index, stream_buffer)
+            self._petdex_state_later(
+                "thinking",
+                message=f"Fallback: {event.provider_label}",
+                details={"provider": event.provider_label, "reason": event.reason},
+            )
             self._append_system(f"Provider fallback engaged: {event.provider_label}\nReason: {event.reason}")
             self._archive_session_event_later(
                 "provider_fallback",
@@ -1877,6 +1924,11 @@ class LibreClawApp(App[None]):
                 "surface": f"tui:{kind}",
             },
         )
+        self._petdex_state_later(
+            "running",
+            message=petdex_message_preview(title),
+            details={"surface": f"tui:{kind}", "run_id": run.run_id, "provider": run.provider, "model": run.model},
+        )
         return run
 
     async def _record_run_event(self, event_type: str, data: dict[str, Any]) -> None:
@@ -1901,6 +1953,17 @@ class LibreClawApp(App[None]):
         task = asyncio.create_task(awaitable)
         self._run_background_tasks.add(task)
         task.add_done_callback(self._run_background_tasks.discard)
+
+    def _petdex_state_later(
+        self,
+        state: str,
+        *,
+        message: str = "",
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        if not self.config.petdex.notify_tui:
+            return
+        self._track_run_background_task(self.petdex_client.send_state(state, message=message, details=details))
 
     def _archive_session_event_later(self, event_type: str, data: dict[str, Any]) -> None:
         if not self.config.memory.archive_sessions:
@@ -2005,6 +2068,12 @@ class LibreClawApp(App[None]):
             browser=browser,
         )
         await self.run_store.append_event(run_id, "run_finished", {"state": state})
+        if self.config.petdex.notify_tui:
+            await self.petdex_client.send_state(
+                _petdex_final_state(state),
+                message=f"TUI run {state}",
+                details={"surface": "tui", "run_id": run_id},
+            )
         if summary_text:
             self._archive_session_event_later("assistant_message", {"run_id": run_id, "content": summary_text})
         self._archive_session_event_later("run_finished", {"run_id": run_id, "state": state})
@@ -3938,6 +4007,22 @@ class LibreClawApp(App[None]):
                 if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
             ][:6]
 
+        if lowered.startswith("/petdex "):
+            query = lowered.removeprefix("/petdex ").strip()
+            suggestions = [
+                SlashCommand("/petdex status", "/petdex status", "Show Petdex endpoint and token status"),
+                SlashCommand("/petdex state ready", "/petdex state ready", "Send ready state"),
+                SlashCommand("/petdex state running", "/petdex state running", "Send running state"),
+                SlashCommand("/petdex state working", "/petdex state working", "Send working state"),
+                SlashCommand("/petdex state success", "/petdex state success", "Send success state"),
+                SlashCommand("/petdex state error", "/petdex state error", "Send error state"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+
         if lowered.startswith("/skills "):
             query = lowered.removeprefix("/skills ").strip()
             suggestions = [
@@ -4391,10 +4476,21 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         daemon=config.daemon,
         automations=config.automations,
         browser=config.browser,
+        petdex=config.petdex,
         mcp=config.mcp,
         providers=config.providers,
         source_paths=config.source_paths,
     )
+
+
+def _petdex_final_state(state: str) -> str:
+    if state == "done":
+        return "success"
+    if state == "cancelled":
+        return "failed"
+    if state == "blocked":
+        return "waving"
+    return "error" if state == "failed" else "idle"
 
 
 def _replace_model_selection(

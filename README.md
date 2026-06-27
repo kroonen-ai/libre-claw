@@ -24,6 +24,7 @@ Current release: Version `0.1.0`.
 | Memory and skills | Local persistent memory, `SOUL.md` persona files, and user/project `SKILL.md` workflows. |
 | Real tools | File edits, shell, code search, web search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
 | Provider routing | OpenRouter, Ollama/Ollama Cloud, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
+| Petdex companion | Optional local state updates for the Petdex desktop companion app. |
 | Safe defaults | API keys stay out of project config, dangerous commands are blocked, and writes require approval. |
 
 ## Install
@@ -64,6 +65,20 @@ Libre Claw uses `http://127.0.0.1:8888` by default through the `web_search`
 tool. The generated SearXNG settings enable JSON output, which is required for
 agent searches. The implementation walkthrough lives in
 [docs/SEARXNG_INTEGRATION.md](docs/SEARXNG_INTEGRATION.md).
+
+Optional Petdex companion integration:
+
+```toml
+[petdex]
+enabled = true
+base_url = "http://127.0.0.1:7777"
+token_path = "~/.petdex/runtime/update-token"
+source = "libre-claw"
+```
+
+When enabled, Libre Claw sends local lifecycle updates to Petdex for daemon,
+TUI, Telegram, scheduled runs, tool calls, approvals, success, and errors. Use
+`/petdex status` in the TUI or Telegram to verify the token and endpoint.
 
 ## First Run
 
@@ -459,6 +474,7 @@ limit is reached.
 /skills list
 /workspace status
 /telegram
+/petdex status
 ```
 
 Keybindings:

@@ -45,6 +45,7 @@ from libre_claw.core.skills import SkillStore
 from libre_claw.core.soul import SoulStore
 from libre_claw.core.tools import ToolCall
 from libre_claw.daemon import DaemonClient
+from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
 from libre_claw.providers import (
     ProviderConfigurationError,
     Usage,
@@ -147,6 +148,7 @@ class TelegramBridge:
         self.soul_store = SoulStore(config.general.working_directory)
         self.automation_store = AutomationStore(config.automations.root)
         self.run_store = RunStore()
+        self.petdex_client = PetdexClient(config.petdex)
         self._states: dict[int, TelegramChatState] = {}
         self._memory_facts: list[str] = []
         self.memory_enabled = config.memory.enabled
@@ -154,6 +156,17 @@ class TelegramBridge:
     async def initialize(self) -> None:
         await self.memory_store.initialize()
         self._memory_facts = await self.memory_store.list_always_injected_memories()
+
+    async def _send_petdex_state(
+        self,
+        state: str,
+        *,
+        message: str = "",
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        if not self.config.petdex.enabled or not self.config.petdex.notify_telegram:
+            return
+        await self.petdex_client.send_state(state, message=message, details=details)
 
     def state_for(self, chat_id: int) -> TelegramChatState:
         return self._states.setdefault(chat_id, TelegramChatState(chat_id=chat_id))
@@ -190,11 +203,21 @@ class TelegramBridge:
             yield TelegramError(str(exc))
             return
 
+        await self._send_petdex_state(
+            "running",
+            message=petdex_message_preview(text),
+            details={"surface": "telegram", "chat_id": chat_id},
+        )
         async for event in agent.run(text, attachments=attachments):
             if isinstance(event, AgentTextDelta):
                 yield TelegramText(event.text)
                 continue
             if isinstance(event, AgentToolCall):
+                await self._send_petdex_state(
+                    "command" if event.call.name == "bash" else "working",
+                    message=f"Calling {event.call.name}",
+                    details=petdex_tool_details(event.call.name, event.call.arguments),
+                )
                 await self._archive_event(chat_id, "tool_call", {"name": event.call.name, "arguments": dict(event.call.arguments)})
                 yield TelegramToolNotice(
                     _tool_call_notice(event.call.name, dict(event.call.arguments)),
@@ -204,6 +227,11 @@ class TelegramBridge:
             if isinstance(event, AgentPermissionRequest):
                 prompt_id = f"{chat_id}:{event.call.id}"
                 state.pending_permissions[prompt_id] = event
+                await self._send_petdex_state(
+                    "waving",
+                    message=f"Approval needed: {event.call.name}",
+                    details=petdex_tool_details(event.call.name, event.call.arguments),
+                )
                 await self._archive_event(chat_id, "permission_request", {"name": event.call.name, "arguments": dict(event.call.arguments)})
                 yield TelegramPermissionPrompt(
                     prompt_id=prompt_id,
@@ -213,6 +241,11 @@ class TelegramBridge:
                 continue
             if isinstance(event, AgentToolResult):
                 status = "error" if event.result.is_error else "result"
+                await self._send_petdex_state(
+                    "error" if event.result.is_error else "success",
+                    message=f"{event.call.name} {'failed' if event.result.is_error else 'finished'}",
+                    details={"tool": event.call.name, "is_error": event.result.is_error},
+                )
                 await self._archive_event(
                     chat_id,
                     "tool_result",
@@ -236,6 +269,7 @@ class TelegramBridge:
                 )
                 continue
             if isinstance(event, AgentDone):
+                await self._send_petdex_state("success", message="Telegram run complete", details={"surface": "telegram", "chat_id": chat_id})
                 if event.usage is not None:
                     state.usage = combine_usage(state.usage, event.usage) or state.usage
                     state.last_usage = event.usage
@@ -246,10 +280,16 @@ class TelegramBridge:
                 yield TelegramDone(event.usage)
                 continue
             if isinstance(event, AgentError):
+                await self._send_petdex_state("error", message=event.message, details={"surface": "telegram", "chat_id": chat_id})
                 await self._archive_event(chat_id, "error", {"message": event.message})
                 yield TelegramError(event.message)
                 return
             if isinstance(event, AgentFallback):
+                await self._send_petdex_state(
+                    "thinking",
+                    message=f"Fallback: {event.provider_label}",
+                    details={"provider": event.provider_label, "reason": event.reason},
+                )
                 await self._archive_event(chat_id, "provider_fallback", {"provider": event.provider_label, "reason": event.reason})
                 yield TelegramToolNotice(f"🔁 Provider fallback: {event.provider_label}\n{_compact_text(event.reason)}")
                 continue
@@ -294,6 +334,8 @@ class TelegramBridge:
     async def cancel_async(self, chat_id: int) -> bool:
         state = self.state_for(chat_id)
         cancelled = self.cancel(chat_id)
+        if cancelled:
+            await self._send_petdex_state("failed", message="Telegram run cancelled", details={"surface": "telegram", "chat_id": chat_id})
         if self.daemon_client is None or state.daemon_run_id is None:
             return cancelled
         try:

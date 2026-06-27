@@ -137,6 +137,27 @@ uncaptioned images default to "Please inspect the attached image." Uploaded
 files stay local in `~/.libre-claw/telegram/uploads/` and are passed to
 vision-capable providers.
 
+## 7. Optional: Petdex Companion
+
+Libre Claw can update the local [Petdex](https://petdex.dev/) desktop companion
+as runs move from ready to running, tool use, approval, success, or error.
+
+Install and launch Petdex separately, then enable the local sidecar integration:
+
+```toml
+[petdex]
+enabled = true
+base_url = "http://127.0.0.1:7777"
+token_path = "~/.petdex/runtime/update-token"
+source = "libre-claw"
+```
+
+Check it from the TUI or Telegram:
+
+```text
+/petdex status
+```
+
 ## Terminal Selection
 
 Libre Claw runs full-screen by default and disables Textual mouse capture. Use

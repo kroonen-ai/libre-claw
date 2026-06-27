@@ -90,6 +90,15 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.web_search.max_results == 10
     assert config.web_search.default_categories == ("general",)
     assert config.web_search.default_engines == ()
+    assert config.petdex.enabled is False
+    assert config.petdex.base_url == "http://127.0.0.1:7777"
+    assert config.petdex.token_path == tmp_path / ".petdex" / "runtime" / "update-token"
+    assert config.petdex.source == "libre-claw"
+    assert config.petdex.timeout == 1.0
+    assert config.petdex.notify_tui is True
+    assert config.petdex.notify_daemon is True
+    assert config.petdex.notify_telegram is True
+    assert config.petdex.notify_automations is True
     assert config.mcp.enabled is False
     assert config.mcp.allowlist == ()
     assert config.mcp.permission_level == "ask"
@@ -302,6 +311,10 @@ def test_config_file_env_and_cli_overrides(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LIBRE_CLAW_DEFAULT_MODEL", "env-model")
     monkeypatch.setenv("LIBRE_CLAW_THEME", "env-theme")
+    monkeypatch.setenv("LIBRE_CLAW_PETDEX_ENABLED", "true")
+    monkeypatch.setenv("LIBRE_CLAW_PETDEX_URL", "http://127.0.0.1:7778/")
+    monkeypatch.setenv("LIBRE_CLAW_PETDEX_TOKEN_PATH", str(tmp_path / "petdex-token"))
+    monkeypatch.setenv("LIBRE_CLAW_PETDEX_SOURCE", "libre-claw-test")
 
     config = load_config(config_path=config_path, working_directory=tmp_path / "from-cli")
 
@@ -311,6 +324,10 @@ def test_config_file_env_and_cli_overrides(monkeypatch, tmp_path: Path) -> None:
     assert config.general.working_directory == (tmp_path / "from-cli").resolve()
     assert config.agent.system_prompt == "custom system prompt"
     assert config.agent.system_prompt_extra == "custom extra"
+    assert config.petdex.enabled is True
+    assert config.petdex.base_url == "http://127.0.0.1:7778"
+    assert config.petdex.token_path == tmp_path / "petdex-token"
+    assert config.petdex.source == "libre-claw-test"
 
 
 def test_set_global_default_model_updates_user_config(monkeypatch, tmp_path: Path) -> None:

@@ -193,6 +193,19 @@ class TelegramHandlers:
         response = await self.bridge.daemon_command_text(update.effective_chat.id)
         await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
 
+    async def petdex(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        args = " ".join(context.args or []).strip()
+        if not args or args.lower() == "status":
+            await _reply_text_chunks(
+                update.effective_message,
+                self.bridge.petdex_client.status_text(),
+                self.bridge.config.telegram.max_message_length,
+            )
+            return
+        await update.effective_message.reply_text("Usage: /petdex status")
+
     async def runs(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
@@ -1588,6 +1601,7 @@ def _telegram_help_text() -> str:
             "/usage [provider] - Show provider usage analytics",
             "/status - Show model, context, token, and cost usage",
             "/daemon - Show daemon connection health",
+            "/petdex - Show Petdex companion status",
             "/runs [N] - List recent daemon runs",
             "/run <id> - Inspect a daemon run",
             "/compact - Compact the current context",
@@ -1619,6 +1633,7 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("usage", "Show provider usage analytics"),
         ("status", "Show model, context, tokens, and cost"),
         ("daemon", "Show daemon health"),
+        ("petdex", "Show Petdex companion status"),
         ("runs", "List recent daemon runs"),
         ("run", "Inspect one daemon run"),
         ("compact", "Compact the current context"),

@@ -66,6 +66,7 @@ from libre_claw.core.usage import (
     usage_summary_payload,
 )
 from libre_claw.core.session import ChatMessage, UserAttachment, session_from_payload, text_block
+from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
 from libre_claw.providers import Done, LLMProvider, ProviderError, TextDelta, Usage, create_fallback_providers, create_provider
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.telegram.formatting import clean_final_answer_for_telegram, plain_text_chunks, telegram_html_chunks
@@ -139,6 +140,7 @@ class DaemonServer:
         self.telegram_sender = telegram_sender or _send_telegram_message
         self.telegram_bot_runner = telegram_bot_runner or _run_telegram_bot_bridge
         self.start_telegram_bridge = start_telegram_bridge
+        self.petdex_client = PetdexClient(config.petdex)
         self.memory_store = MemoryStore()
         self.automation_store = AutomationStore(config.automations.root)
         self.active_runs: dict[str, ActiveRun] = {}
@@ -217,6 +219,7 @@ class DaemonServer:
 
     async def _on_startup(self, _app: web.Application) -> None:
         await self.memory_store.initialize()
+        await self._send_petdex_state("ready", message="Libre Claw daemon ready", details={"surface": "daemon"}, surface="daemon")
         if self.config.automations.enabled:
             self._automation_task = asyncio.create_task(self._automation_loop())
         if self._should_start_telegram_bridge():
@@ -226,6 +229,7 @@ class DaemonServer:
             )
 
     async def _on_cleanup(self, _app: web.Application) -> None:
+        await self._send_petdex_state("idle", message="Libre Claw daemon stopped", details={"surface": "daemon"}, surface="daemon")
         if self._automation_task is not None and not self._automation_task.done():
             self._automation_task.cancel()
         if self._telegram_task is not None and not self._telegram_task.done():
@@ -265,6 +269,18 @@ class DaemonServer:
         if self._telegram_task.done():
             return "failed" if self._telegram_task.exception() is not None else "stopped"
         return "running"
+
+    async def _send_petdex_state(
+        self,
+        state: str,
+        *,
+        message: str = "",
+        details: Mapping[str, Any] | None = None,
+        surface: str = "daemon",
+    ) -> None:
+        if not _petdex_enabled_for_surface(self.config, surface):
+            return
+        await self.petdex_client.send_state(state, message=message, details=details)
 
     async def _run_telegram_bridge_supervised(self) -> None:
         delay = 1.0
@@ -656,6 +672,7 @@ class DaemonServer:
             daemon=self.config.daemon,
             automations=self.config.automations,
             browser=self.config.browser,
+            petdex=self.config.petdex,
             mcp=self.config.mcp,
             providers=self.config.providers,
             source_paths=self.config.source_paths,
@@ -677,6 +694,12 @@ class DaemonServer:
         state: RunState = "done"
         try:
             await self.run_store.update_state(run.run_id, "running")
+            await self._send_petdex_state(
+                "running",
+                message=petdex_message_preview(message),
+                details={"surface": surface, "run_id": run.run_id, "provider": run.provider, "model": run.model},
+                surface=surface,
+            )
             await self.run_store.append_event(
                 run.run_id,
                 "run_started",
@@ -703,6 +726,12 @@ class DaemonServer:
                     await self.run_store.append_event(run.run_id, "assistant_delta", {"text": event.text})
                     continue
                 if isinstance(event, AgentToolCall):
+                    await self._send_petdex_state(
+                        "command" if event.call.name == "bash" else "working",
+                        message=f"Calling {event.call.name}",
+                        details={"run_id": run.run_id, **petdex_tool_details(event.call.name, event.call.arguments)},
+                        surface=surface,
+                    )
                     await self.run_store.append_event(
                         run.run_id,
                         "tool_call",
@@ -713,6 +742,12 @@ class DaemonServer:
                     active = self.active_runs.get(run.run_id)
                     if active is not None:
                         active.pending_permissions[event.call.id] = event
+                    await self._send_petdex_state(
+                        "waving",
+                        message=f"Approval needed: {event.call.name}",
+                        details={"run_id": run.run_id, **petdex_tool_details(event.call.name, event.call.arguments)},
+                        surface=surface,
+                    )
                     await self.run_store.append_event(
                         run.run_id,
                         "permission_request",
@@ -725,6 +760,12 @@ class DaemonServer:
                     await self.run_store.update_state(run.run_id, "blocked")
                     continue
                 if isinstance(event, AgentToolResult):
+                    await self._send_petdex_state(
+                        "error" if event.result.is_error else "success",
+                        message=f"{event.call.name} {'failed' if event.result.is_error else 'finished'}",
+                        details={"run_id": run.run_id, "tool": event.call.name, "is_error": event.result.is_error},
+                        surface=surface,
+                    )
                     await self.run_store.append_event(
                         run.run_id,
                         "tool_result",
@@ -748,9 +789,21 @@ class DaemonServer:
                     continue
                 if isinstance(event, AgentError):
                     state = "failed"
+                    await self._send_petdex_state(
+                        "error",
+                        message=event.message,
+                        details={"surface": surface, "run_id": run.run_id},
+                        surface=surface,
+                    )
                     await self.run_store.append_event(run.run_id, "error", {"message": event.message})
                     break
                 if isinstance(event, AgentFallback):
+                    await self._send_petdex_state(
+                        "thinking",
+                        message=f"Fallback: {event.provider_label}",
+                        details={"run_id": run.run_id, "provider": event.provider_label, "reason": event.reason},
+                        surface=surface,
+                    )
                     await self.run_store.append_event(
                         run.run_id,
                         "provider_fallback",
@@ -759,9 +812,21 @@ class DaemonServer:
                     continue
         except asyncio.CancelledError:
             state = "cancelled"
+            await self._send_petdex_state(
+                "failed",
+                message="Daemon run cancelled",
+                details={"surface": surface, "run_id": run.run_id},
+                surface=surface,
+            )
             await self.run_store.append_event(run.run_id, "cancelled", {"reason": "Daemon task cancelled."})
         except Exception as exc:
             state = "failed"
+            await self._send_petdex_state(
+                "error",
+                message=str(exc),
+                details={"surface": surface, "run_id": run.run_id},
+                surface=surface,
+            )
             await self.run_store.append_event(run.run_id, "error", {"message": str(exc)})
         finally:
             persisted_state: RunState = "running" if hold_final_state and state in {"done", "failed", "cancelled"} else state
@@ -776,6 +841,12 @@ class DaemonServer:
             )
             if not hold_final_state:
                 await self.run_store.append_event(run.run_id, "run_finished", {"state": state})
+            await self._send_petdex_state(
+                _petdex_final_state(state),
+                message=f"Run {state}",
+                details={"surface": surface, "run_id": run.run_id},
+                surface=surface,
+            )
             if state == "done":
                 await self._extract_run_memory(config, run, message, "".join(assistant_chunks))
         return state
@@ -911,6 +982,7 @@ class DaemonServer:
             daemon=self.config.daemon,
             automations=self.config.automations,
             browser=self.config.browser,
+            petdex=self.config.petdex,
             mcp=self.config.mcp,
             providers=self.config.providers,
             source_paths=self.config.source_paths,
@@ -1754,6 +1826,26 @@ def _automation_telegram_message(
     report_line = f"Report saved locally: {report_path}"
     header = f"Scheduled: {automation.name}\nRun {run.run_id} finished with state: {state}"
     return f"{header}\n\n{summary}\n\n{report_line}"
+
+
+def _petdex_enabled_for_surface(config: LibreClawConfig, surface: str) -> bool:
+    if not config.petdex.enabled:
+        return False
+    if surface.startswith("automation:"):
+        return config.petdex.notify_automations
+    if surface.startswith("telegram"):
+        return config.petdex.notify_telegram
+    return config.petdex.notify_daemon
+
+
+def _petdex_final_state(state: str) -> str:
+    if state == "done":
+        return "success"
+    if state == "cancelled":
+        return "failed"
+    if state == "blocked":
+        return "waving"
+    return "error" if state == "failed" else "idle"
 
 
 async def _send_telegram_message(config: LibreClawConfig, chat_id: int, text: str) -> None:

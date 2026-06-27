@@ -184,6 +184,19 @@ class WebSearchConfig:
 
 
 @dataclass(frozen=True)
+class PetdexConfig:
+    enabled: bool
+    base_url: str
+    token_path: Path
+    source: str
+    timeout: float
+    notify_tui: bool
+    notify_daemon: bool
+    notify_telegram: bool
+    notify_automations: bool
+
+
+@dataclass(frozen=True)
 class MCPConfig:
     enabled: bool
     allowlist: tuple[str, ...]
@@ -208,6 +221,7 @@ class LibreClawConfig:
     daemon: DaemonConfig
     automations: AutomationsConfig
     browser: BrowserConfig
+    petdex: PetdexConfig
     mcp: MCPConfig
     providers: Mapping[str, Mapping[str, Any]]
     web_search: WebSearchConfig = field(
@@ -232,6 +246,10 @@ ENV_OVERRIDES: Mapping[str, tuple[str, str]] = {
     "LIBRE_CLAW_WORKING_DIRECTORY": ("general", "working_directory"),
     "LIBRE_CLAW_THEME": ("general", "theme"),
     "LIBRE_CLAW_LOG_LEVEL": ("general", "log_level"),
+    "LIBRE_CLAW_PETDEX_ENABLED": ("petdex", "enabled"),
+    "LIBRE_CLAW_PETDEX_URL": ("petdex", "base_url"),
+    "LIBRE_CLAW_PETDEX_TOKEN_PATH": ("petdex", "token_path"),
+    "LIBRE_CLAW_PETDEX_SOURCE": ("petdex", "source"),
 }
 
 
@@ -662,6 +680,17 @@ def _load_default_config() -> ConfigTable:
             "default_timeout_ms": 30000,
             "headless": True,
         },
+        "petdex": {
+            "enabled": False,
+            "base_url": "http://127.0.0.1:7777",
+            "token_path": "~/.petdex/runtime/update-token",
+            "source": "libre-claw",
+            "timeout": 1.0,
+            "notify_tui": True,
+            "notify_daemon": True,
+            "notify_telegram": True,
+            "notify_automations": True,
+        },
         "web_search": {
             "enabled": True,
             "provider": "searxng",
@@ -856,7 +885,17 @@ def _apply_environment_overrides(data: ConfigTable) -> None:
     for env_name, (section, key) in ENV_OVERRIDES.items():
         value = os.getenv(env_name)
         if value is not None:
-            data.setdefault(section, {})[key] = value
+            section_data = data.setdefault(section, {})
+            existing = section_data.get(key) if isinstance(section_data, MutableMapping) else None
+            if isinstance(existing, bool):
+                normalized = value.strip().lower()
+                if normalized in {"1", "true", "yes", "on"}:
+                    section_data[key] = True
+                    continue
+                if normalized in {"0", "false", "no", "off"}:
+                    section_data[key] = False
+                    continue
+            section_data[key] = value
 
 
 def _normalize_provider_aliases(data: ConfigTable) -> None:
@@ -899,6 +938,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
     automations = _section(data, "automations")
     browser = _section(data, "browser")
     web_search = _section(data, "web_search")
+    petdex = _section(data, "petdex")
     mcp = _section(data, "mcp")
 
     return LibreClawConfig(
@@ -1010,6 +1050,17 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             screenshots_dir=_path(browser, "screenshots_dir"),
             default_timeout_ms=_int(browser, "default_timeout_ms"),
             headless=_bool(browser, "headless"),
+        ),
+        petdex=PetdexConfig(
+            enabled=_bool(petdex, "enabled"),
+            base_url=_str(petdex, "base_url").rstrip("/"),
+            token_path=_path(petdex, "token_path"),
+            source=_str(petdex, "source"),
+            timeout=_float(petdex, "timeout"),
+            notify_tui=_bool(petdex, "notify_tui"),
+            notify_daemon=_bool(petdex, "notify_daemon"),
+            notify_telegram=_bool(petdex, "notify_telegram"),
+            notify_automations=_bool(petdex, "notify_automations"),
         ),
         mcp=MCPConfig(
             enabled=_bool(mcp, "enabled"),

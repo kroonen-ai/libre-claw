@@ -63,6 +63,9 @@ First shippable Libre Claw release, built by Kroonen AI.
 - SearXNG-backed `web_search` tool for compact web results without shelling out
   to scraper commands, plus `libre-claw searx init|up|status|test|down` helpers
   for running a private local SearXNG instance with JSON output enabled.
+- Optional Petdex companion integration with `[petdex]` config, `/petdex
+  status`, and local lifecycle updates for daemon, TUI, Telegram, scheduled
+  runs, tool calls, approvals, success, and errors.
 - MCP stdio bridge with `[mcp]` config, explicit server/tool allowlisting,
   `mcp__server__tool` wrappers, `/tools list` visibility, and normal Libre Claw
   permission policies for external tools.
