@@ -145,6 +145,14 @@ class SlashCommand:
 
 
 @dataclass(frozen=True)
+class PetdexTUISnapshot:
+    display_name: str
+    state: str
+    bubble_text: str
+    spritesheet_path: Path
+
+
+@dataclass(frozen=True)
 class ParsedTUIInput:
     message: str = ""
     attachments: tuple[UserAttachment, ...] = ()
@@ -641,6 +649,24 @@ class LibreClawApp(App[None]):
         display: none;
     }
 
+    #petdex-panel {
+        height: auto;
+        max-height: 14;
+        padding: 1 2;
+        border-bottom: solid #FF5C5C;
+        background: #111827;
+        color: #e4e4e7;
+    }
+
+    #petdex-panel.hidden {
+        display: none;
+    }
+
+    Screen.light #petdex-panel {
+        background: #ffffff;
+        color: #111827;
+    }
+
     #chat {
         height: 1fr;
         padding: 1 2;
@@ -751,6 +777,7 @@ class LibreClawApp(App[None]):
     #artifact-panel,
     #artifact-content,
     #chat,
+    #petdex-panel,
     #input {
         scrollbar-color: #FF5C5C;
         scrollbar-color-hover: #FF5C5C;
@@ -774,6 +801,7 @@ class LibreClawApp(App[None]):
     Screen.light #artifact-panel,
     Screen.light #artifact-content,
     Screen.light #chat,
+    Screen.light #petdex-panel,
     Screen.light #input {
         scrollbar-color: #FF5C5C;
         scrollbar-color-hover: #FF5C5C;
@@ -889,6 +917,7 @@ class LibreClawApp(App[None]):
                 yield DirectoryTree(self.config.general.working_directory, id="file-tree")
             with Vertical(id="main"):
                 yield Static("", id="palette", classes="hidden")
+                yield Static("", id="petdex-panel", classes="hidden")
                 yield SelectableRichLog(id="chat", wrap=True, highlight=True, markup=True)
                 yield Static("", id="suggestions", classes="hidden")
                 with Vertical(id="permission-panel", classes="hidden"):
@@ -924,6 +953,8 @@ class LibreClawApp(App[None]):
         self._update_palette()
         self._update_slash_suggestions("")
         self.set_interval(1, self._update_status)
+        self.set_interval(0.75, self._update_petdex_panel)
+        self._update_petdex_panel()
         await self._initialize_memory()
         self._append_system(f"Libre Claw v{__version__} ready. Type /help for commands.")
         if self.daemon_client is not None:
@@ -975,6 +1006,7 @@ class LibreClawApp(App[None]):
             ("#file-tree", sidebar, text),
             ("#main", surface, text),
             ("#chat", surface, text),
+            ("#petdex-panel", surface, text),
             ("#input", surface_2, text),
             ("#suggestions", panel, text),
             ("#permission-panel", panel, text),
@@ -997,6 +1029,8 @@ class LibreClawApp(App[None]):
         for selector in ("#workspace", "#input", "#permission-panel", "#artifact-panel", "#suggestions"):
             for widget in self.query(selector):
                 widget.styles.border_top = ("solid", accent)
+        for widget in self.query("#petdex-panel"):
+            widget.styles.border_bottom = ("solid", accent)
         for widget in self.query("#workspace"):
             widget.styles.border_bottom = ("solid", accent)
         for selector in ("#suggestions", "#palette"):
@@ -1964,6 +1998,23 @@ class LibreClawApp(App[None]):
         if not self.config.petdex.notify_tui:
             return
         self._track_run_background_task(self.petdex_client.send_state(state, message=message, details=details))
+
+    def _update_petdex_panel(self) -> None:
+        try:
+            panel = self.query_one("#petdex-panel", Static)
+        except Exception:
+            return
+
+        renderable = _petdex_panel_renderable(
+            enabled=self.config.petdex.enabled,
+            accent=self._theme.accent,
+            light=self._theme.is_light,
+        )
+        if renderable is None:
+            panel.add_class("hidden")
+            return
+        panel.remove_class("hidden")
+        panel.update(renderable)
 
     def _archive_session_event_later(self, event_type: str, data: dict[str, Any]) -> None:
         if not self.config.memory.archive_sessions:
@@ -5970,7 +6021,117 @@ def _attachment_from_metadata(value: object) -> UserAttachment | None:
 def _attachment_preview_renderable(attachment: UserAttachment) -> RenderableType | None:
     if not attachment.path:
         return None
-    path = Path(attachment.path)
+    return _image_preview_renderable(Path(attachment.path), max_size=(56, 32))
+
+
+def _petdex_panel_renderable(*, enabled: bool, accent: str, light: bool) -> RenderableType | None:
+    if not enabled:
+        return None
+    snapshot = _petdex_runtime_snapshot()
+    if snapshot is None:
+        return None
+
+    header = Text.assemble(
+        ("🦞 ", ""),
+        ("Petdex", f"bold {accent}"),
+        (f" · {snapshot.display_name}", "bold"),
+        (f" · {snapshot.state}", "dim"),
+    )
+    preview = _petdex_sprite_renderable(snapshot.spritesheet_path, snapshot.state, light=light)
+    bubble = Text(snapshot.bubble_text, style="dim") if snapshot.bubble_text else Text("Companion ready", style="dim")
+    if preview is None:
+        return Group(header, bubble)
+    return Group(header, preview, bubble)
+
+
+def _petdex_runtime_snapshot(home: Path | None = None) -> PetdexTUISnapshot | None:
+    root = home or Path.home() / ".petdex"
+    runtime = root / "runtime"
+    active_payload = _read_json_file(root / "active.json")
+    active_slug = str(active_payload.get("slug") or active_payload.get("id") or "").strip()
+    pet_dir = root / "pets" / active_slug if active_slug else None
+    pet_payload = _read_json_file(pet_dir / "pet.json") if pet_dir is not None else {}
+    display_name = str(pet_payload.get("displayName") or pet_payload.get("name") or active_slug or "Petdex")
+    sprite_name = str(pet_payload.get("spritesheetPath") or "spritesheet.webp")
+
+    spritesheet_path = runtime / "webview" / "spritesheet.webp"
+    if not spritesheet_path.is_file() and pet_dir is not None:
+        spritesheet_path = pet_dir / sprite_name
+    if not spritesheet_path.is_file():
+        return None
+
+    state_payload = _read_json_file(runtime / "state.json")
+    bubble_payload = _read_json_file(runtime / "bubble.json")
+    state = str(state_payload.get("state") or "idle").strip() or "idle"
+    bubble_text = str(bubble_payload.get("text") or "").strip()
+    return PetdexTUISnapshot(
+        display_name=display_name,
+        state=state,
+        bubble_text=bubble_text,
+        spritesheet_path=spritesheet_path,
+    )
+
+
+def _petdex_sprite_renderable(path: Path, state: str, *, light: bool) -> RenderableType | None:
+    background = "#fdf6e3" if light else "#111827"
+    return _image_preview_renderable(
+        path,
+        max_size=(22, 14),
+        frame_selector=lambda width, height: _petdex_frame_rect(width, height, state),
+        background=background,
+    )
+
+
+def _petdex_frame_rect(width: int, height: int, state: str) -> tuple[int, int, int, int] | None:
+    columns = 8
+    rows = 9
+    if width < columns or height < rows or width % columns != 0 or height % rows != 0:
+        return None
+    frame_width = width // columns
+    frame_height = height // rows
+    row = _petdex_state_row(state, rows)
+    column = _petdex_state_column(state, columns)
+    left = column * frame_width
+    top = row * frame_height
+    return left, top, left + frame_width, top + frame_height
+
+
+def _petdex_state_row(state: str, rows: int) -> int:
+    row_by_state = {
+        "idle": 0,
+        "waiting": 0,
+        "review": 0,
+        "running": 1,
+        "running-left": 1,
+        "running-right": 1,
+        "jumping": 2,
+        "waving": 3,
+        "failed": 4,
+    }
+    return min(rows - 1, row_by_state.get(state.strip().lower(), 1))
+
+
+def _petdex_state_column(state: str, columns: int) -> int:
+    if state.strip().lower() in {"idle", "waiting", "review"}:
+        return 0
+    return int(time.monotonic() * 4) % columns
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _image_preview_renderable(
+    path: Path,
+    *,
+    max_size: tuple[int, int],
+    frame_selector: Any | None = None,
+    background: str = "#111827",
+) -> RenderableType | None:
     if not path.is_file():
         return None
     try:
@@ -5979,8 +6140,12 @@ def _attachment_preview_renderable(attachment: UserAttachment) -> RenderableType
         return None
     try:
         with Image.open(path) as image:
-            image = image.convert("RGB")
-            image.thumbnail((56, 32))
+            if frame_selector is not None:
+                frame = frame_selector(*image.size)
+                if frame is not None:
+                    image = image.crop(frame)
+            image = _image_over_background(image, background)
+            image.thumbnail(max_size, _nearest_resampling(Image))
             width, height = image.size
             if width <= 0 or height <= 0:
                 return None
@@ -6000,6 +6165,24 @@ def _attachment_preview_renderable(attachment: UserAttachment) -> RenderableType
             return text
     except Exception:
         return None
+
+
+def _image_over_background(image: Any, background: str) -> Any:
+    if image.mode == "RGBA" or "transparency" in image.info:
+        from PIL import Image
+
+        rgba = image.convert("RGBA")
+        canvas = Image.new("RGBA", rgba.size, background)
+        canvas.alpha_composite(rgba)
+        return canvas.convert("RGB")
+    return image.convert("RGB")
+
+
+def _nearest_resampling(image_module: Any) -> Any:
+    resampling = getattr(image_module, "Resampling", None)
+    if resampling is not None:
+        return resampling.NEAREST
+    return image_module.NEAREST
 
 
 def _attachment_byte_count(attachment: UserAttachment) -> int:

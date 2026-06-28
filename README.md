@@ -74,11 +74,14 @@ enabled = true
 base_url = "http://127.0.0.1:7777"
 token_path = "~/.petdex/runtime/update-token"
 source = "libre-claw"
+bubble_prefix = "🦞"
 ```
 
 When enabled, Libre Claw sends local lifecycle updates to Petdex for daemon,
 TUI, Telegram, scheduled runs, tool calls, approvals, success, and errors. Use
-`/petdex status` in the TUI or Telegram to verify the token and endpoint.
+`/petdex status` in the TUI or Telegram to verify the token and endpoint. The
+TUI also renders the active Petdex sprite from `~/.petdex` when the companion is
+enabled and a pet is installed.
 
 ## First Run
 

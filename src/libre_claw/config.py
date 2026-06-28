@@ -189,6 +189,7 @@ class PetdexConfig:
     base_url: str
     token_path: Path
     source: str
+    bubble_prefix: str
     timeout: float
     notify_tui: bool
     notify_daemon: bool
@@ -250,6 +251,7 @@ ENV_OVERRIDES: Mapping[str, tuple[str, str]] = {
     "LIBRE_CLAW_PETDEX_URL": ("petdex", "base_url"),
     "LIBRE_CLAW_PETDEX_TOKEN_PATH": ("petdex", "token_path"),
     "LIBRE_CLAW_PETDEX_SOURCE": ("petdex", "source"),
+    "LIBRE_CLAW_PETDEX_BUBBLE_PREFIX": ("petdex", "bubble_prefix"),
 }
 
 
@@ -685,6 +687,7 @@ def _load_default_config() -> ConfigTable:
             "base_url": "http://127.0.0.1:7777",
             "token_path": "~/.petdex/runtime/update-token",
             "source": "libre-claw",
+            "bubble_prefix": "🦞",
             "timeout": 1.0,
             "notify_tui": True,
             "notify_daemon": True,
@@ -1056,6 +1059,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             base_url=_str(petdex, "base_url").rstrip("/"),
             token_path=_path(petdex, "token_path"),
             source=_str(petdex, "source"),
+            bubble_prefix=_str(petdex, "bubble_prefix"),
             timeout=_float(petdex, "timeout"),
             notify_tui=_bool(petdex, "notify_tui"),
             notify_daemon=_bool(petdex, "notify_daemon"),

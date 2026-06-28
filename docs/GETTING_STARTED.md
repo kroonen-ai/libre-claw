@@ -150,6 +150,7 @@ enabled = true
 base_url = "http://127.0.0.1:7777"
 token_path = "~/.petdex/runtime/update-token"
 source = "libre-claw"
+bubble_prefix = "🦞"
 ```
 
 Check it from the TUI or Telegram:
@@ -157,6 +158,10 @@ Check it from the TUI or Telegram:
 ```text
 /petdex status
 ```
+
+When the integration is enabled, the TUI reads the active Petdex pet from
+`~/.petdex`, renders the companion sprite above the chat transcript, and prefixes
+Petdex desktop bubbles so they are visibly coming from Libre Claw.
 
 ## Terminal Selection
 

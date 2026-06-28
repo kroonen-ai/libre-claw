@@ -205,6 +205,7 @@ enabled = false
 base_url = "http://127.0.0.1:7777"
 token_path = "~/.petdex/runtime/update-token"
 source = "libre-claw"
+bubble_prefix = "🦞"
 timeout = 1.0
 notify_tui = true
 notify_daemon = true

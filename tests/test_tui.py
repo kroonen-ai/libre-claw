@@ -52,6 +52,9 @@ from libre_claw.tui.app import (
     _collect_run_artifacts,
     _model_help_text,
     _load_tui_clipboard_image,
+    _petdex_frame_rect,
+    _petdex_panel_renderable,
+    _petdex_runtime_snapshot,
     _parse_tui_image_input,
     _parse_compact_options,
     _parse_schedule_command,
@@ -480,6 +483,61 @@ def test_tui_loads_clipboard_image_file_list(monkeypatch, tmp_path: Path) -> Non
     assert warning is None
     assert attachment is not None
     assert attachment.filename == "finder-copy.png"
+
+
+def test_tui_reads_petdex_runtime_snapshot(tmp_path: Path) -> None:
+    from PIL import Image
+
+    pet_root = tmp_path
+    pet_dir = pet_root / "pets" / "dollman"
+    runtime_dir = pet_root / "runtime"
+    pet_dir.mkdir(parents=True)
+    runtime_dir.mkdir()
+    (pet_root / "active.json").write_text('{"slug": "dollman"}', encoding="utf-8")
+    (pet_dir / "pet.json").write_text(
+        '{"displayName": "Dollman", "spritesheetPath": "spritesheet.png"}',
+        encoding="utf-8",
+    )
+    Image.new("RGBA", (16, 18), (255, 0, 0, 255)).save(pet_dir / "spritesheet.png")
+    (runtime_dir / "state.json").write_text('{"state": "waving"}', encoding="utf-8")
+    (runtime_dir / "bubble.json").write_text('{"text": "Libre Claw ready"}', encoding="utf-8")
+
+    snapshot = _petdex_runtime_snapshot(pet_root)
+
+    assert snapshot is not None
+    assert snapshot.display_name == "Dollman"
+    assert snapshot.state == "waving"
+    assert snapshot.bubble_text == "Libre Claw ready"
+    assert snapshot.spritesheet_path == pet_dir / "spritesheet.png"
+
+
+def test_tui_petdex_frame_rect_uses_idle_first_frame() -> None:
+    assert _petdex_frame_rect(1536, 1872, "idle") == (0, 0, 192, 208)
+
+
+def test_tui_petdex_panel_renderable(monkeypatch, tmp_path: Path) -> None:
+    from PIL import Image
+
+    pet_root = tmp_path / ".petdex"
+    pet_dir = pet_root / "pets" / "dollman"
+    runtime_dir = pet_root / "runtime"
+    pet_dir.mkdir(parents=True)
+    runtime_dir.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (pet_root / "active.json").write_text('{"slug": "dollman"}', encoding="utf-8")
+    (pet_dir / "pet.json").write_text(
+        '{"displayName": "Dollman", "spritesheetPath": "spritesheet.png"}',
+        encoding="utf-8",
+    )
+    Image.new("RGBA", (16, 18), (255, 0, 0, 255)).save(pet_dir / "spritesheet.png")
+    (runtime_dir / "state.json").write_text('{"state": "idle"}', encoding="utf-8")
+
+    renderable = _petdex_panel_renderable(enabled=True, accent="#ff5c5c", light=False)
+
+    assert renderable is not None
+    console = Console(record=True, width=80)
+    console.print(renderable)
+    assert "Dollman" in console.export_text()
 
 
 async def test_tui_attach_command_queues_image_for_next_prompt(monkeypatch, tmp_path: Path) -> None:

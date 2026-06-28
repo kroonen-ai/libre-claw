@@ -94,6 +94,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.petdex.base_url == "http://127.0.0.1:7777"
     assert config.petdex.token_path == tmp_path / ".petdex" / "runtime" / "update-token"
     assert config.petdex.source == "libre-claw"
+    assert config.petdex.bubble_prefix == "🦞"
     assert config.petdex.timeout == 1.0
     assert config.petdex.notify_tui is True
     assert config.petdex.notify_daemon is True
@@ -315,6 +316,7 @@ def test_config_file_env_and_cli_overrides(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("LIBRE_CLAW_PETDEX_URL", "http://127.0.0.1:7778/")
     monkeypatch.setenv("LIBRE_CLAW_PETDEX_TOKEN_PATH", str(tmp_path / "petdex-token"))
     monkeypatch.setenv("LIBRE_CLAW_PETDEX_SOURCE", "libre-claw-test")
+    monkeypatch.setenv("LIBRE_CLAW_PETDEX_BUBBLE_PREFIX", "LC")
 
     config = load_config(config_path=config_path, working_directory=tmp_path / "from-cli")
 
@@ -328,6 +330,7 @@ def test_config_file_env_and_cli_overrides(monkeypatch, tmp_path: Path) -> None:
     assert config.petdex.base_url == "http://127.0.0.1:7778"
     assert config.petdex.token_path == tmp_path / "petdex-token"
     assert config.petdex.source == "libre-claw-test"
+    assert config.petdex.bubble_prefix == "LC"
 
 
 def test_set_global_default_model_updates_user_config(monkeypatch, tmp_path: Path) -> None:

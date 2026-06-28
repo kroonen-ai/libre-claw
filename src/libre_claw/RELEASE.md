@@ -65,7 +65,9 @@ First shippable Libre Claw release, built by Kroonen AI.
   for running a private local SearXNG instance with JSON output enabled.
 - Optional Petdex companion integration with `[petdex]` config, `/petdex
   status`, and local lifecycle updates for daemon, TUI, Telegram, scheduled
-  runs, tool calls, approvals, success, and errors.
+  runs, tool calls, approvals, success, and errors. Petdex bubbles can now carry
+  a Libre Claw prefix, and the TUI renders the active Petdex sprite from
+  `~/.petdex`.
 - MCP stdio bridge with `[mcp]` config, explicit server/tool allowlisting,
   `mcp__server__tool` wrappers, `/tools list` visibility, and normal Libre Claw
   permission policies for external tools.

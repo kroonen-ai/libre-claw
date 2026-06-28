@@ -64,6 +64,7 @@ class PetdexClient:
                 f"endpoint: {self.config.base_url}/state",
                 f"token: {token} at {self.config.token_path}",
                 f"source: {self.config.source}",
+                f"bubble_prefix: {self.config.bubble_prefix or '(none)'}",
             ]
         )
 
@@ -92,8 +93,14 @@ class PetdexClient:
             "state": petdex_state,
             "agent_source": self.config.source or "libre-claw",
         }
-        bubble_text = _bubble_text(message, details)
+        bubble_text = _bubble_text(message, details, prefix=self.config.bubble_prefix)
         auth_headers = {"x-petdex-update-token": token}
+        bubble_payload = {
+            "text": bubble_text,
+            "agent_source": self.config.source or "libre-claw",
+            "source_label": "Libre Claw",
+            "source_icon": self.config.bubble_prefix or "LC",
+        }
 
         try:
             if self._http_client is not None:
@@ -107,7 +114,7 @@ class PetdexClient:
                     bubble_response = await self._http_client.post(
                         f"{self.config.base_url}/bubble",
                         headers=auth_headers,
-                        json={"text": bubble_text, "agent_source": self.config.source or "libre-claw"},
+                        json=bubble_payload,
                     )
                     bubble_response.raise_for_status()
             else:
@@ -122,7 +129,7 @@ class PetdexClient:
                         bubble_response = await client.post(
                             f"{self.config.base_url}/bubble",
                             headers=auth_headers,
-                            json={"text": bubble_text, "agent_source": self.config.source or "libre-claw"},
+                            json=bubble_payload,
                         )
                         bubble_response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -183,7 +190,7 @@ def _to_petdex_state(state: str) -> str:
     return "running"
 
 
-def _bubble_text(message: str, details: Mapping[str, Any] | None) -> str:
+def _bubble_text(message: str, details: Mapping[str, Any] | None, *, prefix: str = "") -> str:
     parts: list[str] = []
     if message:
         parts.append(message)
@@ -195,7 +202,13 @@ def _bubble_text(message: str, details: Mapping[str, Any] | None) -> str:
             parts.append(f"{tool}: {target}")
         elif tool:
             parts.append(str(tool))
-    return _truncate_text(" · ".join(parts), 200)
+    text = " · ".join(parts)
+    clean_prefix = prefix.strip()
+    if clean_prefix and text and not text.startswith(clean_prefix):
+        text = f"{clean_prefix} {text}"
+    elif clean_prefix and not text:
+        text = clean_prefix
+    return _truncate_text(text, 200)
 
 
 def _truncate_text(text: str, limit: int) -> str:

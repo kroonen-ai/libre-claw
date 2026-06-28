@@ -19,6 +19,7 @@ def _config(tmp_path: Path, *, enabled: bool = True) -> PetdexConfig:
         base_url="http://127.0.0.1:7777",
         token_path=tmp_path / "update-token",
         source="libre-claw-test",
+        bubble_prefix="🦞",
         timeout=1.0,
         notify_tui=True,
         notify_daemon=True,
@@ -77,8 +78,10 @@ async def test_petdex_posts_authenticated_state(tmp_path: Path) -> None:
     assert str(bubble_request.url) == "http://127.0.0.1:7777/bubble"
     assert bubble_request.headers["x-petdex-update-token"] == "secret-token"
     assert json.loads(bubble_request.content) == {
-        "text": "Inspecting files · read_file",
+        "text": "🦞 Inspecting files · read_file",
         "agent_source": "libre-claw-test",
+        "source_label": "Libre Claw",
+        "source_icon": "🦞",
     }
 
 
