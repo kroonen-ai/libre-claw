@@ -95,7 +95,9 @@ AUTOMATION_DAEMON_PROMPT_EXTRA = (
     "failure sentence instead of a partial scratch transcript. Keep the run bounded: "
     "when a source returns many IDs or links, sample the relevant slice, avoid comment "
     "or child-object fanout, and finish from the observations you already have instead "
-    "of exhausting the tool-call budget."
+    "of exhausting the tool-call budget. Libre Claw owns delivery after you finish: "
+    "when the automation route is Telegram, return the exact message body to deliver. "
+    "Never say you lack a Telegram tool, webhook, bot, or attachment capability."
 )
 AUTOMATION_FINALIZER_SYSTEM = (
     "You are Libre Claw's scheduled-run finalizer. You receive a failed or partial "
@@ -1516,6 +1518,38 @@ def _automation_summary_for_telegram(run: RunRecord, state: str) -> str:
     return summary
 
 
+def _clean_automation_delivery_text(automation: AutomationRecord, text: str) -> str:
+    """Remove model-side delivery disclaimers from scheduler-owned Telegram output."""
+
+    cleaned = text.strip()
+    if automation.route != "telegram" or not cleaned:
+        return cleaned
+    paragraphs = re.split(r"\n\s*\n", cleaned)
+    kept = [paragraph for paragraph in paragraphs if not _is_telegram_delivery_disclaimer(paragraph)]
+    return "\n\n".join(kept).strip() or cleaned
+
+
+def _is_telegram_delivery_disclaimer(paragraph: str) -> bool:
+    normalized = re.sub(r"\s+", " ", paragraph.strip().lower())
+    if "telegram" not in normalized:
+        return False
+    disclaimer_markers = (
+        "telegram send tool",
+        "telegram tool",
+        "telegram bot/webhook",
+        "bot/webhook configured",
+        "paste the message",
+        "can't directly attach",
+        "cannot directly attach",
+        "can't send files directly",
+        "cannot send files directly",
+        "don't have the ability to send",
+        "do not have the ability to send",
+        "no way to send",
+    )
+    return any(marker in normalized for marker in disclaimer_markers)
+
+
 def _run_error_messages(run: RunRecord) -> list[str]:
     events_path = run.path / "events.jsonl"
     try:
@@ -1803,7 +1837,7 @@ def _memory_summary_text(user_message: str, assistant_text: str) -> str:
 
 
 def _write_automation_report(automation: AutomationRecord, run: RunRecord, report_path: Path, state: str) -> None:
-    summary = _automation_summary_for_report(run, state)
+    summary = _clean_automation_delivery_text(automation, _automation_summary_for_report(run, state))
     verification = _read_artifact(run, "verification.md").strip()
     browser = _read_artifact(run, "browser.md").strip()
     diff_path = run.path / "diff.patch"
@@ -1852,7 +1886,7 @@ def _automation_telegram_message(
     report_path: Path,
     state: str,
 ) -> str:
-    summary = _automation_summary_for_telegram(run, state)
+    summary = _clean_automation_delivery_text(automation, _automation_summary_for_telegram(run, state))
     report_line = f"Report saved locally: {report_path}"
     header = f"Scheduled: {automation.name}\nRun {run.run_id} finished with state: {state}"
     return f"{header}\n\n{summary}\n\n{report_line}"

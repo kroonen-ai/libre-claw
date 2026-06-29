@@ -908,7 +908,19 @@ async def test_daemon_tick_delivers_telegram_automation_report(monkeypatch, tmp_
     async def fake_telegram_sender(_config: object, chat_id: int, text: str) -> None:
         sent.append((chat_id, text))
 
-    provider = ScriptedProvider([[TextDelta("scheduled done"), Done(Usage(input_tokens=2, output_tokens=3))]])
+    provider = ScriptedProvider(
+        [
+            [
+                TextDelta(
+                    "scheduled done\n\n"
+                    "I have the exact output, but I don't have a Telegram send tool available "
+                    "in this environment to dispatch it. If you have a Telegram bot/webhook "
+                    "configured, paste the message above."
+                ),
+                Done(Usage(input_tokens=2, output_tokens=3)),
+            ]
+        ]
+    )
     server = DaemonServer(
         config,
         run_store=RunStore(tmp_path / "runs"),
@@ -937,14 +949,23 @@ async def test_daemon_tick_delivers_telegram_automation_report(monkeypatch, tmp_
     run = runs[0]
     await _wait_for_state(server, run.run_id, "done")
     events = await server.run_store.load_events(run.run_id)
+    updated = await server.automation_store.load(automation.automation_id)
+    assert updated is not None
+    assert updated.report_path is not None
+    report = Path(updated.report_path).read_text(encoding="utf-8")
 
     assert len(sent) == 1
     assert sent[0][0] == 42
     assert "Scheduled: HN watch" in sent[0][1]
     assert "scheduled done" in sent[0][1]
+    assert "Telegram send tool" not in sent[0][1]
+    assert "bot/webhook" not in sent[0][1]
+    assert "scheduled done" in report
+    assert "Telegram send tool" not in report
     assert provider.system_prompts[0] is not None
     assert "Scheduled automation output policy" in provider.system_prompts[0]
     assert "Do not write process narration" in provider.system_prompts[0]
+    assert "Libre Claw owns delivery" in provider.system_prompts[0]
     assert any(event.type == "automation_telegram_delivered" for event in events)
 
 
