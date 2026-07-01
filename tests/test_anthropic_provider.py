@@ -75,7 +75,7 @@ async def test_anthropic_provider_normalizes_text_streaming_events() -> None:
     )
     manager = FakeStreamManager(stream)
     client = FakeClient(manager)
-    provider = AnthropicProvider(api_key="test-key", model="claude-sonnet-4-6", max_tokens=99, client=client)
+    provider = AnthropicProvider(api_key="test-key", model="claude-haiku-4-5-20251001", max_tokens=99, client=client)
 
     events = [
         event
@@ -91,7 +91,7 @@ async def test_anthropic_provider_normalizes_text_streaming_events() -> None:
         Done(usage=Usage(input_tokens=4, output_tokens=2), stop_reason="end_turn"),
     ]
     assert client.messages.last_request == {
-        "model": "claude-sonnet-4-6",
+        "model": "claude-haiku-4-5-20251001",
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
         "max_tokens": 99,
         "temperature": 0.7,
@@ -129,6 +129,70 @@ async def test_anthropic_provider_omits_temperature_for_opus_4_8() -> None:
     ]
     assert client.messages.last_request is not None
     assert client.messages.last_request["model"] == "claude-opus-4-8"
+    assert "temperature" not in client.messages.last_request
+
+
+async def test_anthropic_provider_omits_temperature_for_sonnet_4_6() -> None:
+    final_message = SimpleNamespace(
+        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+        stop_reason="end_turn",
+    )
+    stream = FakeStream(
+        events=[
+            SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(type="text_delta", text="ok")),
+            SimpleNamespace(type="message_stop"),
+        ],
+        final_message=final_message,
+    )
+    manager = FakeStreamManager(stream)
+    client = FakeClient(manager)
+    provider = AnthropicProvider(api_key="test-key", model="claude-sonnet-4-6", max_tokens=99, client=client)
+
+    events = [
+        event
+        async for event in provider.complete(
+            messages=[ChatMessage(role="user", content=[text_block("Hello")])],
+        )
+    ]
+
+    assert events == [
+        TextDelta("ok"),
+        Done(usage=Usage(input_tokens=1, output_tokens=1), stop_reason="end_turn"),
+    ]
+    assert client.messages.last_request is not None
+    assert client.messages.last_request["model"] == "claude-sonnet-4-6"
+    assert "temperature" not in client.messages.last_request
+
+
+async def test_anthropic_provider_omits_temperature_for_sonnet_5() -> None:
+    final_message = SimpleNamespace(
+        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+        stop_reason="end_turn",
+    )
+    stream = FakeStream(
+        events=[
+            SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(type="text_delta", text="ok")),
+            SimpleNamespace(type="message_stop"),
+        ],
+        final_message=final_message,
+    )
+    manager = FakeStreamManager(stream)
+    client = FakeClient(manager)
+    provider = AnthropicProvider(api_key="test-key", model="claude-sonnet-5", max_tokens=99, client=client)
+
+    events = [
+        event
+        async for event in provider.complete(
+            messages=[ChatMessage(role="user", content=[text_block("Hello")])],
+        )
+    ]
+
+    assert events == [
+        TextDelta("ok"),
+        Done(usage=Usage(input_tokens=1, output_tokens=1), stop_reason="end_turn"),
+    ]
+    assert client.messages.last_request is not None
+    assert client.messages.last_request["model"] == "claude-sonnet-5"
     assert "temperature" not in client.messages.last_request
 
 

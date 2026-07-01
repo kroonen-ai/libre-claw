@@ -172,10 +172,12 @@ Key lookup order:
 /model openrouter:moonshotai/kimi-k2.7-code --global
 /model openrouter:z-ai/glm-5.2 --global
 /model openrouter:minimax/minimax-m3 --global
+/model openrouter:anthropic/claude-sonnet-5 --global
 /model openrouter:nvidia/nemotron-3-ultra-550b-a55b:free --global
 /model ollama:glm-5.2:cloud --global
 /model ollama:minimax-m3:cloud --global
 /model ollama:kimi-k2.6:cloud --global
+/model anthropic:claude-sonnet-5 --global
 /model anthropic:claude-opus-4-8 --global
 /model openai:gpt-5.5 --global
 /model codex:gpt-5.5 --global
@@ -188,7 +190,7 @@ or down before it starts streaming. Configure up to three ordered backups:
 /fallback list
 /fallback set 1 openrouter:openrouter/auto --global
 /fallback set 2 ollama:kimi-k2.6:cloud --key-env OLLAMA_BACKUP_API_KEY --global
-/fallback set 3 anthropic:claude-sonnet-4-6 --global
+/fallback set 3 anthropic:claude-sonnet-5 --global
 /fallback recheck 3 --global
 /fallback clear all --global
 ```

@@ -4787,7 +4787,7 @@ def _fallback_help_text(config: LibreClawConfig) -> str:
         "Commands:",
         "/fallback set 1 openrouter:openrouter/auto --global",
         "/fallback set 2 ollama:kimi-k2.6:cloud --key-env OLLAMA_BACKUP_API_KEY --global",
-        "/fallback set 3 anthropic:claude-sonnet-4-6 --global",
+        "/fallback set 3 anthropic:claude-sonnet-5 --global",
         "/fallback clear 2 --global",
         "/fallback clear all --global",
         "/fallback recheck 3 --global",

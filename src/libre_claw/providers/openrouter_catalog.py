@@ -90,6 +90,11 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Anthropic Sonnet through OpenRouter.",
     ),
     OpenRouterModelPreset(
+        "anthropic/claude-sonnet-5",
+        "Claude Sonnet 5",
+        "Anthropic Sonnet 5 through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
         "minimax/minimax-m3",
         "MiniMax M3",
         "MiniMax M3 coding, agentic, and productivity preset through OpenRouter.",

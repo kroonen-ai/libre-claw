@@ -101,10 +101,12 @@ def test_codex_oauth_presets_include_current_cli_model_names() -> None:
 def test_anthropic_presets_include_current_api_model_names() -> None:
     preset_names = {preset.model for preset in ANTHROPIC_MODEL_PRESETS}
 
+    assert "claude-sonnet-5" in preset_names
     assert "claude-opus-4-8" in preset_names
     assert "claude-sonnet-4-6" in preset_names
     assert "claude-haiku-4-5-20251001" in preset_names
     assert "anthropic/claude-opus-4.8" not in preset_names
+    assert "anthropic/claude-sonnet-5" not in preset_names
 
 
 def test_openrouter_presets_include_recommended_models() -> None:
@@ -125,6 +127,7 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "qwen/qwen3.6-plus",
         "anthropic/claude-opus-4.8",
         "anthropic/claude-sonnet-4.6",
+        "anthropic/claude-sonnet-5",
         "minimax/minimax-m3",
         "google/gemini-3.5-flash",
         "openai/gpt-5.5",

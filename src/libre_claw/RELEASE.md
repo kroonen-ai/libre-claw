@@ -101,8 +101,8 @@ First shippable Libre Claw release, built by Kroonen AI.
   for restoring the sidebar, and `Ctrl+B` toggling.
 - Provider support for Anthropic, OpenAI, OpenRouter, Ollama, and Codex CLI
   auth. Default model selections are `claude-opus-4-8`, `gpt-5.5`, and
-  `qwen3.6:27b`, with Anthropic direct API presets updated to `claude-opus-4-8`,
-  `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001`, plus expanded
+  `qwen3.6:27b`, with Anthropic direct API presets updated to `claude-sonnet-5`,
+  `claude-opus-4-8`, `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001`, plus expanded
   Ollama Cloud presets covering the current cloud library aliases such as
   `minimax-m3:cloud`, `kimi-k2.6:cloud`, `qwen3.5:cloud`,
   `gemma4:31b-cloud`, `glm-5.2:cloud`, `deepseek-v4-flash:cloud`, and `gpt-oss:120b`.
@@ -116,7 +116,7 @@ First shippable Libre Claw release, built by Kroonen AI.
   `moonshotai/kimi-k2.6`, `moonshotai/kimi-k2.7-code`, `z-ai/glm-5.2`,
   `minimax/minimax-m3`,
   `nvidia/nemotron-3-ultra-550b-a55b:free`,
-  `anthropic/claude-opus-4.8`, and `openai/gpt-5.5`.
+  `anthropic/claude-sonnet-5`, `anthropic/claude-opus-4.8`, and `openai/gpt-5.5`.
 - Ordered provider fallback slots are configurable from TUI and Telegram with
   `/fallback set 1|2|3 ...`; Libre Claw can fail over to backup
   provider/model/account combinations, then retry the primary after the
