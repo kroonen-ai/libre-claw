@@ -36,7 +36,12 @@ from libre_claw.config import (
     set_global_default_model,
     user_config_path,
 )
-from libre_claw.core.searxng import default_searxng_path, ensure_searxng_files, searxng_compose_command
+from libre_claw.core.searxng import (
+    default_searxng_path,
+    ensure_searxng_files,
+    ensure_searxng_up,
+    searxng_compose_command,
+)
 from libre_claw.core.workspace import (
     default_claw_workspace_path,
     initialize_claw_workspace,
@@ -393,6 +398,8 @@ def _run_daemon_process(
         click.echo(f"Libre Claw daemon is already running at {running_url}")
         click.echo(f"Dashboard: {running_url}/dashboard")
         return
+
+    _maybe_autostart_searxng(config)
 
     if effective_detach:
         started = _start_background_process(ctx, config, "daemon", host=host, port=port)
@@ -1299,6 +1306,42 @@ def searx_test_command(ctx: click.Context, base_url: str | None, query: str) -> 
         title = str(results[0].get("title") or "Untitled").strip()
         url = str(results[0].get("url") or "").strip()
         click.echo(f"first: {title} {url}".rstrip())
+
+
+_LOCAL_SEARXNG_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
+def _maybe_autostart_searxng(config: Any) -> None:
+    """Bring up the local SearXNG container when web search points at it.
+
+    Only fires when web_search is enabled, the provider is the bundled
+    `searxng` provider, and `base_url` targets a loopback address — so users
+    who run a remote SearXNG (or disable web search) are never touched.
+    Failures are logged to stdout but never block daemon startup.
+    """
+    web = config.web_search
+    if not web.enabled or web.provider != "searxng":
+        return
+    base_url = (web.base_url or "").strip()
+    if not _is_local_searxng_url(base_url):
+        return
+    try:
+        up = ensure_searxng_up()
+    except Exception as exc:  # noqa: BLE001 - never block daemon startup.
+        click.echo(f"SearXNG auto-start skipped: {exc}")
+        return
+    if up.status == "started":
+        click.echo(f"SearXNG auto-started: {up.message}")
+    elif up.status == "already-running":
+        # Quiet by default: the container was already up, nothing to report.
+        pass
+    else:
+        click.echo(f"SearXNG auto-start skipped: {up.message}")
+
+
+def _is_local_searxng_url(base_url: str) -> bool:
+    parsed = httpx.URL(base_url)
+    return parsed.host in _LOCAL_SEARXNG_HOSTS
 
 
 def _run_searxng_compose(root: Path, *args: str) -> None:

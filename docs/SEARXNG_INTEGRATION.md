@@ -88,6 +88,22 @@ libre-claw searx down
 `libre-claw searx test` performs a real JSON search against the configured base
 URL and verifies that the response includes a `results` list.
 
+### Auto-start on daemon launch
+
+When `web_search.enabled` is true, `web_search.provider` is `searxng`, and
+`base_url` points at a loopback address (`127.0.0.1`, `localhost`, `::1`,
+`0.0.0.0`), `libre-claw start` and `libre-claw daemon` bring the local SearXNG
+container up automatically before the daemon starts listening. This means you do
+not need to run `libre-claw searx up` manually after setup — the daemon ensures
+the instance is available at `http://127.0.0.1:8888`.
+
+The auto-start is best-effort: if Docker is missing, times out, or returns a
+non-zero exit, the daemon prints a skip line and continues normally. Users who
+point `base_url` at a remote SearXNG, or who disable web search, are never
+touched. The generated compose file uses `restart: unless-stopped`, so once the
+container has been started it is also restarted by Docker across host reboots
+as long as Docker is running.
+
 ## Tool Request Flow
 
 When the model calls `web_search`, the tool:
