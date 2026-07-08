@@ -25,6 +25,16 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Tencent preview model for broad agent tasks.",
     ),
     OpenRouterModelPreset(
+        "tencent/hy3",
+        "Tencent Hunyuan 3",
+        "Tencent Hunyuan 3 general agent and coding preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
+        "tencent/hy3:free",
+        "Tencent Hunyuan 3 Free",
+        "Tencent Hunyuan 3 free-tier preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
         "sakana/fugu-ultra",
         "Sakana Fugu Ultra",
         "Sakana multi-agent orchestration model for complex reasoning, coding, and agentic workflows.",
