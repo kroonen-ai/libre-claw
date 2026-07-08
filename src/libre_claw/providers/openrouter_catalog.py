@@ -20,11 +20,6 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Fast DeepSeek V4 coding and agent preset.",
     ),
     OpenRouterModelPreset(
-        "tencent/hy3-preview",
-        "Tencent Hunyuan 3 Preview",
-        "Tencent preview model for broad agent tasks.",
-    ),
-    OpenRouterModelPreset(
         "tencent/hy3",
         "Tencent Hunyuan 3",
         "Tencent Hunyuan 3 general agent and coding preset through OpenRouter.",
