@@ -17,6 +17,36 @@ class CodexModelPreset:
 # Keep hidden internal helpers such as codex-auto-review out of the picker.
 CODEX_MODEL_PRESETS: tuple[CodexModelPreset, ...] = (
     CodexModelPreset(
+        "gpt-5.6-sol",
+        "GPT-5.6 Sol",
+        "OpenAI GPT-5.6 Sol coding and agent model via Codex CLI.",
+    ),
+    CodexModelPreset(
+        "gpt-5.6-sol-pro",
+        "GPT-5.6 Sol Pro",
+        "OpenAI GPT-5.6 Sol Pro higher-capacity coding model via Codex CLI.",
+    ),
+    CodexModelPreset(
+        "gpt-5.6-terra",
+        "GPT-5.6 Terra",
+        "OpenAI GPT-5.6 Terra reasoning and agent model via Codex CLI.",
+    ),
+    CodexModelPreset(
+        "gpt-5.6-terra-pro",
+        "GPT-5.6 Terra Pro",
+        "OpenAI GPT-5.6 Terra Pro higher-capacity reasoning model via Codex CLI.",
+    ),
+    CodexModelPreset(
+        "gpt-5.6-luna",
+        "GPT-5.6 Luna",
+        "OpenAI GPT-5.6 Luna general and agent model via Codex CLI.",
+    ),
+    CodexModelPreset(
+        "gpt-5.6-luna-pro",
+        "GPT-5.6 Luna Pro",
+        "OpenAI GPT-5.6 Luna Pro higher-capacity general model via Codex CLI.",
+    ),
+    CodexModelPreset(
         "gpt-5.5",
         "GPT-5.5",
         "Frontier Codex model for complex coding, research, and real-world work.",

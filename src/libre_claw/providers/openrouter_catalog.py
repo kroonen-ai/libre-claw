@@ -35,6 +35,36 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "xAI Grok 4.5 reasoning and coding preset through OpenRouter.",
     ),
     OpenRouterModelPreset(
+        "openai/gpt-5.6-sol",
+        "GPT-5.6 Sol",
+        "OpenAI GPT-5.6 Sol coding and agent preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
+        "openai/gpt-5.6-sol-pro",
+        "GPT-5.6 Sol Pro",
+        "OpenAI GPT-5.6 Sol Pro higher-capacity coding preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
+        "openai/gpt-5.6-terra",
+        "GPT-5.6 Terra",
+        "OpenAI GPT-5.6 Terra reasoning and agent preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
+        "openai/gpt-5.6-terra-pro",
+        "GPT-5.6 Terra Pro",
+        "OpenAI GPT-5.6 Terra Pro higher-capacity reasoning preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
+        "openai/gpt-5.6-luna",
+        "GPT-5.6 Luna",
+        "OpenAI GPT-5.6 Luna general and agent preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
+        "openai/gpt-5.6-luna-pro",
+        "GPT-5.6 Luna Pro",
+        "OpenAI GPT-5.6 Luna Pro higher-capacity general preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
         "sakana/fugu-ultra",
         "Sakana Fugu Ultra",
         "Sakana multi-agent orchestration model for complex reasoning, coding, and agentic workflows.",

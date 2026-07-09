@@ -89,6 +89,12 @@ def test_ollama_cloud_presets_include_current_library_names() -> None:
 def test_codex_oauth_presets_include_current_cli_model_names() -> None:
     preset_names = {preset.model for preset in CODEX_MODEL_PRESETS}
 
+    assert "gpt-5.6-sol" in preset_names
+    assert "gpt-5.6-sol-pro" in preset_names
+    assert "gpt-5.6-terra" in preset_names
+    assert "gpt-5.6-terra-pro" in preset_names
+    assert "gpt-5.6-luna" in preset_names
+    assert "gpt-5.6-luna-pro" in preset_names
     assert "gpt-5.5" in preset_names
     assert "gpt-5.4" in preset_names
     assert "gpt-5.4-mini" in preset_names
@@ -116,6 +122,12 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "tencent/hy3",
         "tencent/hy3:free",
         "x-ai/grok-4.5",
+        "openai/gpt-5.6-sol",
+        "openai/gpt-5.6-sol-pro",
+        "openai/gpt-5.6-terra",
+        "openai/gpt-5.6-terra-pro",
+        "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-luna-pro",
         "sakana/fugu-ultra",
         "qwen/qwen3.7-max",
         "qwen/qwen3.7-plus",
