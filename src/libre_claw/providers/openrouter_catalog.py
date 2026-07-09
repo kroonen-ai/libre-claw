@@ -30,6 +30,11 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Tencent Hunyuan 3 free-tier preset through OpenRouter.",
     ),
     OpenRouterModelPreset(
+        "x-ai/grok-4.5",
+        "Grok 4.5",
+        "xAI Grok 4.5 reasoning and coding preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
         "sakana/fugu-ultra",
         "Sakana Fugu Ultra",
         "Sakana multi-agent orchestration model for complex reasoning, coding, and agentic workflows.",

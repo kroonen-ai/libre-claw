@@ -115,6 +115,7 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "deepseek/deepseek-v4-flash",
         "tencent/hy3",
         "tencent/hy3:free",
+        "x-ai/grok-4.5",
         "sakana/fugu-ultra",
         "qwen/qwen3.7-max",
         "qwen/qwen3.7-plus",
