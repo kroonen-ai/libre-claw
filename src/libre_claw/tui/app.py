@@ -138,6 +138,18 @@ class TranscriptEntry:
 
 
 @dataclass(frozen=True)
+class FileChangeStats:
+    additions: int
+    deletions: int
+    hunks: int
+
+    @property
+    def compact(self) -> str:
+        hunk_label = "hunk" if self.hunks == 1 else "hunks"
+        return f"+{self.additions} -{self.deletions} · {self.hunks} {hunk_label}"
+
+
+@dataclass(frozen=True)
 class SlashCommand:
     name: str
     usage: str
@@ -271,6 +283,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/run", "/run <id>", "Inspect a durable run"),
     SlashCommand("/resume", "/resume <id>", "Load a durable run transcript"),
     SlashCommand("/artifacts", "/artifacts [plan|summary|verify|diff] [id]", "Open the run artifact panel"),
+    SlashCommand("/review", "/review [latest|previous|next|close]", "Review file edits in a focused diff drawer"),
     SlashCommand("/approvals", "/approvals", "Show blocked tool approvals"),
     SlashCommand("/changes", "/changes [id]", "Show what changed since your last review"),
     SlashCommand("/skills", "/skills list|add|edit|delete", "Manage Libre Claw skills"),
@@ -475,13 +488,13 @@ def _lobster_markdown(markup: str, *, light: bool = False) -> Markdown:
     )
 
 
-def _lobster_syntax(code: str, lexer: str, *, light: bool = False) -> Syntax:
+def _lobster_syntax(code: str, lexer: str, *, light: bool = False, word_wrap: bool = True) -> Syntax:
     code_theme = _lobster_code_theme(light=light)
     return Syntax(
         code,
         lexer,
         theme=code_theme,
-        word_wrap=True,
+        word_wrap=word_wrap,
         padding=1,
         background_color=code_theme.background_color,
     )
@@ -629,6 +642,15 @@ class LibreClawApp(App[None]):
         background: #111827;
     }
 
+    #workspace-bar {
+        height: 2;
+        padding: 0 2;
+        content-align: left middle;
+        border-bottom: solid #FF5C5C;
+        background: #1f2937;
+        color: #a1a1aa;
+    }
+
     #palette {
         height: auto;
         max-height: 10;
@@ -668,6 +690,10 @@ class LibreClawApp(App[None]):
         display: none;
     }
 
+    .reviewing-changes #petdex-panel {
+        display: none;
+    }
+
     Screen.light #petdex-panel {
         background: #ffffff;
         color: #111827;
@@ -692,6 +718,7 @@ class LibreClawApp(App[None]):
 
     #permission-panel {
         height: auto;
+        max-height: 22;
         padding: 1 2;
         border-top: solid #FF5C5C;
         background: #111827;
@@ -706,6 +733,15 @@ class LibreClawApp(App[None]):
         height: auto;
         color: #ffffff;
         text-style: bold;
+    }
+
+    #permission-preview {
+        height: auto;
+        max-height: 10;
+        margin-top: 1;
+        padding: 0 1;
+        border-left: solid #FF5C5C;
+        background: #0b1020;
     }
 
     #permission-warning {
@@ -730,6 +766,53 @@ class LibreClawApp(App[None]):
     }
 
     Screen.light #permission-title {
+        color: #0b1020;
+    }
+
+    Screen.light #permission-preview {
+        background: #fffaf0;
+    }
+
+    #change-panel {
+        height: 40%;
+        min-height: 10;
+        max-height: 19;
+        border-top: solid #FF5C5C;
+        background: #0b1020;
+        padding: 0 1;
+    }
+
+    #change-panel.hidden {
+        display: none;
+    }
+
+    #change-toolbar {
+        height: 3;
+        padding-top: 1;
+    }
+
+    #change-title {
+        width: 1fr;
+        height: 2;
+        content-align: left middle;
+        color: #fecaca;
+        text-style: bold;
+    }
+
+    #change-toolbar Button {
+        min-width: 8;
+        margin-left: 1;
+    }
+
+    #change-content {
+        height: 1fr;
+        border: none;
+        background: #0b1020;
+    }
+
+    Screen.light #change-panel,
+    Screen.light #change-content {
+        background: #fffaf0;
         color: #0b1020;
     }
 
@@ -772,18 +855,35 @@ class LibreClawApp(App[None]):
         color: #0b1020;
     }
 
+    #composer {
+        height: 4;
+        border-top: solid #FF5C5C;
+        background: #1f2937;
+    }
+
+    #composer-meta {
+        height: 1;
+        padding: 0 2;
+        color: #a1a1aa;
+    }
+
     #workspace,
     #sidebar-rail,
     #sidebar,
     #file-tree,
     #main,
+    #workspace-bar,
     #palette,
     #suggestions,
     #permission-panel,
+    #permission-preview,
+    #change-panel,
+    #change-content,
     #artifact-panel,
     #artifact-content,
     #chat,
     #petdex-panel,
+    #composer,
     #input {
         scrollbar-color: #FF5C5C;
         scrollbar-color-hover: #FF5C5C;
@@ -801,13 +901,18 @@ class LibreClawApp(App[None]):
     Screen.light #sidebar,
     Screen.light #file-tree,
     Screen.light #main,
+    Screen.light #workspace-bar,
     Screen.light #palette,
     Screen.light #suggestions,
     Screen.light #permission-panel,
+    Screen.light #permission-preview,
+    Screen.light #change-panel,
+    Screen.light #change-content,
     Screen.light #artifact-panel,
     Screen.light #artifact-content,
     Screen.light #chat,
     Screen.light #petdex-panel,
+    Screen.light #composer,
     Screen.light #input {
         scrollbar-color: #FF5C5C;
         scrollbar-color-hover: #FF5C5C;
@@ -828,13 +933,18 @@ class LibreClawApp(App[None]):
     #input {
         height: 3;
         border: none;
-        border-top: solid #FF5C5C;
         background: #1f2937;
+        padding: 0 1;
     }
 
     Screen.light #input {
         background: #ffffff;
-        border-top: solid #a8b3bd;
+    }
+
+    Screen.light #workspace-bar,
+    Screen.light #composer {
+        background: #eee8d5;
+        color: #657b83;
     }
     """
 
@@ -843,6 +953,7 @@ class LibreClawApp(App[None]):
         Binding("escape", "interrupt", "Interrupt", show=False),
         Binding("ctrl+b", "toggle_sidebar", "Files", show=True),
         Binding("ctrl+p", "command_palette", "Palette", show=True),
+        Binding("ctrl+e", "toggle_change_review", "Review Edits", show=True),
         Binding("ctrl+r", "toggle_release_notes", "Release Notes", show=True),
         Binding("pageup", "scroll_chat_up", "Scroll Up", show=True, priority=True),
         Binding("pagedown", "scroll_chat_down", "Scroll Down", show=True, priority=True),
@@ -898,6 +1009,8 @@ class LibreClawApp(App[None]):
         self._artifact_run_id: str | None = None
         self._artifact_tab: ArtifactTab = "summary"
         self._artifact_visible = False
+        self._change_review_visible = False
+        self._change_review_cursor = -1
         self._run_background_tasks: set[asyncio.Task[Any]] = set()
         self._memory_background_tasks: set[asyncio.Task[Any]] = set()
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -922,18 +1035,26 @@ class LibreClawApp(App[None]):
                 yield Static(self._sidebar_root_text(), id="sidebar-root")
                 yield DirectoryTree(self.config.general.working_directory, id="file-tree")
             with Vertical(id="main"):
+                yield Static("", id="workspace-bar")
                 yield Static("", id="palette", classes="hidden")
                 yield Static("", id="petdex-panel", classes="hidden")
                 yield SelectableRichLog(id="chat", wrap=True, highlight=True, markup=True)
-                yield Static("", id="suggestions", classes="hidden")
                 with Vertical(id="permission-panel", classes="hidden"):
                     yield Static("", id="permission-title")
+                    yield SelectableRichLog(id="permission-preview", wrap=False, highlight=True, markup=True)
                     yield Static("", id="permission-warning")
                     with Horizontal(id="permission-actions"):
-                        yield Button("Approve", id="permission-allow-once", variant="success", compact=True)
-                        yield Button("Deny", id="permission-deny", variant="error", compact=True)
+                        yield Button("Allow once", id="permission-allow-once", variant="success", compact=True)
                         yield Button("Always Tool", id="permission-always-tool", compact=True)
-                        yield Button("Always Command", id="permission-always-call", compact=True)
+                        yield Button("Always Exact", id="permission-always-call", compact=True)
+                        yield Button("Deny", id="permission-deny", variant="error", compact=True)
+                with Vertical(id="change-panel", classes="hidden"):
+                    with Horizontal(id="change-toolbar"):
+                        yield Static("", id="change-title")
+                        yield Button("Prev", id="change-previous", compact=True)
+                        yield Button("Next", id="change-next", compact=True)
+                        yield Button("Close", id="change-close", compact=True)
+                    yield SelectableRichLog(id="change-content", wrap=False, highlight=True, markup=True)
                 with Vertical(id="artifact-panel", classes="hidden"):
                     with Horizontal(id="artifact-tabs"):
                         yield Button("Plan", id="artifact-plan", compact=True)
@@ -944,7 +1065,10 @@ class LibreClawApp(App[None]):
                         yield Button("Close", id="artifact-close", compact=True)
                     yield Static("", id="artifact-title")
                     yield SelectableRichLog(id="artifact-content", wrap=True, highlight=True, markup=True)
-                yield Input(placeholder=self._input_placeholder(), id="input")
+                yield Static("", id="suggestions", classes="hidden")
+                with Vertical(id="composer"):
+                    yield Static("", id="composer-meta")
+                    yield Input(placeholder=self._input_placeholder(), id="input")
 
     async def on_mount(self) -> None:
         self.add_class(self._theme.theme_id)
@@ -955,6 +1079,7 @@ class LibreClawApp(App[None]):
         input_widget.cursor_blink = False
         input_widget.focus()
         self._sync_sidebar_visibility()
+        self._update_shell_chrome()
         self._append_startup_entry()
         self._update_palette()
         self._update_slash_suggestions("")
@@ -1011,11 +1136,17 @@ class LibreClawApp(App[None]):
             ("#sidebar-root", sidebar, muted),
             ("#file-tree", sidebar, text),
             ("#main", surface, text),
+            ("#workspace-bar", surface_2, muted),
             ("#chat", surface, text),
             ("#petdex-panel", surface, text),
+            ("#composer", surface_2, text),
+            ("#composer-meta", surface_2, muted),
             ("#input", surface_2, text),
             ("#suggestions", panel, text),
             ("#permission-panel", panel, text),
+            ("#permission-preview", sidebar, text),
+            ("#change-panel", sidebar, text),
+            ("#change-content", sidebar, text),
             ("#artifact-panel", sidebar, text),
             ("#artifact-content", sidebar, text),
             ("#palette", panel, text),
@@ -1032,11 +1163,14 @@ class LibreClawApp(App[None]):
                 widget.styles.scrollbar_background_active = background
                 widget.styles.scrollbar_corner_color = background
 
-        for selector in ("#workspace", "#input", "#permission-panel", "#artifact-panel", "#suggestions"):
+        for selector in ("#workspace", "#composer", "#permission-panel", "#change-panel", "#artifact-panel", "#suggestions"):
             for widget in self.query(selector):
                 widget.styles.border_top = ("solid", accent)
-        for widget in self.query("#petdex-panel"):
-            widget.styles.border_bottom = ("solid", accent)
+        for selector in ("#petdex-panel", "#workspace-bar"):
+            for widget in self.query(selector):
+                widget.styles.border_bottom = ("solid", accent)
+        for widget in self.query("#permission-preview"):
+            widget.styles.border_left = ("solid", accent)
         for widget in self.query("#workspace"):
             widget.styles.border_bottom = ("solid", accent)
         for selector in ("#suggestions", "#palette"):
@@ -1045,6 +1179,8 @@ class LibreClawApp(App[None]):
 
         self.query_one("#permission-warning", Static).styles.color = Color.parse(palette.warn)
         self.query_one("#artifact-title", Static).styles.color = Color.parse(palette.accent_strong)
+        self.query_one("#change-title", Static).styles.color = Color.parse(palette.accent_strong)
+        self._update_shell_chrome()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -1110,6 +1246,10 @@ class LibreClawApp(App[None]):
             event.stop()
             self._handle_artifact_button(button_id)
             return
+        if button_id is not None and button_id.startswith("change-"):
+            event.stop()
+            self._handle_change_button(button_id)
+            return
 
         mapping: dict[str | None, PermissionResolution] = {
             "permission-allow-once": "allow_once",
@@ -1173,6 +1313,7 @@ class LibreClawApp(App[None]):
             self._append_system(warning)
         attachments = tuple((*self._pending_attachments, *parsed.attachments))
         self._pending_attachments.clear()
+        self._update_shell_chrome()
         user_message = parsed.message.strip() if attachments else text
         if attachments and not user_message:
             user_message = TUI_IMAGE_ATTACHMENT_PROMPT
@@ -1293,6 +1434,9 @@ class LibreClawApp(App[None]):
         if command == "/artifacts":
             await self._handle_artifacts_command(argument)
             return
+        if command == "/review":
+            self._handle_review_command(argument)
+            return
         if command == "/approvals":
             await self._handle_approvals_command(argument)
             return
@@ -1368,6 +1512,7 @@ class LibreClawApp(App[None]):
         if normalized in {"clear", "reset"}:
             count = len(self._pending_attachments)
             self._pending_attachments.clear()
+            self._update_shell_chrome()
             self._append_system(f"Cleared {count} pending image attachment{'s' if count != 1 else ''}.")
             return
         if normalized in {"paste", "clipboard", "clip"}:
@@ -1381,6 +1526,7 @@ class LibreClawApp(App[None]):
             self._append_system("No image attachments found. Use a PNG, JPEG, WebP, or GIF path.")
             return
         self._pending_attachments.extend(parsed.attachments)
+        self._update_shell_chrome()
         for attachment in parsed.attachments:
             self._append_attachment(attachment, pending=True)
         suffix = " They will be sent with your next message."
@@ -1394,6 +1540,7 @@ class LibreClawApp(App[None]):
             self._append_system(warning or "Clipboard does not contain an attachable image.")
             return
         self._pending_attachments.append(attachment)
+        self._update_shell_chrome()
         self._append_attachment(attachment, pending=True)
         self._append_system("Attached clipboard image. It will be sent with your next message.")
 
@@ -1423,6 +1570,12 @@ class LibreClawApp(App[None]):
         if self.palette_open:
             self._close_palette()
             return
+        if self._change_review_visible:
+            self._hide_change_review()
+            return
+        if self._artifact_visible:
+            self._hide_artifact_panel()
+            return
         self._cancel_active_generation()
 
     def action_quit_app(self) -> None:
@@ -1436,6 +1589,12 @@ class LibreClawApp(App[None]):
         self._sync_sidebar_visibility()
         state = "shown" if self.sidebar_visible else "hidden"
         self._append_system(f"File tree {state}.")
+
+    def action_toggle_change_review(self) -> None:
+        if self._change_review_visible:
+            self._hide_change_review()
+            return
+        self._show_change_review()
 
     def action_command_palette(self) -> None:
         self.palette_open = not self.palette_open
@@ -1953,6 +2112,7 @@ class LibreClawApp(App[None]):
         )
         self._active_run_id = run.run_id
         self._active_run_summary = ""
+        self._update_shell_chrome()
         await self.run_store.append_event(
             run.run_id,
             "run_started",
@@ -2138,6 +2298,7 @@ class LibreClawApp(App[None]):
             self._schedule_memory_extraction(run_id, run.title if run is not None else "", summary_text)
         self._active_run_id = None
         self._active_run_summary = ""
+        self._update_shell_chrome()
 
     def _cancel_active_generation(self, quiet: bool = False, *, cancel_daemon_run: bool = True) -> None:
         if self._pending_permission is not None and not self._pending_permission.future.done():
@@ -2214,35 +2375,66 @@ class LibreClawApp(App[None]):
     def _show_permission_prompt(self, request: AgentPermissionRequest) -> None:
         panel = self.query_one("#permission-panel", Vertical)
         title = self.query_one("#permission-title", Static)
+        preview = self.query_one("#permission-preview", RichLog)
         warning = self.query_one("#permission-warning", Static)
         allow_once = self.query_one("#permission-allow-once", Button)
         always_tool = self.query_one("#permission-always-tool", Button)
         always_call = self.query_one("#permission-always-call", Button)
 
         danger = self._dangerous_permission_warning(request.call)
-        title.update(
-            f"{request.call.name} wants permission\n"
-            f"{self._format_arguments(request.call.arguments)}"
-        )
+        title.update(f"Review required · {request.call.name}")
+        preview.clear()
+        preview.write(self._permission_preview(request.call))
         warning.update(
             f"Warning: {danger}\nDangerous commands require one-time approval."
             if danger is not None
-            else "Choose once, always for this tool, or always for this exact command."
+            else "Choose once, always for this tool, or always for this exact call."
         )
         always_tool.disabled = danger is not None
         always_call.disabled = danger is not None
         panel.remove_class("hidden")
         self.query_one("#input", Input).placeholder = self._input_placeholder()
+        self._update_shell_chrome()
         allow_once.focus()
 
     def _hide_permission_prompt(self) -> None:
         panel = self.query_one("#permission-panel", Vertical)
         panel.add_class("hidden")
         self.query_one("#permission-title", Static).update("")
+        self.query_one("#permission-preview", RichLog).clear()
         self.query_one("#permission-warning", Static).update("")
         for button_id in ("#permission-always-tool", "#permission-always-call"):
             self.query_one(button_id, Button).disabled = False
         self.query_one("#input", Input).placeholder = self._input_placeholder()
+        self._update_shell_chrome()
+
+    def _permission_preview(self, call: ToolCall) -> RenderableType:
+        arguments = call.arguments
+        path = self._display_tool_path(arguments.get("path"))
+        if call.name == "edit_file":
+            before = str(arguments.get("old_text", ""))
+            after = str(arguments.get("new_text", ""))
+            diff = self._diff_text(before, after, path or "file")
+            return Group(
+                Text(f"EDIT  {path or 'file'}", style=f"bold {self._theme.accent}"),
+                _lobster_syntax(diff or "No textual change.", "diff", light=self._theme.is_light, word_wrap=False),
+            )
+        if call.name == "write_file":
+            content = str(arguments.get("content", ""))
+            return Group(
+                Text(f"WRITE  {path or 'file'} · {len(content)} characters", style=f"bold {self._theme.accent}"),
+                _lobster_syntax(content or "<empty file>", _lexer_for_path(path), light=self._theme.is_light, word_wrap=False),
+            )
+        if call.name == "bash":
+            command = str(arguments.get("command", ""))
+            return Group(
+                Text("SHELL", style=f"bold {self._theme.accent}"),
+                _lobster_syntax(command, "bash", light=self._theme.is_light, word_wrap=False),
+            )
+        return Group(
+            Text(call.name.upper(), style=f"bold {self._theme.accent}"),
+            _lobster_syntax(self._format_arguments(arguments), "json", light=self._theme.is_light, word_wrap=False),
+        )
 
     def _resolve_pending_permission(self, resolution: PermissionResolution) -> None:
         request = self._pending_permission
@@ -2302,6 +2494,7 @@ class LibreClawApp(App[None]):
         self.session.clear()
         self._last_assistant_response = ""
         self._tool_entry_by_call_id.clear()
+        self._hide_change_review()
         self._startup_entry_index = None
         self._append_startup_entry()
         self._append_system("Transcript cleared.")
@@ -3336,6 +3529,7 @@ class LibreClawApp(App[None]):
         _write_last_seen_event_id(run, _max_event_id(events))
 
     async def _show_artifact_panel(self, run: RunRecord, tab: ArtifactTab) -> None:
+        self._hide_change_review()
         self._artifact_run_id = run.run_id
         self._artifact_tab = tab
         self._artifact_visible = True
@@ -3358,8 +3552,10 @@ class LibreClawApp(App[None]):
         title.update(f"{run.run_id} [{run.state}] {self._artifact_tab}")
         content.clear()
         if self._artifact_tab == "diff":
+            content.wrap = False
             content.write(_lobster_syntax(text or "No diff artifact.", "diff", light=self._theme.is_light))
         else:
+            content.wrap = True
             content.write(_lobster_markdown(text or f"No {self._artifact_tab} artifact.", light=self._theme.is_light))
 
     def _handle_artifact_button(self, button_id: str) -> None:
@@ -3378,6 +3574,99 @@ class LibreClawApp(App[None]):
         self.query_one("#artifact-panel", Vertical).add_class("hidden")
         self.query_one("#artifact-title", Static).update("")
         self.query_one("#artifact-content", RichLog).clear()
+
+    def _handle_review_command(self, argument: str) -> None:
+        action = argument.strip().lower() or "latest"
+        if action in {"latest", "open", "show"}:
+            self._show_change_review()
+            return
+        if action in {"previous", "prev", "back"}:
+            self._move_change_review(-1)
+            return
+        if action in {"next", "forward"}:
+            self._move_change_review(1)
+            return
+        if action in {"close", "hide"}:
+            self._hide_change_review()
+            return
+        self._append_system("Usage: /review [latest|previous|next|close]")
+
+    def _handle_change_button(self, button_id: str) -> None:
+        if button_id == "change-close":
+            self._hide_change_review()
+            return
+        if button_id == "change-previous":
+            self._move_change_review(-1)
+            return
+        if button_id == "change-next":
+            self._move_change_review(1)
+
+    def _change_entries(self) -> list[tuple[int, TranscriptEntry]]:
+        return [
+            (index, entry)
+            for index, entry in enumerate(self.transcript)
+            if entry.role == "tool" and (entry.metadata or {}).get("syntax") == "diff"
+        ]
+
+    def _show_change_review(self, transcript_index: int | None = None) -> None:
+        changes = self._change_entries()
+        if not changes:
+            self._append_system("No file edits are available to review yet.")
+            return
+
+        self._hide_artifact_panel()
+        if transcript_index is None:
+            self._change_review_cursor = len(changes) - 1
+        else:
+            matching = next((position for position, item in enumerate(changes) if item[0] == transcript_index), None)
+            self._change_review_cursor = matching if matching is not None else len(changes) - 1
+        self._change_review_visible = True
+        self.add_class("reviewing-changes")
+        self.query_one("#change-panel", Vertical).remove_class("hidden")
+        self._refresh_change_review()
+
+    def _move_change_review(self, delta: int) -> None:
+        changes = self._change_entries()
+        if not changes:
+            self._show_change_review()
+            return
+        if not self._change_review_visible:
+            self._change_review_cursor = len(changes) - 1
+            self._change_review_visible = True
+            self.add_class("reviewing-changes")
+            self.query_one("#change-panel", Vertical).remove_class("hidden")
+        self._change_review_cursor = (self._change_review_cursor + delta) % len(changes)
+        self._refresh_change_review()
+
+    def _refresh_change_review(self) -> None:
+        if not self._change_review_visible:
+            return
+        changes = self._change_entries()
+        if not changes:
+            self._hide_change_review()
+            return
+
+        self._change_review_cursor = max(0, min(self._change_review_cursor, len(changes) - 1))
+        transcript_index, entry = changes[self._change_review_cursor]
+        del transcript_index
+        metadata = entry.metadata or {}
+        title = entry.title or "File edit"
+        position = f"{self._change_review_cursor + 1}/{len(changes)}"
+        self.query_one("#change-title", Static).update(f"CHANGE {position} · {title}")
+        content = self.query_one("#change-content", RichLog)
+        content.clear()
+        content.write(_lobster_syntax(entry.content or "No diff available.", "diff", light=self._theme.is_light, word_wrap=False))
+        self.query_one("#change-previous", Button).disabled = len(changes) < 2
+        self.query_one("#change-next", Button).disabled = len(changes) < 2
+        self._update_shell_chrome()
+
+    def _hide_change_review(self) -> None:
+        self._change_review_visible = False
+        self.remove_class("reviewing-changes")
+        self.query_one("#change-panel", Vertical).add_class("hidden")
+        self.query_one("#change-title", Static).update("")
+        self.query_one("#change-content", RichLog).clear()
+        self._update_shell_chrome()
 
     async def _cancel_run_command(self, argument: str) -> None:
         run_id = await self._resolve_run_id(argument)
@@ -3549,6 +3838,7 @@ class LibreClawApp(App[None]):
         self.query_one("#sidebar-root", Static).update(self._sidebar_root_text())
         self._rebuild_agent()
         self._update_status()
+        self._update_shell_chrome()
 
     def _append_user(self, text: str) -> int:
         return self._append_entry("user", text)
@@ -3573,10 +3863,14 @@ class LibreClawApp(App[None]):
         )
 
     def _append_tool_call(self, call: ToolCall) -> int:
+        path = self._display_tool_path(call.arguments.get("path"))
+        title = f"{call.name} pending"
+        if path and call.name in {"edit_file", "write_file", "read_file"}:
+            title = f"{call.name} · {path} · pending"
         index = self._append_entry(
             "tool",
             self._format_arguments(call.arguments),
-            title=f"{call.name} pending",
+            title=title,
             collapsed=True,
             metadata={"tool": call.name, "status": "pending", "call": call},
         )
@@ -3587,24 +3881,48 @@ class LibreClawApp(App[None]):
         metadata = dict(result.metadata)
         metadata.update({"tool": call.name, "status": "error" if result.is_error else "result", "call": call})
         content = result.as_text()
-        if call.name == "edit_file" and "before" in result.metadata and "after" in result.metadata:
+        collapsed = True
+        title = f"{call.name} {'error' if result.is_error else 'result'}"
+        changed = bool(result.metadata.get("changed"))
+        if call.name in {"edit_file", "write_file"} and changed and "before" in result.metadata and "after" in result.metadata:
             content = self._diff_text(
                 str(result.metadata.get("before", "")),
                 str(result.metadata.get("after", "")),
                 str(result.metadata.get("path", call.arguments.get("path", "file"))),
             )
             metadata["syntax"] = "diff"
+            stats = _file_change_stats(content)
+            path = self._display_tool_path(result.metadata.get("path", call.arguments.get("path"))) or "file"
+            verb = "CREATE" if result.metadata.get("created") else "EDIT"
+            title = f"{verb} {path} · {stats.compact}"
+            metadata["change_stats"] = {
+                "additions": stats.additions,
+                "deletions": stats.deletions,
+                "hunks": stats.hunks,
+            }
+            metadata["change_summary"] = f"{stats.compact} · Ctrl+E review"
+            collapsed = len(content.splitlines()) > 80
+            for transcript_entry in self.transcript:
+                if transcript_entry.role == "tool" and (transcript_entry.metadata or {}).get("syntax") == "diff":
+                    transcript_entry.collapsed = True
         index = self._tool_entry_by_call_id.pop(call.id, None)
-        title = f"{call.name} {'error' if result.is_error else 'result'}"
         if index is None or index >= len(self.transcript):
-            return self._append_entry("tool", content, title=title, collapsed=True, metadata=metadata)
+            created_index = self._append_entry("tool", content, title=title, collapsed=collapsed, metadata=metadata)
+            if metadata.get("syntax") == "diff" and self._change_review_visible:
+                self._change_review_cursor = len(self._change_entries()) - 1
+                self._refresh_change_review()
+            return created_index
 
         entry = self.transcript[index]
         entry.content = content
         entry.title = title
-        entry.collapsed = True
+        entry.collapsed = collapsed
         entry.metadata = metadata
         self._render_transcript()
+        if metadata.get("syntax") == "diff" and self._change_review_visible:
+            self._change_review_cursor = len(self._change_entries()) - 1
+            self._refresh_change_review()
+        self._update_shell_chrome()
         return index
 
     def _append_entry(
@@ -3690,16 +4008,20 @@ class LibreClawApp(App[None]):
             status = str(metadata.get("status", ""))
             style = _tool_style(status)
             if entry.collapsed:
+                label = "Change" if metadata.get("syntax") == "diff" else "Tool"
                 return Text.assemble(
-                    (f"Tool {self._tool_display_index(index)}: ", f"bold {style}"),
+                    (f"{label} {self._tool_display_index(index)}: ", f"bold {style}"),
                     (title, f"bold {style}"),
                     (" - ", "dim"),
                     (_tool_preview(entry), "dim"),
                 )
             if metadata.get("syntax") == "diff":
                 return Group(
-                    Text(f"Tool {self._tool_display_index(index)}: {title}", style=f"bold {style}"),
-                    _lobster_syntax(entry.content, "diff", light=self._theme.is_light),
+                    Text(
+                        f"Change {self._tool_display_index(index)}: {title} · Ctrl+E focused review",
+                        style=f"bold {style}",
+                    ),
+                    _lobster_syntax(entry.content, "diff", light=self._theme.is_light, word_wrap=False),
                 )
             return Text.assemble(
                 (f"Tool {self._tool_display_index(index)}: {title}\n", f"bold {style}"),
@@ -3725,6 +4047,17 @@ class LibreClawApp(App[None]):
             return json.dumps(arguments, sort_keys=True)
         except TypeError:
             return str(arguments)
+
+    def _display_tool_path(self, value: object) -> str:
+        if not isinstance(value, (str, Path)) or not str(value).strip():
+            return ""
+        path = Path(str(value)).expanduser()
+        if not path.is_absolute():
+            return str(path)
+        try:
+            return str(path.resolve().relative_to(self.config.general.working_directory.resolve()))
+        except ValueError:
+            return str(path)
 
     def _diff_text(self, before: str, after: str, path: str) -> str:
         return "\n".join(
@@ -3864,6 +4197,33 @@ class LibreClawApp(App[None]):
 
     def _sidebar_root_text(self) -> str:
         return f"cwd: {self.config.general.working_directory}"
+
+    def _update_shell_chrome(self) -> None:
+        if not self.is_mounted:
+            return
+        self.query_one("#workspace-bar", Static).update(self._workspace_bar_text())
+        self.query_one("#composer-meta", Static).update(self._composer_meta_text())
+
+    def _workspace_bar_text(self) -> str:
+        root = self.config.general.working_directory
+        workspace = root.name or str(root)
+        mode = "daemon" if self.daemon_client is not None else "direct"
+        run = _short_run_id(self._active_run_id) if self._active_run_id else "idle"
+        change_count = len(self._change_entries())
+        change_label = f"{change_count} edit{'s' if change_count != 1 else ''}"
+        return f"WORKSPACE  {workspace}   ·   {mode}   ·   RUN  {run}   ·   {change_label}   ·   Ctrl+E review"
+
+    def _composer_meta_text(self) -> str:
+        if self._pending_permission is not None:
+            return "APPROVAL  Review the exact operation above · y allow · n deny · a always tool · ! always exact"
+        if self._goal_description is not None:
+            return f"GOAL  turn {self._goal_turn}/{self._goal_max_turns} · /steer adjusts course · Esc interrupts"
+        if self._active_task is not None and not self._active_task.done():
+            return "RUNNING  Streaming output · /btw adds context · Esc interrupts"
+        if self._pending_attachments:
+            count = len(self._pending_attachments)
+            return f"MESSAGE  {count} image{'s' if count != 1 else ''} attached · Enter sends · /attach clear removes"
+        return "MESSAGE  Enter sends · / opens commands · paste an image path to attach"
 
     def _update_palette(self, query: str = "", *, reset_selection: bool = True) -> None:
         palette = self.query_one("#palette", Static)
@@ -4053,6 +4413,20 @@ class LibreClawApp(App[None]):
                 SlashCommand("/artifacts verify", "/artifacts verify [id]", "Show verification notes"),
                 SlashCommand("/artifacts diff", "/artifacts diff [id]", "Show captured diff"),
                 SlashCommand("/artifacts browser", "/artifacts browser [id]", "Show browser screenshots/downloads"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+
+        if lowered.startswith("/review "):
+            query = lowered.removeprefix("/review ").strip()
+            suggestions = [
+                SlashCommand("/review latest", "/review latest", "Open the newest file edit"),
+                SlashCommand("/review previous", "/review previous", "Review the previous file edit"),
+                SlashCommand("/review next", "/review next", "Review the next file edit"),
+                SlashCommand("/review close", "/review close", "Close the change review drawer"),
             ]
             return [
                 suggestion
@@ -4417,6 +4791,7 @@ class LibreClawApp(App[None]):
     def _update_status(self) -> None:
         self._sync_global_model_if_changed()
         self._sync_daemon_model_later()
+        self._update_shell_chrome()
         if self.config.tui.show_status_bar:
             status = self._status_text()
             if status != self._last_status_text:
@@ -5455,22 +5830,59 @@ def _transcript_from_run_events(events: list[RunEvent]) -> list[TranscriptEntry]
             arguments = event.data.get("arguments", {})
             if not isinstance(arguments, dict):
                 arguments = {}
+            name = str(event.data.get("name", "tool"))
+            is_error = bool(event.data.get("is_error"))
             title = _tool_timeline_title(
-                str(event.data.get("name", "tool")),
+                name,
                 is_error=bool(event.data.get("is_error")),
                 metadata=result_metadata,
             )
+            content = str(event.data.get("content", ""))
+            collapsed = True
+            entry_metadata: dict[str, Any] = {
+                "status": "error" if is_error else "result",
+                "tool": name,
+                "metadata": result_metadata,
+                "arguments": arguments,
+            }
+            if (
+                name in {"edit_file", "write_file"}
+                and not is_error
+                and bool(result_metadata.get("changed"))
+                and "before" in result_metadata
+                and "after" in result_metadata
+            ):
+                path = str(result_metadata.get("path", arguments.get("path", "file")))
+                content = "\n".join(
+                    difflib.unified_diff(
+                        str(result_metadata.get("before", "")).splitlines(),
+                        str(result_metadata.get("after", "")).splitlines(),
+                        fromfile=f"{path} before",
+                        tofile=f"{path} after",
+                        lineterm="",
+                    )
+                )
+                stats = _file_change_stats(content)
+                verb = "CREATE" if result_metadata.get("created") else "EDIT"
+                title = f"{verb} {Path(path).name or path} · {stats.compact}"
+                entry_metadata.update(
+                    {
+                        "syntax": "diff",
+                        "change_summary": f"{stats.compact} · Ctrl+E review",
+                        "change_stats": {
+                            "additions": stats.additions,
+                            "deletions": stats.deletions,
+                            "hunks": stats.hunks,
+                        },
+                    }
+                )
+                collapsed = len(content.splitlines()) > 80
             entry = TranscriptEntry(
                 role="tool",
-                content=str(event.data.get("content", "")),
+                content=content,
                 title=title,
-                collapsed=True,
-                metadata={
-                    "status": "error" if event.data.get("is_error") else "result",
-                    "tool": event.data.get("name", "tool"),
-                    "metadata": result_metadata,
-                    "arguments": arguments,
-                },
+                collapsed=collapsed,
+                metadata=entry_metadata,
             )
             if index is None or index >= len(entries):
                 entries.append(entry)
@@ -5480,6 +5892,9 @@ def _transcript_from_run_events(events: list[RunEvent]) -> list[TranscriptEntry]
         if event.type in {"error", "cancelled", "goal_judge", "goal_complete", "goal_stopped"}:
             entries.append(TranscriptEntry(role="system", content=_run_event_summary(event)))
 
+    diff_entries = [entry for entry in entries if entry.role == "tool" and (entry.metadata or {}).get("syntax") == "diff"]
+    for entry in diff_entries[:-1]:
+        entry.collapsed = True
     return entries
 
 
@@ -5616,6 +6031,44 @@ def _format_token_count(value: int) -> str:
     return str(value)
 
 
+def _short_run_id(run_id: str, max_length: int = 18) -> str:
+    if len(run_id) <= max_length:
+        return run_id
+    return f"{run_id[:8]}…{run_id[-6:]}"
+
+
+def _file_change_stats(diff: str) -> FileChangeStats:
+    additions = 0
+    deletions = 0
+    hunks = 0
+    for line in diff.splitlines():
+        if line.startswith("@@"):
+            hunks += 1
+        elif line.startswith("+") and not line.startswith("+++"):
+            additions += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            deletions += 1
+    return FileChangeStats(additions=additions, deletions=deletions, hunks=hunks)
+
+
+def _lexer_for_path(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    return {
+        ".css": "css",
+        ".html": "html",
+        ".js": "javascript",
+        ".json": "json",
+        ".md": "markdown",
+        ".py": "python",
+        ".sh": "bash",
+        ".toml": "toml",
+        ".ts": "typescript",
+        ".tsx": "tsx",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+    }.get(suffix, "text")
+
+
 def _token_status_text(usage: Usage, meter: ContextMeter) -> str:
     if usage.total_tokens:
         return f"{_format_token_count(usage.total_tokens)} provider tokens"
@@ -5694,7 +6147,7 @@ def _tool_timeline_title(name: str, *, is_error: bool, metadata: dict[str, Any])
 def _tool_preview(entry: TranscriptEntry, max_length: int = 120) -> str:
     metadata = entry.metadata or {}
     if metadata.get("syntax") == "diff":
-        preview = "diff ready"
+        preview = str(metadata.get("change_summary") or "diff ready · Ctrl+E review")
     else:
         preview = _compact_tool_output(entry.content, expanded=False)
     preview = " ".join(preview.split())

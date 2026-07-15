@@ -9,6 +9,9 @@ First shippable Libre Claw release, built by Kroonen AI.
 - Terminal-native Textual TUI with streaming chat, Markdown rendering, command
   palette, slash-command suggestions, `/model` provider/model onboarding,
   startup ASCII art, session status, and click-to-expand startup release notes.
+- Focused change review with compact inline diffs, `Ctrl+E` and `/review`
+  navigation, exact permission previews, and responsive workspace/composer
+  context that remains usable in short terminals.
 - `/model <provider>:<model> --global` persists the selected provider/model in
   `~/.libre-claw/config.toml`.
 - Status bar context meter plus `/compact status`, `/compact --force`, and

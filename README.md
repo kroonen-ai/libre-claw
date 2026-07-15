@@ -118,6 +118,11 @@ current Textual selection. If you want normal terminal scrollback instead, launc
 with `libre-claw tui --inline`. If you want clickable Textual mouse controls,
 launch with `libre-claw tui --mouse` or set `[tui].mouse = true`.
 
+File edits are rendered as compact unified diffs. Press `Ctrl+E` or run
+`/review` to open the focused change drawer, then use its Previous/Next controls
+to inspect every edit without digging through tool output. Permission prompts
+show the exact patch, file contents, or shell command before approval.
+
 You can attach images in the TUI by dragging an image into the terminal or
 pasting its local path into a message. Use `/attach <image-path>` to queue an
 image for the next prompt, `/attach paste` or `/paste-image` to pull an image

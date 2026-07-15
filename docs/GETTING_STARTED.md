@@ -214,6 +214,11 @@ layout, use:
 libre-claw tui --inline
 ```
 
+Use `Ctrl+E` or `/review` to inspect file edits in a dedicated diff drawer. The
+latest change opens first, Previous/Next moves between edits, and `Esc` closes
+the drawer before it interrupts an active run. Write, edit, and shell approval
+prompts include an exact preview of the operation being authorized.
+
 The same defaults can be persisted in `~/.libre-claw/config.toml`:
 
 ```toml

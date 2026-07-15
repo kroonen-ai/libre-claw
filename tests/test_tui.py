@@ -33,6 +33,7 @@ from libre_claw.providers import Usage
 from libre_claw.tui.app import (
     ASSISTANT_ACCENT,
     ContextMeter,
+    FileChangeStats,
     LibreClawApp,
     PROJECT_NOTICE,
     PROJECT_LINKS,
@@ -47,6 +48,7 @@ from libre_claw.tui.app import (
     _attachment_summary,
     _context_bar,
     _format_token_count,
+    _file_change_stats,
     _lobster_markdown,
     _lobster_syntax,
     _collect_run_artifacts,
@@ -214,6 +216,20 @@ def test_tui_diff_text(monkeypatch, tmp_path: Path) -> None:
     assert "+new" in diff
 
 
+def test_file_change_stats_excludes_diff_headers() -> None:
+    stats = _file_change_stats(
+        "--- src/demo.py before\n"
+        "+++ src/demo.py after\n"
+        "@@ -1,2 +1,3 @@\n"
+        "-old\n"
+        "+new\n"
+        "+extra\n"
+    )
+
+    assert stats == FileChangeStats(additions=2, deletions=1, hunks=1)
+    assert stats.compact == "+2 -1 · 1 hunk"
+
+
 def test_replace_general_updates_model(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -263,7 +279,7 @@ async def test_slash_suggestions_support_arrow_selection(monkeypatch, tmp_path: 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     app = LibreClawApp(config=load_config())
 
-    async with app.run_test(size=(120, 45)):
+    async with app.run_test(size=(120, 45)) as pilot:
         input_widget = app.query_one("#input")
         input_widget.value = "/m"
         app._update_slash_suggestions(input_widget.value)
@@ -1072,6 +1088,42 @@ async def test_transcript_from_run_events_reconstructs_tool_entries(tmp_path: Pa
     assert entries[1].content == "rob"
 
 
+async def test_transcript_from_run_events_reconstructs_file_change(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run = await store.create_run("edit", kind="chat", provider="openai", model="gpt-5.5")
+    await store.append_event(
+        run.run_id,
+        "tool_call",
+        {"id": "toolu_1", "name": "edit_file", "arguments": {"path": "src/demo.py"}},
+    )
+    await store.append_event(
+        run.run_id,
+        "tool_result",
+        {
+            "tool_call_id": "toolu_1",
+            "name": "edit_file",
+            "is_error": False,
+            "content": "changed",
+            "arguments": {"path": "src/demo.py"},
+            "metadata": {
+                "path": "src/demo.py",
+                "before": "old\n",
+                "after": "new\n",
+                "changed": True,
+            },
+        },
+    )
+
+    entries = _transcript_from_run_events(await store.load_events(run.run_id))
+
+    assert entries[0].title == "EDIT demo.py · +1 -1 · 1 hunk"
+    assert entries[0].collapsed is False
+    assert entries[0].metadata is not None
+    assert entries[0].metadata["syntax"] == "diff"
+    assert "-old" in entries[0].content
+    assert "+new" in entries[0].content
+
+
 def test_run_verification_text_summarizes_tool_results(tmp_path: Path) -> None:
     tool_event = RunEvent(
         event_id=1,
@@ -1433,6 +1485,8 @@ def test_ctrl_r_binding_toggles_release_notes() -> None:
 def test_transcript_scroll_bindings_are_available() -> None:
     bindings = {binding.key: binding for binding in LibreClawApp.BINDINGS}
 
+    assert bindings["ctrl+e"].action == "toggle_change_review"
+    assert bindings["ctrl+e"].description == "Review Edits"
     assert bindings["pageup"].action == "scroll_chat_up"
     assert bindings["pageup"].priority is True
     assert bindings["pagedown"].action == "scroll_chat_down"
@@ -1463,6 +1517,11 @@ async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None
         assert app.query_one("#sidebar-up")
         assert app.query_one("#palette")
         assert app.query_one("#permission-panel").has_class("hidden")
+        assert app.query_one("#change-panel").has_class("hidden")
+        assert app.query_one("#workspace-bar")
+        assert app.query_one("#composer")
+        assert "WORKSPACE" in str(app.query_one("#workspace-bar").content)
+        assert "MESSAGE" in str(app.query_one("#composer-meta").content)
         assert app.query_one("#input").cursor_blink is False
 
 
@@ -1535,6 +1594,7 @@ async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_pat
         main = app.query_one("#main")
         chat = app.query_one("#chat")
         input_box = app.query_one("#input")
+        composer = app.query_one("#composer")
 
         assert sidebar.display is False
         assert sidebar_rail.display is True
@@ -1553,7 +1613,43 @@ async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_pat
         assert chat.region.width == input_box.region.width
         assert main.styles.border_left[0] == ""
         assert chat.styles.border.top[0] == ""
-        assert input_box.styles.border.top[0] == "solid"
+        assert input_box.styles.border.top[0] == ""
+        assert composer.styles.border.top[0] == "solid"
+
+
+async def test_tui_shell_stays_aligned_in_narrow_terminal(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(72, 24)) as pilot:
+        call = ToolCall(id="toolu_1", name="edit_file", arguments={"path": "demo.py"})
+        app._append_tool_call(call)
+        app._append_tool_result(
+            call,
+            ToolResult(
+                content="changed",
+                metadata={"path": "demo.py", "before": "old\n", "after": "new\n", "changed": True},
+            ),
+        )
+        app.action_toggle_change_review()
+        await pilot.pause()
+
+        main = app.query_one("#main")
+        workspace_bar = app.query_one("#workspace-bar")
+        change_panel = app.query_one("#change-panel")
+        composer = app.query_one("#composer")
+        petdex_panel = app.query_one("#petdex-panel")
+
+        assert workspace_bar.region.x == main.region.x
+        assert workspace_bar.region.width == main.region.width
+        assert composer.region.x == main.region.x
+        assert composer.region.width == main.region.width
+        assert 10 <= change_panel.region.height <= 19
+        assert change_panel.region.bottom <= composer.region.y
+        assert composer.region.bottom <= main.region.bottom
+        assert petdex_panel.display is False
 
 
 async def test_tui_sidebar_left_rail_toggle(monkeypatch, tmp_path: Path) -> None:
@@ -1585,7 +1681,7 @@ async def test_tui_scrollbars_use_brand_accent(monkeypatch, tmp_path: Path) -> N
     app = LibreClawApp(config=load_config())
 
     async with app.run_test(size=(120, 45)):
-        for selector in ("#workspace", "#sidebar", "#file-tree", "#main", "#input"):
+        for selector in ("#workspace", "#sidebar", "#file-tree", "#main", "#composer", "#input"):
             styles = app.query_one(selector).styles
 
             assert styles.scrollbar_color.hex == "#FF5C5C"
@@ -1612,7 +1708,7 @@ async def test_tui_uses_configured_theme_palette(monkeypatch, tmp_path: Path) ->
         workspace = app.query_one("#workspace")
         chat = app.query_one("#chat")
         suggestions = app.query_one("#suggestions")
-        input_box = app.query_one("#input")
+        composer = app.query_one("#composer")
         renderable = app._format_entry(TranscriptEntry(role="assistant", content="hello"))
 
         assert workspace.styles.background.hex == "#06100A"
@@ -1623,7 +1719,7 @@ async def test_tui_uses_configured_theme_palette(monkeypatch, tmp_path: Path) ->
         assert suggestions.styles.border.right[1].hex == "#00FF41"
         assert suggestions.styles.border.bottom[1].hex == "#00FF41"
         assert suggestions.styles.border.left[1].hex == "#00FF41"
-        assert input_box.styles.border.top[1].hex == "#00FF41"
+        assert composer.styles.border.top[1].hex == "#00FF41"
         assert "#00ff41" in str(renderable.renderables[0].style).lower()
 
 
@@ -1707,6 +1803,68 @@ async def test_tool_call_updates_single_collapsed_entry(monkeypatch, tmp_path: P
         assert "collapsed" not in str(app._format_entry(tool_entries[0], index))
 
 
+async def test_file_edit_result_is_diff_first_and_navigable(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)) as pilot:
+        first_call = ToolCall(
+            id="toolu_1",
+            name="edit_file",
+            arguments={"path": "src/one.py", "old_text": "old", "new_text": "new"},
+        )
+        second_call = ToolCall(
+            id="toolu_2",
+            name="write_file",
+            arguments={"path": "src/two.py", "content": "print('two')\n"},
+        )
+        app._append_tool_call(first_call)
+        first_index = app._append_tool_result(
+            first_call,
+            ToolResult(
+                content="changed",
+                metadata={"path": str(tmp_path / "src/one.py"), "before": "old\n", "after": "new\n", "changed": True},
+            ),
+        )
+        app._append_tool_call(second_call)
+        second_index = app._append_tool_result(
+            second_call,
+            ToolResult(
+                content="created",
+                metadata={
+                    "path": str(tmp_path / "src/two.py"),
+                    "before": "",
+                    "after": "print('two')\n",
+                    "changed": True,
+                    "created": True,
+                },
+            ),
+        )
+
+        assert app.transcript[first_index].title == "EDIT src/one.py · +1 -1 · 1 hunk"
+        assert app.transcript[second_index].title == "CREATE src/two.py · +1 -0 · 1 hunk"
+        assert app.transcript[first_index].collapsed is True
+        assert app.transcript[second_index].collapsed is False
+        assert app.transcript[first_index].metadata is not None
+        assert app.transcript[first_index].metadata["syntax"] == "diff"
+
+        app.action_toggle_change_review()
+        await pilot.pause()
+        assert app._change_review_visible is True
+        assert "CHANGE 2/2" in str(app.query_one("#change-title").content)
+        assert "+print('two')" in _rich_log_selection_text(app.query_one("#change-content").lines)
+
+        app._handle_review_command("previous")
+        await pilot.pause()
+        assert "CHANGE 1/2" in str(app.query_one("#change-title").content)
+        assert "+new" in _rich_log_selection_text(app.query_one("#change-content").lines)
+
+        app._handle_review_command("close")
+        assert app.query_one("#change-panel").has_class("hidden")
+
+
 def test_expanded_tool_output_is_limited() -> None:
     entry = TranscriptEntry(
         role="tool",
@@ -1741,13 +1899,42 @@ async def test_tui_permission_panel_resolves_exact_call(monkeypatch, tmp_path: P
 
         assert not app.query_one("#permission-panel").has_class("hidden")
         assert app.query_one("#permission-warning").content == (
-            "Choose once, always for this tool, or always for this exact command."
+            "Choose once, always for this tool, or always for this exact call."
         )
 
         app._resolve_pending_permission("always_allow_call")
 
         assert future.result() == "always_allow_call"
         assert app.query_one("#permission-panel").has_class("hidden")
+
+
+async def test_tui_edit_permission_shows_exact_patch(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(100, 35)) as pilot:
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        request = AgentPermissionRequest(
+            call=ToolCall(
+                id="toolu_1",
+                name="edit_file",
+                arguments={"path": "src/demo.py", "old_text": "return False", "new_text": "return True"},
+            ),
+            future=future,
+        )
+
+        app._pending_permission = request
+        app._show_permission_prompt(request)
+        await pilot.pause()
+        preview = _rich_log_selection_text(app.query_one("#permission-preview").lines)
+
+        assert app.query_one("#permission-title").content == "Review required · edit_file"
+        assert "EDIT  src/demo.py" in preview
+        assert "-return False" in preview
+        assert "+return True" in preview
+        assert "APPROVAL" in str(app.query_one("#composer-meta").content)
 
 
 async def test_tui_permission_panel_warns_for_dangerous_commands(monkeypatch, tmp_path: Path) -> None:

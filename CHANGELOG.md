@@ -7,6 +7,9 @@ Initial shippable Libre Claw release.
 ### Added
 
 - Textual terminal UI with streaming chat, status bar, file tree, command palette, slash-command suggestions, `/model` provider/model onboarding, startup ASCII art, startup release notes, and interactive permission prompts.
+- Focused TUI change review with compact inline diffs, `Ctrl+E` and `/review`
+  navigation, exact permission previews, and responsive workspace/composer
+  context that remains usable in short terminals.
 - `/model <provider>:<model> --global` persists the selected provider/model in
   `~/.libre-claw/config.toml`.
 - Status bar context meter plus `/compact status`, `/compact --force`, and
