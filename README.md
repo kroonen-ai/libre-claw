@@ -176,6 +176,7 @@ Key lookup order:
 /model openrouter:qwen/qwen3.7-max --global
 /model openrouter:sakana/fugu-ultra --global
 /model openrouter:deepseek/deepseek-v4-flash --global
+/model openrouter:moonshotai/kimi-k3 --global
 /model openrouter:moonshotai/kimi-k2.7-code --global
 /model openrouter:z-ai/glm-5.2 --global
 /model openrouter:minimax/minimax-m3 --global

@@ -132,6 +132,7 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "qwen/qwen3.7-max",
         "qwen/qwen3.7-plus",
         "deepseek/deepseek-v4-pro",
+        "moonshotai/kimi-k3",
         "moonshotai/kimi-k2.6",
         "moonshotai/kimi-k2.7-code",
         "minimax/minimax-m2.7",

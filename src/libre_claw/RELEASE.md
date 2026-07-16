@@ -116,7 +116,8 @@ First shippable Libre Claw release, built by Kroonen AI.
 - OpenRouter support with usage accounting and a shared recommended model preset
   catalog for TUI, Telegram, and usage reports, including
   `deepseek/deepseek-v4-flash`, `sakana/fugu-ultra`, `qwen/qwen3.7-max`,
-  `moonshotai/kimi-k2.6`, `moonshotai/kimi-k2.7-code`, `z-ai/glm-5.2`,
+  `moonshotai/kimi-k3`, `moonshotai/kimi-k2.6`,
+  `moonshotai/kimi-k2.7-code`, `z-ai/glm-5.2`,
   `minimax/minimax-m3`,
   `nvidia/nemotron-3-ultra-550b-a55b:free`,
   `anthropic/claude-sonnet-5`, `anthropic/claude-opus-4.8`, and `openai/gpt-5.5`.

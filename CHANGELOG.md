@@ -59,6 +59,8 @@ Initial shippable Libre Claw release.
 - Anthropic, OpenAI, OpenRouter, and Ollama providers. Defaults are `claude-opus-4-8`, `gpt-5.5`, and `qwen3.6:27b`; Anthropic direct API presets include `claude-sonnet-5`, and OpenRouter presets include `anthropic/claude-sonnet-5`.
 - Added OpenRouter usage accounting and recommended model presets for TUI,
   Telegram, and usage reports.
+- Added the `moonshotai/kimi-k3` OpenRouter preset to the shared TUI,
+  Telegram, usage, documentation, and website model catalogues.
 - Cumulative session token tracking in the status bar, TUI `/cost`, and
   Telegram `/cost`, with OpenRouter usage accounting enabled for
   provider-reported request cost, cached tokens, and reasoning tokens.

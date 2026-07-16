@@ -85,6 +85,12 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Higher-capacity DeepSeek V4 agent preset.",
     ),
     OpenRouterModelPreset(
+        "moonshotai/kimi-k3",
+        "Kimi K3",
+        "Moonshot Kimi K3 million-token multimodal reasoning preset for coding "
+        "and long-horizon agentic workflows.",
+    ),
+    OpenRouterModelPreset(
         "moonshotai/kimi-k2.6",
         "Kimi K2.6",
         "Moonshot Kimi K2.6 coding and long-horizon agent preset.",

@@ -729,6 +729,10 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
         TELEGRAM_MODEL_PRESETS["openrouter"]
     )
     assert any("MiniMax M3" in button.text for row in model_keyboard.inline_keyboard for button in row)
+    assert any("Kimi K3" in button.text for row in model_keyboard.inline_keyboard for button in row)
+    assert any(
+        preset.model == "moonshotai/kimi-k3" for preset in TELEGRAM_MODEL_PRESETS["openrouter"]
+    )
     assert any("MiniMax M3" in button.text for row in ollama_keyboard.inline_keyboard for button in row)
     assert any(preset.model == "minimax-m3:cloud" for preset in TELEGRAM_MODEL_PRESETS["ollama"])
     assert any("GLM 5.2" in button.text for row in ollama_keyboard.inline_keyboard for button in row)
