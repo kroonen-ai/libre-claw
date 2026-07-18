@@ -49,6 +49,7 @@ from libre_claw.core.workspace import (
     workspace_status_text,
 )
 from libre_claw.daemon import DaemonServer, daemon_base_url
+from libre_claw.headless import run_headless
 from libre_claw.telegram.bot import TelegramBot
 from libre_claw.tui.app import LibreClawApp
 
@@ -190,6 +191,53 @@ def tui_command(ctx: click.Context, mouse: bool | None, inline: bool | None) -> 
 def chat_command(ctx: click.Context, mouse: bool | None, inline: bool | None) -> None:
     """Open the Libre Claw chat TUI."""
     _run_tui(ctx, mouse=mouse, inline=inline)
+
+
+@main.command("run")
+@click.argument("message", required=False)
+@click.option(
+    "--auto-approve",
+    is_flag=True,
+    help="Allow all non-denied tools for this isolated noninteractive run.",
+)
+@click.option(
+    "--system-prompt-extra",
+    default="",
+    help="Append instructions to the configured system prompt for this run.",
+)
+@click.pass_context
+def run_command(
+    ctx: click.Context,
+    message: str | None,
+    auto_approve: bool,
+    system_prompt_extra: str,
+) -> None:
+    """Run one complete agent turn without opening the TUI."""
+    prompt = message if message is not None else sys.stdin.read()
+    if not prompt.strip():
+        raise click.UsageError("Provide MESSAGE or pipe a prompt on stdin.")
+    config = _load_context_config(ctx)
+    wrote_text = False
+
+    def stream_text(delta: str) -> None:
+        nonlocal wrote_text
+        click.echo(delta, nl=False)
+        sys.stdout.flush()
+        wrote_text = True
+
+    result = asyncio.run(
+        run_headless(
+            config,
+            prompt.strip(),
+            auto_approve=auto_approve,
+            system_prompt_extra=system_prompt_extra,
+            on_text=stream_text,
+        )
+    )
+    if wrote_text:
+        click.echo()
+    if result.error:
+        raise click.ClickException(result.error)
 
 
 def _run_tui(ctx: click.Context, *, mouse: bool | None = None, inline: bool | None = None) -> None:

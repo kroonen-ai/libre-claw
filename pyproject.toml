@@ -71,6 +71,7 @@ packages = ["src/libre_claw"]
 [tool.hatch.build.targets.sdist]
 include = [
     "/CHANGELOG.md",
+    "/benchmarks",
     "/docs",
     "/LICENSE",
     "/README.md",

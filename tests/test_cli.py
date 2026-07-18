@@ -13,6 +13,7 @@ from click.testing import CliRunner
 
 from libre_claw import __version__
 from libre_claw.cli import main
+from libre_claw.headless import HeadlessRunResult
 
 
 class FakeLookup:
@@ -89,6 +90,7 @@ def test_cli_exposes_telegram_command() -> None:
     assert result.exit_code == 0
     assert "daemon" in result.output
     assert "restart" in result.output
+    assert "run" in result.output
     assert "start" in result.output
     assert "shutdown" in result.output
     assert "stop" in result.output
@@ -100,6 +102,34 @@ def test_cli_exposes_telegram_command() -> None:
     assert "searx" in result.output
     assert "auth" in result.output
     assert "config" in result.output
+
+
+def test_cli_run_streams_headless_response(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    seen: dict[str, object] = {}
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    async def fake_run_headless(config, message, **kwargs):  # type: ignore[no-untyped-def]
+        seen["working_directory"] = config.general.working_directory
+        seen["message"] = message
+        seen["auto_approve"] = kwargs["auto_approve"]
+        kwargs["on_text"]("benchmark ready")
+        return HeadlessRunResult(text="benchmark ready")
+
+    monkeypatch.setattr("libre_claw.cli.run_headless", fake_run_headless)
+
+    result = runner.invoke(
+        main,
+        ["--working-directory", str(tmp_path), "run", "solve this", "--auto-approve"],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "benchmark ready\n"
+    assert seen == {
+        "working_directory": tmp_path.resolve(),
+        "message": "solve this",
+        "auto_approve": True,
+    }
 
 
 def test_cli_tui_uses_native_terminal_selection_by_default(monkeypatch, tmp_path) -> None:
