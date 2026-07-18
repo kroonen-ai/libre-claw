@@ -205,12 +205,23 @@ def chat_command(ctx: click.Context, mouse: bool | None, inline: bool | None) ->
     default="",
     help="Append instructions to the configured system prompt for this run.",
 )
+@click.option(
+    "--trajectory-path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Write an ATIF v1.7 trajectory for this run.",
+)
+@click.option("--trajectory-agent-version", default=None, hidden=True)
+@click.option("--trajectory-reasoning-effort", default=None, hidden=True)
 @click.pass_context
 def run_command(
     ctx: click.Context,
     message: str | None,
     auto_approve: bool,
     system_prompt_extra: str,
+    trajectory_path: Path | None,
+    trajectory_agent_version: str | None,
+    trajectory_reasoning_effort: str | None,
 ) -> None:
     """Run one complete agent turn without opening the TUI."""
     prompt = message if message is not None else sys.stdin.read()
@@ -232,6 +243,9 @@ def run_command(
             auto_approve=auto_approve,
             system_prompt_extra=system_prompt_extra,
             on_text=stream_text,
+            trajectory_path=trajectory_path,
+            trajectory_agent_version=trajectory_agent_version,
+            trajectory_reasoning_effort=trajectory_reasoning_effort,
         )
     )
     if wrote_text:

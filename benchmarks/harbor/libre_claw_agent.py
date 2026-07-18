@@ -14,6 +14,13 @@ from harbor.models.agent.context import AgentContext
 class LibreClawAgent(BaseInstalledAgent):
     """Install Libre Claw in a Harbor task container and run its real agent loop."""
 
+    SUPPORTS_ATIF: bool = True
+    _TRAJECTORY_FILENAME = "trajectory.json"
+
+    def __init__(self, reasoning_effort: str | None = "auto", *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._reasoning_effort = reasoning_effort
+
     @staticmethod
     def name() -> str:
         return "libre-claw"
@@ -23,6 +30,25 @@ class LibreClawAgent(BaseInstalledAgent):
 
     def get_version_command(self) -> str | None:
         return "/opt/libre-claw-venv/bin/libre-claw --version"
+
+    def populate_context_post_run(self, context: AgentContext) -> None:
+        trajectory_path = self.logs_dir / self._TRAJECTORY_FILENAME
+        if not trajectory_path.exists():
+            self.logger.warning("Libre Claw ATIF trajectory was not produced.")
+            return
+        try:
+            payload = json.loads(trajectory_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            self.logger.error("Could not read Libre Claw ATIF trajectory: %s", exc)
+            return
+        metrics = payload.get("final_metrics", {})
+        if not isinstance(metrics, dict):
+            return
+        context.n_input_tokens = int(metrics.get("total_prompt_tokens") or 0)
+        context.n_output_tokens = int(metrics.get("total_completion_tokens") or 0)
+        context.n_cache_tokens = int(metrics.get("total_cached_tokens") or 0)
+        cost = metrics.get("total_cost_usd")
+        context.cost_usd = float(cost) if isinstance(cost, int | float) else None
 
     async def install(self, environment: BaseEnvironment) -> None:
         await self.exec_as_root(
@@ -67,6 +93,16 @@ class LibreClawAgent(BaseInstalledAgent):
             "HARBOR_INSTRUCTION": instruction,
             "OLLAMA_API_KEY": api_key,
         }
+        version = self._version or "0.1.0"
+        trajectory_options = (
+            f"--trajectory-path /logs/agent/{self._TRAJECTORY_FILENAME} "
+            f"--trajectory-agent-version {shlex.quote(version)} "
+        )
+        if self._reasoning_effort:
+            trajectory_options += (
+                "--trajectory-reasoning-effort "
+                f"{shlex.quote(self._reasoning_effort)} "
+            )
         await self.exec_as_agent(
             environment,
             command=(
@@ -84,6 +120,7 @@ class LibreClawAgent(BaseInstalledAgent):
                 "/opt/libre-claw-venv/bin/libre-claw "
                 "--config /tmp/libre-claw/config.toml "
                 "--working-directory . run --auto-approve "
+                f"{trajectory_options}"
                 '"$HARBOR_INSTRUCTION" '
                 "2>&1 | stdbuf -oL tee /logs/agent/libre-claw.txt"
             ),

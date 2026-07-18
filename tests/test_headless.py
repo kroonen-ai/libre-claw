@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Sequence
 
 from libre_claw.config import load_config
@@ -94,3 +95,29 @@ async def test_headless_auto_approves_ask_tools(monkeypatch, tmp_path) -> None:
 
     assert result.text == "finished"
     assert result.error is None
+
+
+async def test_headless_run_writes_atif_trajectory(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    provider = ScriptedProvider(
+        [[TextDelta("done"), Done(Usage(input_tokens=9, output_tokens=2))]]
+    )
+    trajectory_path = tmp_path / "logs" / "agent" / "trajectory.json"
+
+    result = await run_headless(
+        load_config(working_directory=tmp_path),
+        "Complete this",
+        provider=provider,
+        tool_registry=ToolRegistry(),
+        memory_store=MemoryStore(tmp_path / "memory.db"),
+        trajectory_path=trajectory_path,
+        trajectory_agent_version="commit-sha",
+        trajectory_reasoning_effort="auto",
+    )
+
+    payload = json.loads(trajectory_path.read_text(encoding="utf-8"))
+    assert result.text == "done"
+    assert payload["agent"]["version"] == "commit-sha"
+    assert payload["steps"][-1]["message"] == "done"
+    assert payload["steps"][-1]["reasoning_effort"] == "auto"
+    assert payload["final_metrics"]["total_prompt_tokens"] == 9

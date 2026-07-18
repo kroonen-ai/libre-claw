@@ -346,6 +346,10 @@ class Agent:
         )
         return "\n\n".join(parts)
 
+    def resolved_system_prompt(self) -> str:
+        """Return the fully resolved prompt used by the current agent turn."""
+        return self._build_system_prompt()
+
     async def _load_skills(self, user_message: str) -> list[str]:
         if self.skill_provider is None:
             return []

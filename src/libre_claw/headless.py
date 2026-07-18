@@ -5,8 +5,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
+from libre_claw import __version__
 from libre_claw.config import LibreClawConfig
+from libre_claw.core.atif import RecordingSession, write_atif_trajectory
 from libre_claw.core.agent import (
     Agent,
     AgentDone,
@@ -51,6 +54,9 @@ async def run_headless(
     provider: LLMProvider | None = None,
     tool_registry: ToolRegistry | None = None,
     memory_store: MemoryStore | None = None,
+    trajectory_path: Path | None = None,
+    trajectory_agent_version: str | None = None,
+    trajectory_reasoning_effort: str | None = None,
 ) -> HeadlessRunResult:
     """Run one complete agent turn without a TUI or daemon."""
     store = memory_store or MemoryStore()
@@ -78,8 +84,9 @@ async def run_headless(
         for part in (config.agent.system_prompt_extra, system_prompt_extra)
         if part.strip()
     )
+    session = RecordingSession() if trajectory_path is not None else Session()
     agent = Agent(
-        session=Session(),
+        session=session,
         provider=provider or create_provider(config),
         tool_registry=registry,
         permission_manager=permissions,
@@ -116,6 +123,21 @@ async def run_headless(
             usage = event.usage
         elif isinstance(event, AgentError):
             error = event.message
+
+    if trajectory_path is not None:
+        if not isinstance(session, RecordingSession):
+            raise RuntimeError("ATIF export requires a recording session.")
+        write_atif_trajectory(
+            trajectory_path,
+            session=session,
+            system_prompt=agent.resolved_system_prompt(),
+            agent_version=trajectory_agent_version or __version__,
+            model_name=config.general.default_model,
+            tool_schemas=registry.schemas(),
+            usage=usage,
+            error=error,
+            reasoning_effort=trajectory_reasoning_effort,
+        )
 
     return HeadlessRunResult(text="".join(chunks).strip(), usage=usage, error=error)
 
