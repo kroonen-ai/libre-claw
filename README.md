@@ -24,8 +24,12 @@ Current release: Version `0.1.0`.
 | Memory and skills | Local persistent memory, `SOUL.md` persona files, user/project `SKILL.md` workflows, and optional Vercel Skills discovery. |
 | Real tools | File edits, shell, code search, web search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
 | Provider routing | OpenRouter, Ollama/Ollama Cloud, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
+| Reproducible evals | A Harbor adapter runs the real Libre Claw loop against Terminal-Bench 2.1. |
 | Petdex companion | Optional local state updates for the Petdex desktop companion app. |
 | Safe defaults | API keys stay out of project config, dangerous commands are blocked, and writes require approval. |
+
+The evaluation adapter, reproduction commands, and recorded smoke results are
+documented in [benchmarks/README.md](benchmarks/README.md).
 
 ## Install
 
