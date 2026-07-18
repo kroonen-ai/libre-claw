@@ -16,6 +16,8 @@ class LibreClawAgent(BaseInstalledAgent):
 
     SUPPORTS_ATIF: bool = True
     _TRAJECTORY_FILENAME = "trajectory.json"
+    _UV_PATH = "/opt/libre-claw-bin/uv"
+    _VENV_PATH = "/opt/libre-claw-venv"
 
     def __init__(self, reasoning_effort: str | None = "auto", *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -29,7 +31,7 @@ class LibreClawAgent(BaseInstalledAgent):
         return self._version
 
     def get_version_command(self) -> str | None:
-        return "/opt/libre-claw-venv/bin/libre-claw --version"
+        return f"{self._VENV_PATH}/bin/libre-claw --version"
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         trajectory_path = self.logs_dir / self._TRAJECTORY_FILENAME
@@ -64,10 +66,14 @@ class LibreClawAgent(BaseInstalledAgent):
         await self.exec_as_agent(
             environment,
             command=(
-                "python3 -m venv /opt/libre-claw-venv && "
-                "/opt/libre-claw-venv/bin/python -m pip install --upgrade pip && "
-                f"/opt/libre-claw-venv/bin/pip install {shlex.quote(package_url)} && "
-                "/opt/libre-claw-venv/bin/libre-claw --version"
+                "mkdir -p /opt/libre-claw-bin && "
+                "curl -LsSf https://astral.sh/uv/install.sh | "
+                "env UV_UNMANAGED_INSTALL=/opt/libre-claw-bin sh && "
+                f"{self._UV_PATH} python install 3.11 && "
+                f"{self._UV_PATH} venv --python 3.11 {self._VENV_PATH} && "
+                f"{self._UV_PATH} pip install --python {self._VENV_PATH}/bin/python "
+                f"{shlex.quote(package_url)} && "
+                f"{self._VENV_PATH}/bin/libre-claw --version"
             ),
         )
 
@@ -117,7 +123,7 @@ class LibreClawAgent(BaseInstalledAgent):
         await self.exec_as_agent(
             environment,
             command=(
-                "/opt/libre-claw-venv/bin/libre-claw "
+                f"{self._VENV_PATH}/bin/libre-claw "
                 "--config /tmp/libre-claw/config.toml "
                 "--working-directory . run --auto-approve "
                 f"{trajectory_options}"
