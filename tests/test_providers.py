@@ -28,8 +28,14 @@ class FakeApiKeyStore:
     def __init__(self, value: str | None) -> None:
         self.value = value
 
-    def get_api_key(self, provider_name: str, env_var: str | None = None) -> ApiKeyLookup:
-        del provider_name, env_var
+    def get_api_key(
+        self,
+        provider_name: str,
+        env_var: str | None = None,
+        *,
+        aliases: tuple[str, ...] = (),
+    ) -> ApiKeyLookup:
+        del provider_name, env_var, aliases
         if self.value is None:
             return ApiKeyLookup(value=None, source="missing")
         return ApiKeyLookup(value=self.value, source="environment")

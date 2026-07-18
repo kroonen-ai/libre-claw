@@ -29,8 +29,10 @@ class FakeKeyring:
         self.fail = fail
         self.fail_get = fail_get
         self.values: dict[tuple[str, str], str] = {}
+        self.get_calls: list[tuple[str, str]] = []
 
     def get_password(self, service_name: str, username: str) -> str | None:
+        self.get_calls.append((service_name, username))
         if self.fail or self.fail_get:
             raise RuntimeError("keyring unavailable")
         return self.values.get((service_name, username))
@@ -70,17 +72,17 @@ def test_api_key_store_prefers_environment(monkeypatch, tmp_path: Path) -> None:
 def test_api_key_store_uses_keyring_when_available(tmp_path: Path) -> None:
     path = tmp_path / ".keys"
     fallback = encrypted_file(path)
+    fake = FakeKeyring()
+    fake.set_password("libre-claw", "openai", "stored-key")
     store = ApiKeyStore(
         service_name="libre-claw",
         fallback_path=path,
-        keyring_backend=FakeKeyring(),
+        keyring_backend=fake,
         encrypted_file=fallback,
     )
 
-    location = store.set_api_key("openai", "stored-key")
     lookup = store.get_api_key("openai")
 
-    assert location == "keyring"
     assert lookup.value == "stored-key"
     assert lookup.source == "keyring"
     assert fallback.get("openai") == "stored-key"
@@ -121,35 +123,43 @@ def test_api_key_store_falls_back_when_keyring_write_cannot_be_verified(tmp_path
     assert lookup.source == "encrypted_file"
 
 
-def test_api_key_store_uses_native_macos_keychain_when_backend_is_unavailable(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
+def test_api_key_store_prefers_encrypted_mirror_without_querying_keyring(tmp_path: Path) -> None:
     path = tmp_path / ".keys"
-    monkeypatch.setattr(api_keys, "keyring", FakeKeyring(fail=True))
-    monkeypatch.setattr(api_keys.platform, "system", lambda: "Darwin")
+    fallback = encrypted_file(path)
+    fallback.set("ollama", "mirrored-key")
+    fake = FakeKeyring()
+    fake.set_password("libre-claw", "ollama", "keychain-key")
+    store = ApiKeyStore(
+        service_name="libre-claw",
+        fallback_path=path,
+        keyring_backend=fake,
+        encrypted_file=fallback,
+    )
 
-    def fake_run(args: list[str], **kwargs: object) -> object:
-        assert args == [
-            "security",
-            "find-generic-password",
-            "-s",
-            "libre-claw",
-            "-a",
-            "local",
-            "-w",
-        ]
-        assert kwargs["timeout"] == 2
-        return type("Result", (), {"returncode": 0, "stdout": "native-key\n"})()
+    lookup = store.get_api_key("ollama")
 
-    monkeypatch.setattr(api_keys.subprocess, "run", fake_run)
-    store = ApiKeyStore(service_name="libre-claw", fallback_path=path)
+    assert lookup.value == "mirrored-key"
+    assert lookup.source == "encrypted_file"
+    assert fake.get_calls == []
 
-    lookup = store.get_api_key("local")
 
-    assert lookup.value == "native-key"
-    assert lookup.source == "keyring"
-    assert EncryptedKeyFile(path).get("local") == "native-key"
+def test_api_key_store_resolves_alias_from_encrypted_mirror_without_keyring(tmp_path: Path) -> None:
+    path = tmp_path / ".keys"
+    fallback = encrypted_file(path)
+    fallback.set("local", "legacy-ollama-key")
+    fake = FakeKeyring()
+    store = ApiKeyStore(
+        service_name="libre-claw",
+        fallback_path=path,
+        keyring_backend=fake,
+        encrypted_file=fallback,
+    )
+
+    lookup = store.get_api_key("ollama", aliases=("local",))
+
+    assert lookup.value == "legacy-ollama-key"
+    assert lookup.source == "encrypted_file"
+    assert fake.get_calls == []
 
 
 def test_encrypted_key_file_uses_stable_private_master_key(tmp_path: Path) -> None:

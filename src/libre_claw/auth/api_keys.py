@@ -10,7 +10,6 @@ import json
 import os
 import platform
 import socket
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,7 +63,6 @@ class ApiKeyStore:
     ) -> None:
         self.service_name = service_name
         self.fallback_path = fallback_path
-        self._use_native_macos_keychain = keyring_backend is None
         self._keyring_backend = keyring_backend if keyring_backend is not None else keyring
         self._encrypted_file = encrypted_file or EncryptedKeyFile(fallback_path)
 
@@ -72,21 +70,36 @@ class ApiKeyStore:
     def from_config(cls, config: AuthConfig) -> ApiKeyStore:
         return cls(service_name=config.keyring_service, fallback_path=config.fallback_keys_path)
 
-    def get_api_key(self, provider_name: str, env_var: str | None = None) -> ApiKeyLookup:
+    def get_api_key(
+        self,
+        provider_name: str,
+        env_var: str | None = None,
+        *,
+        aliases: tuple[str, ...] = (),
+    ) -> ApiKeyLookup:
         if env_var:
             value = os.getenv(env_var)
             if value:
                 return ApiKeyLookup(value=value, source="environment")
 
-        account = _account_name(provider_name)
-        keyring_value = self._get_keyring_password(account)
-        if keyring_value:
-            self._mirror_encrypted_fallback(account, keyring_value)
-            return ApiKeyLookup(value=keyring_value, source="keyring")
+        accounts = tuple(
+            dict.fromkeys(_account_name(name) for name in (provider_name, *aliases))
+        )
 
-        fallback_value = self._encrypted_file.get(account)
-        if fallback_value:
-            return ApiKeyLookup(value=fallback_value, source="encrypted_file")
+        # The encrypted mirror is noninteractive and is deliberately checked
+        # before Keychain. Background daemon, Telegram, and TUI processes must
+        # not trigger repeated macOS password dialogs for credentials that are
+        # already available locally.
+        for account in accounts:
+            fallback_value = self._encrypted_file.get(account)
+            if fallback_value:
+                return ApiKeyLookup(value=fallback_value, source="encrypted_file")
+
+        for account in accounts:
+            keyring_value = self._get_keyring_password(account)
+            if keyring_value:
+                self._mirror_encrypted_fallback(account, keyring_value)
+                return ApiKeyLookup(value=keyring_value, source="keyring")
 
         return ApiKeyLookup(value=None, source="missing")
 
@@ -115,10 +128,6 @@ class ApiKeyStore:
         }
 
     def _get_keyring_password(self, account: str) -> str | None:
-        if self._use_native_macos_keychain:
-            native_value = _get_macos_keychain_password(self.service_name, account)
-            if native_value:
-                return native_value
         if self._keyring_backend is None:
             return None
         try:
@@ -297,33 +306,6 @@ class EncryptedKeyFile:
 
 def _account_name(provider_name: str) -> str:
     return provider_name.strip().lower()
-
-
-def _get_macos_keychain_password(service_name: str, account: str) -> str | None:
-    if platform.system() != "Darwin":
-        return None
-    try:
-        result = subprocess.run(
-            [
-                "security",
-                "find-generic-password",
-                "-s",
-                service_name,
-                "-a",
-                account,
-                "-w",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
-        return None
-    value = result.stdout.rstrip("\r\n")
-    return value or None
 
 
 def _derive_machine_key() -> bytes:

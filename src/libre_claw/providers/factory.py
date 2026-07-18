@@ -150,9 +150,11 @@ def _create_ollama_provider(
 ) -> OllamaProvider:
     api_key_env = _str_provider_value(provider_config, "api_key_env", "")
     store = api_key_store or ApiKeyStore.from_config(config.auth)
-    api_key_lookup = store.get_api_key("ollama", api_key_env or None)
-    if not api_key_lookup.value:
-        api_key_lookup = store.get_api_key("local")
+    api_key_lookup = store.get_api_key(
+        "ollama",
+        api_key_env or None,
+        aliases=("local",),
+    )
     base_url = _str_provider_value(provider_config, "base_url", "http://localhost:11434")
     if _is_ollama_cloud_url(base_url) and not api_key_lookup.value:
         msg = (
