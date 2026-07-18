@@ -385,3 +385,30 @@ def test_create_provider_supports_ollama_cloud_api_key(monkeypatch, tmp_path: Pa
     assert provider.base_url == "https://ollama.com"
     assert provider.model == "kimi-k2.6:cloud"
     assert provider.api_key == "cloud-key"
+    assert provider.think is False
+
+
+def test_create_provider_uses_low_thinking_for_gpt_oss(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[general]",
+                'default_provider = "ollama"',
+                'default_model = "gpt-oss:120b"',
+                "",
+                "[providers.ollama]",
+                'base_url = "http://localhost:11434"',
+                'think = "auto"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config(config_path=config_path)
+
+    provider = create_provider(config, api_key_store=FakeApiKeyStore(None))  # type: ignore[arg-type]
+
+    assert isinstance(provider, OllamaProvider)
+    assert provider.think == "low"

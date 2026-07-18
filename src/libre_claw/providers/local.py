@@ -32,6 +32,7 @@ from libre_claw.providers.openai import OpenAIProvider
 
 LocalApiFormat = Literal["ollama", "openai"]
 LocalToolMode = Literal["auto", "native", "xml"]
+OllamaThink = bool | Literal["low", "medium", "high"]
 
 XML_TOOL_RE = re.compile(r"<tool_call(?:\s+name=\"(?P<name>[A-Za-z0-9_.-]+)\")?\s*>(?P<body>.*?)</tool_call>", re.DOTALL)
 
@@ -56,6 +57,7 @@ class LocalProvider(LLMProvider):
         api_key: str = "ollama",
         supports_tools: bool = True,
         tool_mode: LocalToolMode = "auto",
+        think: OllamaThink = False,
         client: Any | None = None,
         openai_provider: LLMProvider | None = None,
     ) -> None:
@@ -66,6 +68,7 @@ class LocalProvider(LLMProvider):
         self.api_key = api_key
         self.supports_tools = supports_tools
         self.tool_mode = tool_mode
+        self.think = think
         self._client = client
         self._openai_provider = openai_provider
         self._logger = structlog.get_logger(__name__)
@@ -211,6 +214,7 @@ class LocalProvider(LLMProvider):
             "model": self.model,
             "messages": format_ollama_messages(messages, system),
             "stream": True,
+            "think": self.think,
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens or self.max_tokens,
@@ -222,6 +226,8 @@ class LocalProvider(LLMProvider):
         usage: Usage | None = None
         stop_reason: str | None = None
         call_counter = 0
+        emitted_response = False
+        received_thinking = False
         try:
             async for chunk in self._stream_ollama_request(request):
                 if "error" in chunk:
@@ -232,13 +238,19 @@ class LocalProvider(LLMProvider):
                 if isinstance(message, Mapping):
                     content = message.get("content")
                     if isinstance(content, str) and content:
+                        emitted_response = True
                         yield TextDelta(content)
+
+                    thinking = message.get("thinking")
+                    if isinstance(thinking, str) and thinking:
+                        received_thinking = True
 
                     for raw_call in _raw_tool_calls(message):
                         call_counter += 1
                         name, arguments = _tool_call_parts(raw_call)
                         if not name:
                             continue
+                        emitted_response = True
                         tool_call_id = f"local_call_{call_counter}"
                         raw_arguments = json.dumps(arguments, sort_keys=True)
                         yield ToolCallStart(tool_call_id=tool_call_id, name=name)
@@ -256,6 +268,12 @@ class LocalProvider(LLMProvider):
             yield ProviderError(f"Ollama provider request failed: {exc}")
             return
 
+        if received_thinking and not emitted_response:
+            yield ProviderError(
+                "Ollama returned thinking output without a final answer. Set "
+                "[providers.ollama].think = false or increase max_tokens."
+            )
+            return
         yield Done(usage=usage, stop_reason=stop_reason)
 
     async def _stream_ollama_request(self, request: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:

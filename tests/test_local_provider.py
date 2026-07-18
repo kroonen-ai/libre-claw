@@ -11,6 +11,7 @@ from libre_claw.core.session import ChatMessage, UserAttachment, image_block, te
 from libre_claw.providers.base import (
     Done,
     LLMProvider,
+    ProviderError,
     StreamEvent,
     TextDelta,
     ToolCallDelta,
@@ -127,6 +128,37 @@ async def test_local_provider_streams_ollama_text_and_usage() -> None:
         {"role": "user", "content": "Hello"},
     ]
     assert client.last_request["json"]["options"]["num_predict"] == 99
+    assert client.last_request["json"]["think"] is False
+
+
+async def test_local_provider_reports_thinking_only_response() -> None:
+    client = FakeHTTPClient(
+        [
+            {"message": {"thinking": "internal reasoning"}, "done": False},
+            {"message": {}, "done": True, "done_reason": "stop"},
+        ]
+    )
+    provider = LocalProvider(
+        base_url="http://localhost:11434",
+        model="qwen3.6:27b",
+        max_tokens=99,
+        think=True,
+        client=client,
+    )
+
+    events = [
+        event
+        async for event in provider.complete(
+            messages=[ChatMessage(role="user", content=[text_block("Hello")])],
+        )
+    ]
+
+    assert events == [
+        ProviderError(
+            "Ollama returned thinking output without a final answer. Set "
+            "[providers.ollama].think = false or increase max_tokens."
+        )
+    ]
 
 
 async def test_local_provider_streams_ollama_tool_calls() -> None:

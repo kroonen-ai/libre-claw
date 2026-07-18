@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 from pathlib import Path
 
 from cryptography.fernet import Fernet
 
+from libre_claw.auth import api_keys
 from libre_claw.auth.api_keys import ApiKeyStore, EncryptedKeyFile
 from libre_claw.auth.oauth import (
     OAuthStateStore,
@@ -117,6 +119,89 @@ def test_api_key_store_falls_back_when_keyring_write_cannot_be_verified(tmp_path
     assert location == "encrypted_file"
     assert lookup.value == "fallback-key"
     assert lookup.source == "encrypted_file"
+
+
+def test_api_key_store_uses_native_macos_keychain_when_backend_is_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / ".keys"
+    monkeypatch.setattr(api_keys, "keyring", FakeKeyring(fail=True))
+    monkeypatch.setattr(api_keys.platform, "system", lambda: "Darwin")
+
+    def fake_run(args: list[str], **kwargs: object) -> object:
+        assert args == [
+            "security",
+            "find-generic-password",
+            "-s",
+            "libre-claw",
+            "-a",
+            "local",
+            "-w",
+        ]
+        assert kwargs["timeout"] == 2
+        return type("Result", (), {"returncode": 0, "stdout": "native-key\n"})()
+
+    monkeypatch.setattr(api_keys.subprocess, "run", fake_run)
+    store = ApiKeyStore(service_name="libre-claw", fallback_path=path)
+
+    lookup = store.get_api_key("local")
+
+    assert lookup.value == "native-key"
+    assert lookup.source == "keyring"
+    assert EncryptedKeyFile(path).get("local") == "native-key"
+
+
+def test_encrypted_key_file_uses_stable_private_master_key(tmp_path: Path) -> None:
+    path = tmp_path / ".keys"
+    fallback = EncryptedKeyFile(path=path)
+
+    fallback.set("ollama", "cloud-key")
+
+    key_path = tmp_path / ".keys.key"
+    assert fallback.get("ollama") == "cloud-key"
+    assert key_path.exists()
+    if os.name != "nt":
+        assert key_path.stat().st_mode & 0o777 == 0o600
+        assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_encrypted_key_file_migrates_legacy_machine_identity(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / ".keys"
+    legacy_key = Fernet.generate_key()
+    legacy_payload = Fernet(legacy_key).encrypt(json.dumps({"ollama": "cloud-key"}).encode("utf-8"))
+    path.write_bytes(legacy_payload)
+    monkeypatch.setattr(api_keys, "_legacy_machine_keys", lambda: (legacy_key,))
+
+    fallback = EncryptedKeyFile(path=path)
+
+    assert fallback.get("ollama") == "cloud-key"
+    assert (tmp_path / ".keys.key").exists()
+    assert (tmp_path / ".keys.legacy").read_bytes() == legacy_payload
+    assert path.read_bytes() != legacy_payload
+
+    monkeypatch.setattr(api_keys, "_legacy_machine_keys", lambda: ())
+    assert EncryptedKeyFile(path=path).get("ollama") == "cloud-key"
+
+
+def test_encrypted_key_file_reports_identity_mismatch_without_blank_error(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / ".keys"
+    path.write_bytes(Fernet(Fernet.generate_key()).encrypt(b"{}"))
+    monkeypatch.setattr(api_keys, "_legacy_machine_keys", lambda: ())
+
+    try:
+        EncryptedKeyFile(path=path).get("ollama")
+    except api_keys.KeyStorageError as exc:
+        assert "different machine identity" in str(exc)
+        assert not str(exc).endswith(":")
+    else:  # pragma: no cover - defensive assertion shape.
+        raise AssertionError("an unreadable encrypted file should fail clearly")
 
 
 def test_token_manager_issues_and_verifies_jwt() -> None:

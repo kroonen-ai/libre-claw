@@ -13,6 +13,7 @@ from libre_claw.config import LibreClawConfig
 from libre_claw.providers.anthropic import AnthropicProvider
 from libre_claw.providers.base import LLMProvider, ProviderConfigurationError
 from libre_claw.providers.codex import CodexProvider
+from libre_claw.providers.local import OllamaThink
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider
 from libre_claw.providers.openrouter import OpenRouterProvider
@@ -167,14 +168,16 @@ def _create_ollama_provider(
     if tool_mode not in {"auto", "native", "xml"}:
         raise ProviderConfigurationError("[providers.ollama].tool_mode must be 'auto', 'native', or 'xml'.")
 
+    resolved_model = _resolve_model(config, "ollama", provider_config)
     return OllamaProvider(
         base_url=base_url,
-        model=_resolve_model(config, "ollama", provider_config),
+        model=resolved_model,
         max_tokens=_int_provider_value(provider_config, "max_tokens", 16384),
         api_format=api_format,  # type: ignore[arg-type]
         api_key=api_key,
         supports_tools=_bool_provider_value(provider_config, "supports_tools", True),
         tool_mode=tool_mode,  # type: ignore[arg-type]
+        think=_ollama_think_value(provider_config, resolved_model),
     )
 
 
@@ -204,6 +207,20 @@ def _bool_provider_value(config: Mapping[str, Any], key: str, default: bool) -> 
     if isinstance(value, bool):
         return value
     return default
+
+
+def _ollama_think_value(config: Mapping[str, Any], model: str) -> OllamaThink:
+    value = config.get("think", "auto")
+    if value == "auto":
+        model_name = model.rsplit("/", maxsplit=1)[-1].lower()
+        return "low" if model_name.startswith("gpt-oss") else False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.lower() in {"low", "medium", "high"}:
+        return value.lower()  # type: ignore[return-value]
+    raise ProviderConfigurationError(
+        "[providers.ollama].think must be 'auto', true, false, 'low', 'medium', or 'high'."
+    )
 
 
 def _provider_max_tokens(config: Mapping[str, Any]) -> int:
