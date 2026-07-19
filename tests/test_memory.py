@@ -184,6 +184,20 @@ def test_session_compaction_summarizes_older_messages() -> None:
     assert session.messages[0].content == [text_block("message 8")]
 
 
+def test_session_repeated_compaction_bounds_the_rolling_summary() -> None:
+    session = Session(summary="old context\n" + ("x" * 80))
+    for index in range(6):
+        session.add_user_message(f"recent message {index} " + ("y" * 30))
+
+    summary = session.compact(keep_last=2, max_summary_chars=120)
+
+    assert summary is not None
+    assert len(summary) <= 120
+    assert summary.startswith("[Earlier compacted context omitted]\n")
+    assert "recent message 3" in summary
+    assert len(session.messages) == 2
+
+
 def test_summarize_session_for_memory_redacts_and_bounds() -> None:
     session = Session()
     session.add_user_message("remember this")

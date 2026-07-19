@@ -40,6 +40,29 @@ The local job directory remains preserved for diagnosis and eventual clean resum
 The polluted intermediate public upload was removed so it cannot be mistaken for a
 finished benchmark submission.
 
+## Remediation status on `dev`
+
+The follow-up harness pass implements the code-level remediations identified here:
+
+- Harbor instructions travel over stdin, including option-like text beginning with
+  `-`.
+- The benchmark profile uses a focused prompt and an allowlisted coding tool set.
+- Context accounting includes tool schemas and provider-reported input usage;
+  compaction starts earlier and its rolling summary is bounded.
+- Each Harbor task's resolved timeout drives an internal agent deadline and a
+  proportional shell-command limit, with time reserved for a final response and
+  artifact flush.
+- Headless ATIF uses a stable trajectory ID and atomic in-progress checkpoints, and
+  cancellation preserves the latest valid trajectory.
+- Empty provider responses receive bounded retries; parallel tool calls retain
+  results that finish before the deadline.
+- Production automations now enforce concurrency and finalizer limits and apply
+  provider-specific exponential cooldowns after confirmed quota failures.
+
+Harbor job deduplication and final public upload remain publication-workflow
+responsibilities. The adapter documentation now keeps partial resumes local and
+uploads only after task-count, retry, reward, and ATIF validation.
+
 ## Run identity
 
 | Field | Value |

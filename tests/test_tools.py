@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -86,9 +87,11 @@ async def test_tool_registry_schema_duplicate_missing_and_execute(tmp_path: Path
         registry.get("missing")
 
 
-def test_builtin_registry_exposes_production_toolset(tmp_path: Path) -> None:
+def test_builtin_registry_exposes_production_toolset(monkeypatch, tmp_path: Path) -> None:
     from libre_claw.config import load_config
 
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
     registry = create_builtin_registry(load_config(working_directory=tmp_path))
     names = {schema["name"] for schema in registry.schemas()}
 
@@ -116,9 +119,59 @@ def test_builtin_registry_exposes_production_toolset(tmp_path: Path) -> None:
         "http_request",
         "schedule_list",
         "schedule",
-        "skills_search",
         "bash",
     }.issubset(names)
+    assert "skills_search" not in names
+
+
+def test_builtin_registry_filters_disabled_and_configured_tools(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from libre_claw.config import load_config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config(working_directory=tmp_path)
+    config = replace(
+        config,
+        agent=replace(
+            config.agent,
+            tool_allowlist=("read_file", "web_search", "schedule", "skills_search"),
+        ),
+        automations=replace(config.automations, enabled=False),
+        skills=replace(
+            config.skills,
+            enabled=True,
+            external_discovery_enabled=False,
+        ),
+        web_search=replace(config.web_search, enabled=False),
+    )
+
+    names = {schema["name"] for schema in create_builtin_registry(config).schemas()}
+
+    assert names == {"read_file"}
+
+
+def test_builtin_registry_honors_denylist_and_skills_discovery(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from libre_claw.config import load_config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config(working_directory=tmp_path)
+    config = replace(
+        config,
+        agent=replace(config.agent, tool_denylist=("bash",)),
+        skills=replace(config.skills, external_discovery_enabled=True),
+    )
+
+    names = {schema["name"] for schema in create_builtin_registry(config).schemas()}
+
+    assert "skills_search" in names
+    assert "bash" not in names
 
 
 async def test_read_file_with_offset_and_limit(tmp_path: Path) -> None:

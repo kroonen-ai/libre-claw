@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,8 +60,17 @@ async def run_headless(
     trajectory_path: Path | None = None,
     trajectory_agent_version: str | None = None,
     trajectory_reasoning_effort: str | None = None,
+    deadline_seconds: float | None = None,
+    deadline_reserve_seconds: float = 0.0,
 ) -> HeadlessRunResult:
     """Run one complete agent turn without a TUI or daemon."""
+    if deadline_seconds is not None and deadline_seconds <= 0:
+        raise ValueError("deadline_seconds must be greater than zero")
+    if deadline_reserve_seconds < 0:
+        raise ValueError("deadline_reserve_seconds must not be negative")
+    if deadline_seconds is not None and deadline_reserve_seconds >= deadline_seconds:
+        raise ValueError("deadline_reserve_seconds must be smaller than deadline_seconds")
+
     store = memory_store or MemoryStore()
     registry = tool_registry or create_builtin_registry(config, store)
     permissions = PermissionManager(config.permissions)
@@ -94,6 +106,7 @@ async def run_headless(
         max_tool_calls_per_turn=config.agent.max_tool_calls_per_turn,
         auto_compact_threshold=config.agent.auto_compact_threshold,
         context_window_tokens=config.agent.context_window_tokens,
+        compact_keep_last=config.agent.compact_keep_last,
         provider_retry_attempts=config.agent.provider_retry_attempts,
         provider_retry_initial_delay=config.agent.provider_retry_initial_delay,
         memory_facts=memory_facts,
@@ -105,25 +118,76 @@ async def run_headless(
             (fallback.label, fallback.provider) for fallback in fallback_providers
         ),
         fallback_recheck_after_attempts=config.fallback.recheck_after_attempts,
+        deadline_monotonic=(
+            time.monotonic() + deadline_seconds
+            if deadline_seconds is not None
+            else None
+        ),
+        deadline_reserve_seconds=deadline_reserve_seconds,
     )
 
     chunks: list[str] = []
     usage: Usage | None = None
     error: str | None = None
-    async for event in agent.run(user_message):
-        if isinstance(event, AgentTextDelta):
-            chunks.append(event.text)
-            if on_text is not None:
-                on_text(event.text)
-        elif isinstance(event, AgentPermissionRequest):
-            resolution = "always_allow_tool" if auto_approve else "deny"
-            if not event.future.done():
-                event.future.set_result(resolution)
-        elif isinstance(event, AgentDone):
-            usage = event.usage
-        elif isinstance(event, AgentError):
-            error = event.message
+    trajectory_id = f"libre-claw-{uuid.uuid4().hex}"
 
+    def checkpoint(checkpoint_error: str | None, *, strict: bool = True) -> None:
+        if trajectory_path is None:
+            return
+        if not isinstance(session, RecordingSession):
+            raise RuntimeError("ATIF export requires a recording session.")
+        try:
+            write_atif_trajectory(
+                trajectory_path,
+                session=session,
+                system_prompt=agent.resolved_system_prompt(),
+                agent_version=trajectory_agent_version or __version__,
+                model_name=config.general.default_model,
+                tool_schemas=registry.schemas(),
+                usage=usage,
+                error=checkpoint_error,
+                reasoning_effort=trajectory_reasoning_effort,
+                trajectory_id=trajectory_id,
+            )
+        except OSError:
+            if strict:
+                raise
+
+    if isinstance(session, RecordingSession):
+        session.set_checkpoint_callback(
+            lambda: checkpoint(
+                "Run is still in progress; this is the latest durable checkpoint.",
+                strict=False,
+            )
+        )
+        checkpoint(
+            "Run is still in progress; this is the latest durable checkpoint.",
+            strict=False,
+        )
+
+    try:
+        async for event in agent.run(user_message):
+            if isinstance(event, AgentTextDelta):
+                chunks.append(event.text)
+                if on_text is not None:
+                    on_text(event.text)
+            elif isinstance(event, AgentPermissionRequest):
+                resolution = "always_allow_tool" if auto_approve else "deny"
+                if not event.future.done():
+                    event.future.set_result(resolution)
+            elif isinstance(event, AgentDone):
+                usage = event.usage
+            elif isinstance(event, AgentError):
+                error = event.message
+    except asyncio.CancelledError:
+        checkpoint("Run was cancelled before completion.", strict=False)
+        raise
+    except Exception as exc:
+        checkpoint(f"Run stopped unexpectedly: {exc}", strict=False)
+        raise
+
+    if isinstance(session, RecordingSession):
+        session.set_checkpoint_callback(None)
     if trajectory_path is not None:
         if not isinstance(session, RecordingSession):
             raise RuntimeError("ATIF export requires a recording session.")
@@ -137,6 +201,7 @@ async def run_headless(
             usage=usage,
             error=error,
             reasoning_effort=trajectory_reasoning_effort,
+            trajectory_id=trajectory_id,
         )
 
     return HeadlessRunResult(text="".join(chunks).strip(), usage=usage, error=error)

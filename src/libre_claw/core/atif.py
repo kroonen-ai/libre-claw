@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -35,6 +35,10 @@ class RecordingSession(Session):
         super().__init__()
         self.started_at = _timestamp()
         self.recorded_messages: list[RecordedMessage] = []
+        self._checkpoint_callback: Callable[[], None] | None = None
+
+    def set_checkpoint_callback(self, callback: Callable[[], None] | None) -> None:
+        self._checkpoint_callback = callback
 
     def add_user_message(self, content: str, attachments: Sequence[UserAttachment] = ()) -> None:
         super().add_user_message(content, attachments=attachments)
@@ -60,6 +64,8 @@ class RecordingSession(Session):
         self.recorded_messages.append(
             RecordedMessage(message=deepcopy(self.messages[-1]), timestamp=_timestamp())
         )
+        if self._checkpoint_callback is not None:
+            self._checkpoint_callback()
 
 
 def write_atif_trajectory(
@@ -73,9 +79,10 @@ def write_atif_trajectory(
     usage: Usage | None,
     error: str | None,
     reasoning_effort: str | None = None,
+    trajectory_id: str | None = None,
 ) -> None:
     """Write one complete Libre Claw run in ATIF v1.7 format."""
-    trajectory_id = f"libre-claw-{uuid.uuid4().hex}"
+    trajectory_id = trajectory_id or f"libre-claw-{uuid.uuid4().hex}"
     steps = _trajectory_steps(
         session,
         system_prompt=system_prompt,

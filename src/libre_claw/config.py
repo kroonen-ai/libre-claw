@@ -40,8 +40,11 @@ class AgentConfig:
     max_tool_calls_per_turn: int
     auto_compact_threshold: float
     context_window_tokens: int
+    compact_keep_last: int
     provider_retry_attempts: int
     provider_retry_initial_delay: float
+    tool_allowlist: tuple[str, ...]
+    tool_denylist: tuple[str, ...]
     system_prompt: str
     system_prompt_extra: str
 
@@ -154,7 +157,13 @@ class AutomationsConfig:
     root: Path
     poll_interval: float
     max_due_per_tick: int
+    max_concurrent_runs: int
+    run_timeout_seconds: int
+    deadline_reserve_seconds: int
+    provider_cooldown_initial_seconds: int
+    provider_cooldown_max_seconds: int
     auto_approve_tools: tuple[str, ...]
+    finalizer_timeout_seconds: int
     finalizer_max_tokens: int
     finalizer_max_context_chars: int
 
@@ -519,18 +528,15 @@ def _load_default_config() -> ConfigTable:
             "max_tool_calls_per_turn": 50,
             "auto_compact_threshold": 0.8,
             "context_window_tokens": 200000,
+            "compact_keep_last": 8,
             "provider_retry_attempts": 2,
             "provider_retry_initial_delay": 1.0,
+            "tool_allowlist": [],
+            "tool_denylist": [],
             "system_prompt": (
                 "You are Libre Claw, an autonomous coding agent built by Kroonen AI "
                 "(https://kroonen.ai) running in the user's terminal.\n"
-                "You have access to tools for reading files, writing files, editing files, "
-                "listing directories, searching code, inspecting git, browsing web pages, "
-                "extracting browser data, running browser JavaScript, searching the web through SearXNG, "
-                "fetching HTTP URLs/APIs, "
-                "creating and updating Libre Claw schedules, "
-                "clicking and typing in browser pages, downloading browser files, "
-                "thinking through plans, and running shell commands.\n\n"
+                "When tools are enabled for a run, their exact names and schemas are supplied dynamically.\n\n"
                 "RULES:\n"
                 "- Always read before editing. Understand the codebase before making changes.\n"
                 "- Make minimal, surgical edits. Never rewrite entire files when a targeted fix suffices.\n"
@@ -538,12 +544,7 @@ def _load_default_config() -> ConfigTable:
                 "- If a task is ambiguous, make a reasonable assumption, proceed, and note the assumption.\n"
                 "- After making changes, verify them with available commands unless the user says otherwise.\n"
                 "- Never delete files or run destructive commands without explicit user approval.\n"
-                "- When you're done, summarize what you changed and why.\n\n"
-                "Current toolset: read_file, write_file, edit_file, list_directory, "
-                "glob, search_files, git_status, git_commit, think, browser_navigate, "
-                "browser_read, browser_extract, browser_execute, browser_dismiss_cookies, "
-                "browser_click, browser_type, browser_wait, browser_download, browser_screenshot, "
-                "web_search, http_request, schedule_list, schedule, skills_search, and bash."
+                "- When you're done, summarize what you changed and why."
             ),
             "system_prompt_extra": "",
         },
@@ -679,6 +680,11 @@ def _load_default_config() -> ConfigTable:
             "root": "~/.libre-claw/automations",
             "poll_interval": 30.0,
             "max_due_per_tick": 5,
+            "max_concurrent_runs": 2,
+            "run_timeout_seconds": 1800,
+            "deadline_reserve_seconds": 30,
+            "provider_cooldown_initial_seconds": 300,
+            "provider_cooldown_max_seconds": 21600,
             "auto_approve_tools": [
                 "bash",
                 "web_search",
@@ -692,6 +698,7 @@ def _load_default_config() -> ConfigTable:
                 "browser_screenshot",
                 "browser_extract",
             ],
+            "finalizer_timeout_seconds": 120,
             "finalizer_max_tokens": 3000,
             "finalizer_max_context_chars": 70000,
         },
@@ -996,8 +1003,11 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             max_tool_calls_per_turn=_int(agent, "max_tool_calls_per_turn"),
             auto_compact_threshold=_float(agent, "auto_compact_threshold"),
             context_window_tokens=_int(agent, "context_window_tokens"),
+            compact_keep_last=max(1, _int(agent, "compact_keep_last")),
             provider_retry_attempts=_int(agent, "provider_retry_attempts"),
             provider_retry_initial_delay=_float(agent, "provider_retry_initial_delay"),
+            tool_allowlist=tuple(_list(agent, "tool_allowlist", str)),
+            tool_denylist=tuple(_list(agent, "tool_denylist", str)),
             system_prompt=_str(agent, "system_prompt"),
             system_prompt_extra=_str(agent, "system_prompt_extra"),
         ),
@@ -1081,7 +1091,19 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             root=_path(automations, "root"),
             poll_interval=_float(automations, "poll_interval"),
             max_due_per_tick=_int(automations, "max_due_per_tick"),
+            max_concurrent_runs=max(1, _int(automations, "max_concurrent_runs")),
+            run_timeout_seconds=max(1, _int(automations, "run_timeout_seconds")),
+            deadline_reserve_seconds=max(0, _int(automations, "deadline_reserve_seconds")),
+            provider_cooldown_initial_seconds=max(
+                1, _int(automations, "provider_cooldown_initial_seconds")
+            ),
+            provider_cooldown_max_seconds=max(
+                1, _int(automations, "provider_cooldown_max_seconds")
+            ),
             auto_approve_tools=tuple(_list(automations, "auto_approve_tools", str)),
+            finalizer_timeout_seconds=max(
+                1, _int(automations, "finalizer_timeout_seconds")
+            ),
             finalizer_max_tokens=_int(automations, "finalizer_max_tokens"),
             finalizer_max_context_chars=_int(automations, "finalizer_max_context_chars"),
         ),

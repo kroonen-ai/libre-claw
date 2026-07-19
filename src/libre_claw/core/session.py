@@ -12,6 +12,7 @@ from typing import Any, Literal, TypeAlias, cast
 
 MessageRole: TypeAlias = Literal["user", "assistant"]
 ContentBlock: TypeAlias = dict[str, Any]
+DEFAULT_COMPACT_SUMMARY_MAX_CHARS = 12_000
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,11 @@ class Session:
         self.messages.clear()
         self.summary = None
 
-    def compact(self, keep_last: int = 8) -> str | None:
+    def compact(
+        self,
+        keep_last: int = 8,
+        max_summary_chars: int = DEFAULT_COMPACT_SUMMARY_MAX_CHARS,
+    ) -> str | None:
         if len(self.messages) <= keep_last:
             return self.summary
 
@@ -78,7 +83,7 @@ class Session:
         compacted = summarize_messages(older)
         if self.summary:
             compacted = self.summary + "\n" + compacted
-        self.summary = compacted
+        self.summary = _bounded_compact_summary(compacted, max_chars=max_summary_chars)
         self.messages = self.messages[-keep_last:]
         return self.summary
 
@@ -140,6 +145,17 @@ def summarize_messages(messages: list[ChatMessage]) -> str:
         if content:
             lines.append(f"{message.role}: {content[:500]}")
     return "\n".join(lines)
+
+
+def _bounded_compact_summary(summary: str, *, max_chars: int) -> str:
+    """Retain recent compacted context without letting repeated compaction grow forever."""
+    limit = max(1, max_chars)
+    if len(summary) <= limit:
+        return summary
+    marker = "[Earlier compacted context omitted]\n"
+    if limit <= len(marker):
+        return summary[-limit:]
+    return marker + summary[-(limit - len(marker)) :]
 
 
 def session_to_payload(session: Session) -> dict[str, Any]:

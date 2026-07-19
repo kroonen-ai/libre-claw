@@ -6,6 +6,12 @@ The adapter invokes the same provider, ReAct loop, permissions, and built-in
 tools as the TUI through `libre-claw run`; it does not replace the harness with
 a direct model client.
 
+The benchmark profile deliberately keeps only the coding tools needed by
+Terminal-Bench, compacts context earlier than an interactive session, allows
+long build/test commands, and writes atomic ATIF checkpoints throughout the
+run. Harbor instructions are piped over stdin, so task text beginning with a
+hyphen cannot be parsed as a Libre Claw option.
+
 ## Terminal-Bench
 
 Install Harbor in an isolated environment and expose the Ollama Cloud key only
@@ -56,6 +62,33 @@ Run the balanced three-task smoke sample used by the project:
 
 See [results/terminal-bench-2.1-glm-5.2-cloud-2026-07-18.md](results/terminal-bench-2.1-glm-5.2-cloud-2026-07-18.md)
 for the first recorded result.
+
+## Interrupted runs
+
+Keep interrupted or quota-limited jobs local. Resume the same job and rerun
+only the matching transient failures so completed trials remain intact:
+
+```bash
+export OLLAMA_API_KEY="..."
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+
+~/.cache/libre-claw/harbor-py313-venv/bin/harbor job resume \
+  --job-path jobs/<job-name> \
+  --filter-error-type ApiRateLimitError \
+  -y
+```
+
+Use the corresponding error type for verified transient setup or provider
+failures. Do not publish a partial job. After all expected tasks and attempts
+are present, inspect rewarded trajectories, confirm their ATIF files are valid,
+and only then upload the completed job:
+
+```bash
+~/.cache/libre-claw/harbor-py313-venv/bin/harbor upload \
+  --job-path jobs/<job-name> \
+  --public \
+  -y
+```
 
 Always record the Libre Claw commit, Harbor version, dataset version, task IDs,
 trial count, and model identifier alongside a score. A small sample is a smoke

@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import tomllib
+from pathlib import Path, PurePosixPath
 
 from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
+from harbor.constants import PACKAGE_CACHE_DIR
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
@@ -19,9 +22,18 @@ class LibreClawAgent(BaseInstalledAgent):
     _UV_PATH = "/opt/libre-claw-bin/uv"
     _VENV_PATH = "/opt/libre-claw-venv"
 
-    def __init__(self, reasoning_effort: str | None = "auto", *args, **kwargs) -> None:
+    def __init__(
+        self,
+        reasoning_effort: str | None = "auto",
+        agent_timeout_sec: float | None = None,
+        deadline_reserve_seconds: float = 60.0,
+        *args,
+        **kwargs,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._reasoning_effort = reasoning_effort
+        self._agent_timeout_sec = agent_timeout_sec
+        self._deadline_reserve_seconds = max(5.0, deadline_reserve_seconds)
 
     @staticmethod
     def name() -> str:
@@ -94,7 +106,21 @@ class LibreClawAgent(BaseInstalledAgent):
         if not api_key:
             raise ValueError("Set OLLAMA_API_KEY in the Harbor process environment.")
 
-        config_text = _benchmark_config(model)
+        outer_timeout = self._agent_timeout_sec or _task_agent_timeout(self.logs_dir)
+        deadline_seconds: float | None = None
+        deadline_reserve = 0.0
+        if outer_timeout is not None:
+            outer_reserve = min(
+                self._deadline_reserve_seconds,
+                max(5.0, outer_timeout * 0.1),
+            )
+            deadline_seconds = max(1.0, outer_timeout - outer_reserve)
+            deadline_reserve = min(15.0, max(1.0, deadline_seconds * 0.05))
+
+        command_timeout = 600
+        if deadline_seconds is not None:
+            command_timeout = max(30, min(600, int(deadline_seconds / 3)))
+        config_text = _benchmark_config(model, command_timeout=command_timeout)
         env = {
             "HARBOR_INSTRUCTION": instruction,
             "OLLAMA_API_KEY": api_key,
@@ -108,6 +134,16 @@ class LibreClawAgent(BaseInstalledAgent):
             trajectory_options += (
                 "--trajectory-reasoning-effort "
                 f"{shlex.quote(self._reasoning_effort)} "
+            )
+        deadline_options = ""
+        if deadline_seconds is not None:
+            deadline_options = (
+                f"--deadline-seconds {deadline_seconds:.3f} "
+                f"--deadline-reserve-seconds {deadline_reserve:.3f} "
+            )
+        else:
+            self.logger.warning(
+                "Could not resolve this task's Harbor timeout; internal deadline is disabled."
             )
         await self.exec_as_agent(
             environment,
@@ -123,39 +159,58 @@ class LibreClawAgent(BaseInstalledAgent):
         await self.exec_as_agent(
             environment,
             command=(
+                "set -o pipefail && printf '%s' \"$HARBOR_INSTRUCTION\" | "
                 f"{self._VENV_PATH}/bin/libre-claw "
                 "--config /tmp/libre-claw/config.toml "
                 "--working-directory . run --auto-approve "
+                f"{deadline_options}"
                 f"{trajectory_options}"
-                '"$HARBOR_INSTRUCTION" '
                 "2>&1 | stdbuf -oL tee /logs/agent/libre-claw.txt"
             ),
             env=env,
         )
 
 
-def _benchmark_config(model: str) -> str:
+def _benchmark_config(model: str, *, command_timeout: int = 600) -> str:
     benchmark_prompt = (
-        "You are running inside an isolated Terminal-Bench task container. "
-        "Work autonomously until the task is complete. Inspect the environment before acting, "
-        "use the available tools instead of merely describing commands, preserve unrelated files, "
-        "and verify the result. Do not wait for interactive approval."
+        "You are Libre Claw running an isolated Terminal-Bench task. Complete the requested "
+        "change in the current workspace. Inspect before editing, use the supplied coding tools, "
+        "preserve unrelated files, and verify the result. Avoid broad environment exploration, "
+        "unnecessary dependency installation, and repeated commands. Keep enough time to run a "
+        "focused verification and leave the workspace in its final state. Do not wait for approval."
     )
+    tool_allowlist = [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_directory",
+        "glob",
+        "search_files",
+        "git_status",
+        "think",
+        "bash",
+    ]
     return f"""[general]
 default_provider = "ollama"
 default_model = {json.dumps(model)}
 working_directory = "."
 
 [agent]
-max_tool_calls_per_turn = 250
-system_prompt_extra = {json.dumps(benchmark_prompt)}
+max_tool_calls_per_turn = 100
+auto_compact_threshold = 0.5
+compact_keep_last = 4
+provider_retry_attempts = 2
+provider_retry_initial_delay = 1.0
+tool_allowlist = {json.dumps(tool_allowlist)}
+system_prompt = {json.dumps(benchmark_prompt)}
+system_prompt_extra = ""
 
 [permissions]
 default_level = "allow"
 auto_approve_read = true
 
 [sandbox]
-command_timeout = 180
+command_timeout = {command_timeout}
 allow_sudo = true
 blocked_patterns = []
 restrict_to_working_dir = false
@@ -184,3 +239,54 @@ supports_tools = true
 tool_mode = "auto"
 think = "auto"
 """
+
+
+def _task_agent_timeout(logs_dir: Path) -> float | None:
+    """Read the task timeout Harbor resolved into its local package cache."""
+    try:
+        trial_dir = logs_dir.parent
+        trial_config = json.loads((trial_dir / "config.json").read_text(encoding="utf-8"))
+        if not isinstance(trial_config, dict):
+            return None
+        task = trial_config.get("task", {})
+        if not isinstance(task, dict):
+            return None
+        task_name = task.get("name")
+        task_ref = task.get("ref")
+        if not isinstance(task_name, str) or not isinstance(task_ref, str):
+            return None
+
+        task_name_path = PurePosixPath(task_name)
+        if task_name_path.is_absolute():
+            return None
+        parts = task_name_path.parts
+        if not parts or any(part in {"", ".", ".."} for part in parts):
+            return None
+        digest = task_ref.removeprefix("sha256:")
+        if not digest or "/" in digest or "\\" in digest:
+            return None
+
+        cache_root = PACKAGE_CACHE_DIR.resolve()
+        task_path = cache_root.joinpath(*parts, digest, "task.toml").resolve()
+        if not task_path.is_relative_to(cache_root):
+            return None
+        task_config = tomllib.loads(task_path.read_text(encoding="utf-8"))
+        agent_config = task_config.get("agent", {})
+        if not isinstance(agent_config, dict):
+            return None
+        timeout = agent_config.get("timeout_sec")
+        if not isinstance(timeout, int | float) or timeout <= 0:
+            return None
+
+        multiplier = 1.0
+        lock_path = trial_dir / "lock.json"
+        if lock_path.exists():
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            if not isinstance(lock, dict):
+                return None
+            configured_multiplier = lock.get("timeout_multiplier")
+            if isinstance(configured_multiplier, int | float) and configured_multiplier > 0:
+                multiplier = float(configured_multiplier)
+        return float(timeout) * multiplier
+    except (OSError, json.JSONDecodeError, tomllib.TOMLDecodeError, TypeError, ValueError):
+        return None

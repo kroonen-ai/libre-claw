@@ -213,6 +213,18 @@ def chat_command(ctx: click.Context, mouse: bool | None, inline: bool | None) ->
 )
 @click.option("--trajectory-agent-version", default=None, hidden=True)
 @click.option("--trajectory-reasoning-effort", default=None, hidden=True)
+@click.option(
+    "--deadline-seconds",
+    type=click.FloatRange(min=0.0, min_open=True),
+    default=None,
+    help="Stop the agent before this noninteractive run exceeds the given duration.",
+)
+@click.option(
+    "--deadline-reserve-seconds",
+    type=click.FloatRange(min=0.0),
+    default=0.0,
+    hidden=True,
+)
 @click.pass_context
 def run_command(
     ctx: click.Context,
@@ -222,6 +234,8 @@ def run_command(
     trajectory_path: Path | None,
     trajectory_agent_version: str | None,
     trajectory_reasoning_effort: str | None,
+    deadline_seconds: float | None,
+    deadline_reserve_seconds: float,
 ) -> None:
     """Run one complete agent turn without opening the TUI."""
     prompt = message if message is not None else sys.stdin.read()
@@ -246,6 +260,8 @@ def run_command(
             trajectory_path=trajectory_path,
             trajectory_agent_version=trajectory_agent_version,
             trajectory_reasoning_effort=trajectory_reasoning_effort,
+            deadline_seconds=deadline_seconds,
+            deadline_reserve_seconds=deadline_reserve_seconds,
         )
     )
     if wrote_text:

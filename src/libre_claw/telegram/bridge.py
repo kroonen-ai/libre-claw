@@ -588,6 +588,7 @@ class TelegramBridge:
             max_tool_calls_per_turn=self.config.agent.max_tool_calls_per_turn,
             auto_compact_threshold=self.config.agent.auto_compact_threshold,
             context_window_tokens=self.config.agent.context_window_tokens,
+            compact_keep_last=self.config.agent.compact_keep_last,
             provider_retry_attempts=self.config.agent.provider_retry_attempts,
             provider_retry_initial_delay=self.config.agent.provider_retry_initial_delay,
             memory_facts=self._memory_facts,

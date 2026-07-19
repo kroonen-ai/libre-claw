@@ -39,8 +39,11 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.auth.keyring_service == "libre-claw"
     assert config.auth.token_ttl_seconds == 3600
     assert config.agent.context_window_tokens == 200000
+    assert config.agent.compact_keep_last == 8
     assert config.agent.provider_retry_attempts == 2
     assert config.agent.provider_retry_initial_delay == 1.0
+    assert config.agent.tool_allowlist == ()
+    assert config.agent.tool_denylist == ()
     assert config.fallback.recheck_after_attempts == 3
     assert config.goal.max_turns == 20
     assert config.goal.judge_provider == "current"
@@ -71,6 +74,12 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.automations.root == tmp_path / ".libre-claw" / "automations"
     assert config.automations.poll_interval == 30.0
     assert config.automations.max_due_per_tick == 5
+    assert config.automations.max_concurrent_runs == 2
+    assert config.automations.run_timeout_seconds == 1800
+    assert config.automations.deadline_reserve_seconds == 30
+    assert config.automations.provider_cooldown_initial_seconds == 300
+    assert config.automations.provider_cooldown_max_seconds == 21600
+    assert config.automations.finalizer_timeout_seconds == 120
     assert "bash" in config.automations.auto_approve_tools
     assert "web_search" in config.automations.auto_approve_tools
     assert "write_file" not in config.automations.auto_approve_tools
@@ -118,14 +127,8 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.mcp.allowlist == ()
     assert config.mcp.permission_level == "ask"
     assert "built by Kroonen AI (https://kroonen.ai)" in config.agent.system_prompt
-    assert "search_files" in config.agent.system_prompt
-    assert "browser_download" in config.agent.system_prompt
-    assert "browser_execute" in config.agent.system_prompt
-    assert "web_search" in config.agent.system_prompt
-    assert "http_request" in config.agent.system_prompt
-    assert "schedule_list" in config.agent.system_prompt
-    assert "schedule" in config.agent.system_prompt
-    assert "skills_search" in config.agent.system_prompt
+    assert "exact names and schemas are supplied dynamically" in config.agent.system_prompt
+    assert "Current toolset:" not in config.agent.system_prompt
     assert config.agent.system_prompt_extra == ""
     assert "curl | bash" in config.sandbox.blocked_patterns
     assert config.providers["openrouter"]["api_key_env"] == "OPENROUTER_API_KEY"

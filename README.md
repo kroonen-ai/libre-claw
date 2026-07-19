@@ -491,6 +491,13 @@ cron entries, so they stay portable across TUI, dashboard, and Telegram.
 Use an IANA timezone suffix such as `@ America/Montreal` for location-specific
 jobs; otherwise schedules use the daemon's local timezone.
 
+Scheduled runs are bounded by the `[automations]` settings in
+`~/.libre-claw/config.toml`. Libre Claw limits concurrent runs, preserves time
+for a final response, gives partial-report finalization its own timeout, and
+backs off a provider after confirmed quota or rate-limit failures. Adjust
+`max_concurrent_runs`, `run_timeout_seconds`, `deadline_reserve_seconds`, and
+the provider cooldown values when operating under tighter service limits.
+
 Start lightweight periodic check-ins:
 
 ```text

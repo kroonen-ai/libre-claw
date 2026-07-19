@@ -17,11 +17,14 @@ log_level = "info"
 max_tool_calls_per_turn = 50
 auto_compact_threshold = 0.8
 context_window_tokens = 200000
+compact_keep_last = 8
 provider_retry_attempts = 2
 provider_retry_initial_delay = 1.0
+tool_allowlist = [] # empty means all feature-enabled tools
+tool_denylist = []
 system_prompt = """
 You are Libre Claw, an autonomous coding agent built by Kroonen AI (https://kroonen.ai) running in the user's terminal.
-You have access to tools for reading files, writing files, editing files, listing directories, searching code, inspecting git, browsing web pages, extracting browser data, running browser JavaScript, searching the web through SearXNG, fetching HTTP URLs/APIs, creating and updating Libre Claw schedules, thinking through plans, and running shell commands.
+When tools are enabled for a run, their exact names and schemas are supplied dynamically.
 
 RULES:
 - Always read before editing. Understand the codebase before making changes.
@@ -31,8 +34,6 @@ RULES:
 - After making changes, verify them with available commands unless the user says otherwise.
 - Never delete files or run destructive commands without explicit user approval.
 - When you're done, summarize what you changed and why.
-
-Current toolset: read_file, write_file, edit_file, list_directory, glob, search_files, git_status, git_commit, think, browser_navigate, browser_read, browser_extract, browser_execute, browser_dismiss_cookies, browser_click, browser_type, browser_wait, browser_download, browser_screenshot, web_search, http_request, schedule_list, schedule, skills_search, and bash.
 """
 system_prompt_extra = ""
 # Persona customization is loaded from ~/.libre-claw/SOUL.md,
@@ -194,6 +195,11 @@ enabled = true
 root = "~/.libre-claw/automations"
 poll_interval = 30.0
 max_due_per_tick = 5
+max_concurrent_runs = 2
+run_timeout_seconds = 1800
+deadline_reserve_seconds = 30
+provider_cooldown_initial_seconds = 300
+provider_cooldown_max_seconds = 21600
 auto_approve_tools = [
   "bash",
   "web_search",
@@ -207,6 +213,7 @@ auto_approve_tools = [
   "browser_screenshot",
   "browser_extract",
 ]
+finalizer_timeout_seconds = 120
 finalizer_max_tokens = 3000
 finalizer_max_context_chars = 70000
 

@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
+
+import pytest
 
 from libre_claw.config import load_config
 from libre_claw.core.memory import MemoryStore
@@ -48,6 +51,26 @@ class AskEchoTool(BaseTool):
 
     async def execute(self, value: str) -> ToolResult:
         return ToolResult(content=f"echo:{value}")
+
+
+class BlockingProvider(LLMProvider):
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def complete(
+        self,
+        messages,
+        tools: Sequence[ToolSchema] | None = None,
+        system: str | None = None,
+        stream: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        del messages, tools, system, stream, temperature, max_tokens
+        self.started.set()
+        await asyncio.Event().wait()
+        if False:
+            yield Done()
 
 
 async def test_headless_run_streams_and_accumulates_text(monkeypatch, tmp_path) -> None:
@@ -121,3 +144,56 @@ async def test_headless_run_writes_atif_trajectory(monkeypatch, tmp_path) -> Non
     assert payload["steps"][-1]["message"] == "done"
     assert payload["steps"][-1]["reasoning_effort"] == "auto"
     assert payload["final_metrics"]["total_prompt_tokens"] == 9
+
+
+async def test_headless_cancel_preserves_latest_atif_checkpoint(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    provider = BlockingProvider()
+    trajectory_path = tmp_path / "logs" / "agent" / "trajectory.json"
+    task = asyncio.create_task(
+        run_headless(
+            load_config(working_directory=tmp_path),
+            "Keep this instruction",
+            provider=provider,
+            tool_registry=ToolRegistry(),
+            memory_store=MemoryStore(tmp_path / "memory.db"),
+            trajectory_path=trajectory_path,
+        )
+    )
+
+    await asyncio.wait_for(provider.started.wait(), timeout=1)
+    checkpoint = json.loads(trajectory_path.read_text(encoding="utf-8"))
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    cancelled = json.loads(trajectory_path.read_text(encoding="utf-8"))
+
+    assert checkpoint["trajectory_id"] == cancelled["trajectory_id"]
+    assert cancelled["extra"]["completed"] is False
+    assert "cancelled" in cancelled["extra"]["error"].lower()
+    assert any(step.get("message") == "Keep this instruction" for step in cancelled["steps"])
+
+
+async def test_headless_deadline_finishes_atif_before_outer_cancellation(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    trajectory_path = tmp_path / "logs" / "agent" / "trajectory.json"
+
+    result = await asyncio.wait_for(
+        run_headless(
+            load_config(working_directory=tmp_path),
+            "Keep this instruction",
+            provider=BlockingProvider(),
+            tool_registry=ToolRegistry(),
+            memory_store=MemoryStore(tmp_path / "memory.db"),
+            trajectory_path=trajectory_path,
+            deadline_seconds=0.1,
+            deadline_reserve_seconds=0.02,
+        ),
+        timeout=0.5,
+    )
+
+    payload = json.loads(trajectory_path.read_text(encoding="utf-8"))
+    assert result.error == "Run deadline reached before a final response was produced."
+    assert payload["extra"]["completed"] is False
+    assert payload["extra"]["error"] == result.error
+    assert any(step.get("message") == "Keep this instruction" for step in payload["steps"])
