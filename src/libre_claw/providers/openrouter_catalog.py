@@ -146,9 +146,19 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "MiniMax M3 coding, agentic, and productivity preset through OpenRouter.",
     ),
     OpenRouterModelPreset(
+        "google/gemini-3.6-flash",
+        "Gemini 3.6 Flash",
+        "Google high-efficiency multimodal preset for coding, agentic workflows, and app development.",
+    ),
+    OpenRouterModelPreset(
         "google/gemini-3.5-flash",
         "Gemini 3.5 Flash",
         "Google fast multimodal/general preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
+        "google/gemini-3.5-flash-lite",
+        "Gemini 3.5 Flash-Lite",
+        "Google efficient multimodal preset for focused tasks and multi-agent subagents.",
     ),
     OpenRouterModelPreset(
         "openai/gpt-5.5",

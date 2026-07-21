@@ -118,7 +118,8 @@ First shippable Libre Claw release, built by Kroonen AI.
   `deepseek/deepseek-v4-flash`, `sakana/fugu-ultra`, `qwen/qwen3.7-max`,
   `moonshotai/kimi-k3`, `moonshotai/kimi-k2.6`,
   `moonshotai/kimi-k2.7-code`, `z-ai/glm-5.2`,
-  `minimax/minimax-m3`,
+  `minimax/minimax-m3`, `google/gemini-3.6-flash`,
+  `google/gemini-3.5-flash-lite`,
   `nvidia/nemotron-3-ultra-550b-a55b:free`,
   `anthropic/claude-sonnet-5`, `anthropic/claude-opus-4.8`, and `openai/gpt-5.5`.
 - Ordered provider fallback slots are configurable from TUI and Telegram with

@@ -184,6 +184,8 @@ Key lookup order:
 /model openrouter:moonshotai/kimi-k2.7-code --global
 /model openrouter:z-ai/glm-5.2 --global
 /model openrouter:minimax/minimax-m3 --global
+/model openrouter:google/gemini-3.6-flash --global
+/model openrouter:google/gemini-3.5-flash-lite --global
 /model openrouter:anthropic/claude-sonnet-5 --global
 /model openrouter:nvidia/nemotron-3-ultra-550b-a55b:free --global
 /model ollama:glm-5.2:cloud --global
