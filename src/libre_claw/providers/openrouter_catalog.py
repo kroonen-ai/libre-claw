@@ -70,6 +70,16 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Sakana multi-agent orchestration model for complex reasoning, coding, and agentic workflows.",
     ),
     OpenRouterModelPreset(
+        "poolside/laguna-s-2.1",
+        "Laguna S 2.1",
+        "Poolside coding-agent preset for long-context software engineering workflows.",
+    ),
+    OpenRouterModelPreset(
+        "poolside/laguna-s-2.1:free",
+        "Laguna S 2.1 Free",
+        "Free-tier Poolside coding-agent preset for long-context software engineering workflows.",
+    ),
+    OpenRouterModelPreset(
         "qwen/qwen3.7-max",
         "Qwen3.7 Max",
         "Primary high-capacity coding preset.",

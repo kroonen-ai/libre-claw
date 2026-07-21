@@ -135,6 +135,8 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "openai/gpt-5.6-luna",
         "openai/gpt-5.6-luna-pro",
         "sakana/fugu-ultra",
+        "poolside/laguna-s-2.1",
+        "poolside/laguna-s-2.1:free",
         "qwen/qwen3.7-max",
         "qwen/qwen3.7-plus",
         "deepseek/deepseek-v4-pro",

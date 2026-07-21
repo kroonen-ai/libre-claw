@@ -730,6 +730,8 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
     )
     assert any("MiniMax M3" in button.text for row in model_keyboard.inline_keyboard for button in row)
     assert any("Kimi K3" in button.text for row in model_keyboard.inline_keyboard for button in row)
+    assert any("Laguna S 2.1" in button.text for row in model_keyboard.inline_keyboard for button in row)
+    assert any("Laguna S 2.1 Free" in button.text for row in model_keyboard.inline_keyboard for button in row)
     assert any("Gemini 3.6 Flash" in button.text for row in model_keyboard.inline_keyboard for button in row)
     assert any("Gemini 3.5 Flash-Lite" in button.text for row in model_keyboard.inline_keyboard for button in row)
     assert any(
