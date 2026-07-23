@@ -565,6 +565,15 @@ def _load_default_config() -> ConfigTable:
                 "default_model": "openrouter/auto",
                 "max_tokens": 16384,
             },
+            "moonshot": {
+                "api_key_env": "MOONSHOT_API_KEY",
+                "base_url": "https://api.moonshot.ai/v1",
+                "default_model": "kimi-k3",
+                "max_tokens": 131072,
+                "reasoning_effort": "max",
+                "thinking": "auto",
+                "auto_context_window": True,
+            },
             "codex": {
                 "default_model": "gpt-5.5",
                 "executable": "codex",

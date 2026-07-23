@@ -28,6 +28,7 @@ from libre_claw.core.soul import SoulStore
 from libre_claw.core.tools import ToolRegistry
 from libre_claw.providers.base import LLMProvider, Usage
 from libre_claw.providers.factory import create_fallback_providers, create_provider
+from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.tools_builtin import create_builtin_registry
 
 
@@ -70,6 +71,9 @@ async def run_headless(
         raise ValueError("deadline_reserve_seconds must not be negative")
     if deadline_seconds is not None and deadline_reserve_seconds >= deadline_seconds:
         raise ValueError("deadline_reserve_seconds must be smaller than deadline_seconds")
+
+    if config.general.default_provider.lower() == "moonshot":
+        config = apply_moonshot_model_limits(config)
 
     store = memory_store or MemoryStore()
     registry = tool_registry or create_builtin_registry(config, store)

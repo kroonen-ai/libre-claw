@@ -53,6 +53,7 @@ from libre_claw.providers import (
     create_fallback_providers,
     create_provider,
 )
+from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.tools_builtin import create_builtin_registry
 
@@ -601,7 +602,10 @@ class TelegramBridge:
         )
 
     async def _with_openrouter_model_limits(self, config: LibreClawConfig) -> LibreClawConfig:
-        if config.general.default_provider.lower() != "openrouter":
+        provider = config.general.default_provider.lower()
+        if provider == "moonshot":
+            return apply_moonshot_model_limits(config)
+        if provider != "openrouter":
             return config
         try:
             limits = await detect_openrouter_model_limits(config, model=config.general.default_model)
@@ -934,7 +938,7 @@ def _config_with_model_payload(config: LibreClawConfig, payload: Mapping[str, An
     providers: dict[str, Mapping[str, Any]] = {}
     for name, value in config.providers.items():
         providers[name] = dict(value) if isinstance(value, Mapping) else value
-    openrouter_config = dict(providers.get("openrouter", {}))
+    provider_config = dict(providers.get(provider, {}))
     for key in (
         "detected_context_window_tokens",
         "detected_max_completion_tokens",
@@ -943,13 +947,13 @@ def _config_with_model_payload(config: LibreClawConfig, payload: Mapping[str, An
     ):
         value = payload.get(key)
         if value not in (None, ""):
-            openrouter_config[key] = value
-    providers["openrouter"] = openrouter_config
+            provider_config[key] = value
+    providers[provider] = provider_config
     agent = config.agent
     context_window = _positive_int(payload.get("detected_context_window_tokens")) or _positive_int(
         payload.get("context_window_tokens")
     )
-    if provider == "openrouter" and context_window is not None:
+    if provider in {"openrouter", "moonshot"} and context_window is not None:
         agent = replace(agent, context_window_tokens=context_window)
     return replace(config, general=general, telegram=telegram, agent=agent, providers=providers)
 

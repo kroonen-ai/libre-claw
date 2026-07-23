@@ -16,6 +16,7 @@ from libre_claw.providers.base import (
     Done,
     LLMProvider,
     ProviderError,
+    ReasoningDelta,
     StreamEvent,
     TextDelta,
     ToolCallDelta,
@@ -100,16 +101,19 @@ class OpenAIProvider(LLMProvider):
             "model": self.model,
             "messages": self._format_messages(messages, system),
             "stream": True,
-            "stream_options": {"include_usage": True},
-            "max_completion_tokens": max_tokens or self.max_tokens,
+            self._max_tokens_field(): max_tokens or self.max_tokens,
         }
+        stream_options = self._stream_options()
+        if stream_options is not None:
+            request["stream_options"] = stream_options
         extra_body = self._extra_body()
         if extra_body:
             request["extra_body"] = extra_body
+        request.update(self._extra_request_parameters())
         if tools:
             request["tools"] = [self._format_tool_schema(tool) for tool in tools]
             request["tool_choice"] = "auto"
-        if _supports_temperature(self.model):
+        if self._supports_temperature():
             request["temperature"] = temperature
 
         accumulators: dict[int, _OpenAIToolAccumulator] = {}
@@ -120,19 +124,24 @@ class OpenAIProvider(LLMProvider):
         try:
             stream_response = await self._client.chat.completions.create(**request)
             async for chunk in stream_response:
-                usage = _usage_from(getattr(chunk, "usage", None), usage)
-                choices = getattr(chunk, "choices", None) or []
+                usage = _usage_from(_object_field(chunk, "usage"), usage)
+                choices = _object_field(chunk, "choices") or []
                 for choice in choices:
-                    delta = getattr(choice, "delta", None)
+                    usage = _usage_from(_object_field(choice, "usage"), usage)
+                    delta = _object_field(choice, "delta")
                     if delta is not None:
-                        content = getattr(delta, "content", None)
+                        reasoning = self._reasoning_delta(delta)
+                        if reasoning is not None:
+                            yield reasoning
+
+                        content = _object_field(delta, "content")
                         if content:
                             yield TextDelta(str(content))
 
                         for normalized in self._handle_tool_call_deltas(delta, accumulators):
                             yield normalized
 
-                    finish_reason = getattr(choice, "finish_reason", None)
+                    finish_reason = _object_field(choice, "finish_reason")
                     if finish_reason:
                         stop_reason = str(finish_reason)
                     if finish_reason == "tool_calls" and not finalized_tools:
@@ -160,7 +169,7 @@ class OpenAIProvider(LLMProvider):
 
         for message in messages:
             if message.role == "assistant":
-                formatted.append(_format_assistant_message(message.content))
+                formatted.append(self._format_assistant_message(message.content))
                 continue
 
             formatted.extend(_format_user_or_tool_messages(message.content))
@@ -179,6 +188,25 @@ class OpenAIProvider(LLMProvider):
 
     def _extra_body(self) -> dict[str, Any]:
         return {}
+
+    def _extra_request_parameters(self) -> dict[str, Any]:
+        return {}
+
+    def _format_assistant_message(self, blocks: Sequence[ContentBlock]) -> dict[str, Any]:
+        return _format_assistant_message(blocks)
+
+    def _max_tokens_field(self) -> str:
+        return "max_completion_tokens"
+
+    def _reasoning_delta(self, delta: Any) -> ReasoningDelta | None:
+        del delta
+        return None
+
+    def _stream_options(self) -> dict[str, Any] | None:
+        return {"include_usage": True}
+
+    def _supports_temperature(self) -> bool:
+        return _supports_temperature(self.model)
 
     def _handle_tool_call_deltas(
         self,
@@ -242,13 +270,20 @@ class OpenAIProvider(LLMProvider):
         return normalized
 
 
-def _format_assistant_message(blocks: Sequence[ContentBlock]) -> dict[str, Any]:
+def _format_assistant_message(
+    blocks: Sequence[ContentBlock],
+    *,
+    reasoning_provider: str | None = None,
+) -> dict[str, Any]:
     text_parts: list[str] = []
+    reasoning_parts: list[str] = []
     tool_calls: list[dict[str, Any]] = []
     for block in blocks:
         block_type = block.get("type")
         if block_type == "text":
             text_parts.append(str(block.get("text", "")))
+        if block_type == "provider_reasoning" and block.get("provider") == reasoning_provider:
+            reasoning_parts.append(str(block.get("text", "")))
         if block_type == "tool_use":
             tool_calls.append(
                 {
@@ -262,6 +297,8 @@ def _format_assistant_message(blocks: Sequence[ContentBlock]) -> dict[str, Any]:
             )
 
     message: dict[str, Any] = {"role": "assistant", "content": "\n".join(part for part in text_parts if part) or None}
+    if reasoning_parts:
+        message["reasoning_content"] = "".join(reasoning_parts)
     if tool_calls:
         message["tool_calls"] = tool_calls
     return message
@@ -347,6 +384,12 @@ def _get_usage_value(raw_usage: Any, key: str) -> Any:
     if isinstance(raw_usage, Mapping):
         return raw_usage.get(key)
     return getattr(raw_usage, key, None)
+
+
+def _object_field(value: Any, key: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return getattr(value, key, None)
 
 
 def _token_value(value: Any, fallback: int) -> int:

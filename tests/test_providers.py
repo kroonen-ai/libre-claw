@@ -19,6 +19,8 @@ from libre_claw.providers.ollama_catalog import (
     OLLAMA_MODEL_PRESETS,
 )
 from libre_claw.providers.ollama import OllamaProvider
+from libre_claw.providers.moonshot import MoonshotProvider
+from libre_claw.providers.moonshot_catalog import MOONSHOT_MODEL_PRESETS
 from libre_claw.providers.openai import OpenAIProvider
 from libre_claw.providers.openrouter import OpenRouterProvider
 from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
@@ -92,21 +94,25 @@ def test_ollama_cloud_presets_include_current_library_names() -> None:
     assert len(preset_names) == len(OLLAMA_MODEL_PRESETS)
 
 
-def test_codex_oauth_presets_include_current_cli_model_names() -> None:
+def test_codex_oauth_presets_match_official_codex_model_guide() -> None:
     preset_names = {preset.model for preset in CODEX_MODEL_PRESETS}
 
-    assert "gpt-5.6-sol" in preset_names
-    assert "gpt-5.6-sol-pro" in preset_names
-    assert "gpt-5.6-terra" in preset_names
-    assert "gpt-5.6-terra-pro" in preset_names
-    assert "gpt-5.6-luna" in preset_names
-    assert "gpt-5.6-luna-pro" in preset_names
-    assert "gpt-5.5" in preset_names
-    assert "gpt-5.4" in preset_names
-    assert "gpt-5.4-mini" in preset_names
-    assert "gpt-5.3-codex" in preset_names
-    assert "gpt-5.3-codex-spark" in preset_names
-    assert "gpt-5.2" in preset_names
+    assert preset_names == {
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.3-codex-spark",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+    }
+    assert not {
+        "gpt-5.6-sol-pro",
+        "gpt-5.6-terra-pro",
+        "gpt-5.6-luna-pro",
+        "gpt-5.3-codex",
+        "gpt-5.2",
+    } & preset_names
     assert "codex-auto-review" not in preset_names
 
 
@@ -167,9 +173,22 @@ def test_openrouter_presets_include_recommended_models() -> None:
     assert len(preset_names) == len(OPENROUTER_MODEL_PRESETS)
 
 
+def test_moonshot_presets_include_current_platform_models() -> None:
+    preset_names = {preset.model for preset in MOONSHOT_MODEL_PRESETS}
+
+    assert preset_names == {
+        "kimi-k3",
+        "kimi-k2.7-code",
+        "kimi-k2.7-code-highspeed",
+        "kimi-k2.6",
+    }
+    assert all(preset.vision for preset in MOONSHOT_MODEL_PRESETS)
+
+
 def test_provider_factory_fallback_models_match_public_defaults() -> None:
     assert _fallback_model("anthropic") == "claude-opus-4-8"
     assert _fallback_model("openrouter") == "openrouter/auto"
+    assert _fallback_model("moonshot") == "kimi-k3"
     assert _fallback_model("codex") == "gpt-5.5"
     assert _fallback_model("ollama") == "qwen3.6:27b"
 
@@ -259,6 +278,80 @@ def test_create_provider_supports_openrouter(monkeypatch, tmp_path: Path) -> Non
         "X-OpenRouter-Title": "Libre Claw",
         "X-OpenRouter-Categories": "cli-agent,personal-agent",
     }
+
+
+def test_create_provider_requires_moonshot_api_key(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[general]\ndefault_provider = \"moonshot\"\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+    config = load_config(config_path=config_path)
+
+    with pytest.raises(ProviderConfigurationError, match="MOONSHOT_API_KEY"):
+        create_provider(config)
+
+
+def test_create_provider_supports_moonshot(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[general]",
+                'default_provider = "moonshot"',
+                "",
+                "[providers.moonshot]",
+                'default_model = "kimi-k3"',
+                'base_url = "https://api.moonshot.ai/v1"',
+                "max_tokens = 32768",
+                'reasoning_effort = "high"',
+                'thinking = "auto"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config(config_path=config_path)
+
+    provider = create_provider(
+        config,
+        api_key_store=FakeApiKeyStore("moonshot-key"),  # type: ignore[arg-type]
+    )
+
+    assert isinstance(provider, MoonshotProvider)
+    assert provider.model == "kimi-k3"
+    assert provider.base_url == "https://api.moonshot.ai/v1"
+    assert provider.reasoning_effort == "high"
+
+
+def test_create_provider_rejects_disabled_thinking_for_kimi_k3(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[general]",
+                'default_provider = "moonshot"',
+                "",
+                "[providers.moonshot]",
+                'default_model = "kimi-k3"',
+                'thinking = "disabled"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config(config_path=config_path)
+
+    with pytest.raises(ProviderConfigurationError, match="requires thinking"):
+        create_provider(
+            config,
+            api_key_store=FakeApiKeyStore("moonshot-key"),  # type: ignore[arg-type]
+        )
 
 
 def test_create_provider_caps_openrouter_max_tokens_from_detected_metadata(monkeypatch, tmp_path: Path) -> None:

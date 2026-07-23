@@ -14,6 +14,11 @@ from libre_claw.providers.anthropic import AnthropicProvider
 from libre_claw.providers.base import LLMProvider, ProviderConfigurationError
 from libre_claw.providers.codex import CodexProvider
 from libre_claw.providers.local import OllamaThink
+from libre_claw.providers.moonshot import (
+    MoonshotProvider,
+    MoonshotReasoningEffort,
+    MoonshotThinking,
+)
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider
 from libre_claw.providers.openrouter import OpenRouterProvider
@@ -43,10 +48,17 @@ def create_provider(
     if model:
         provider_config = provider_config or {}
         provider_config["default_model"] = model
-    if resolved_provider_name not in {"anthropic", "openai", "openrouter", "ollama", "codex"}:
+    if resolved_provider_name not in {
+        "anthropic",
+        "openai",
+        "openrouter",
+        "moonshot",
+        "ollama",
+        "codex",
+    }:
         msg = (
             f"Provider '{resolved_provider_name}' is not supported. "
-            "Use 'anthropic', 'openai', 'openrouter', 'ollama', or 'codex'."
+            "Use 'anthropic', 'openai', 'openrouter', 'moonshot', 'ollama', or 'codex'."
         )
         raise ProviderConfigurationError(msg)
     if provider_config is None:
@@ -84,6 +96,27 @@ def create_provider(
                 model=resolved_model,
                 max_tokens=max_tokens,
                 base_url=_str_provider_value(provider_config, "base_url", "https://openrouter.ai/api/v1"),
+            )
+        if resolved_provider_name == "moonshot":
+            thinking = _moonshot_thinking_value(provider_config)
+            if thinking == "disabled" and (
+                resolved_model.lower().startswith("kimi-k3")
+                or resolved_model.lower().startswith("kimi-k2.7")
+            ):
+                raise ProviderConfigurationError(
+                    f"{resolved_model} requires thinking; set [providers.moonshot].thinking = 'auto'."
+                )
+            return MoonshotProvider(
+                api_key=api_key_lookup.value,
+                model=resolved_model,
+                max_tokens=max_tokens,
+                base_url=_str_provider_value(
+                    provider_config,
+                    "base_url",
+                    "https://api.moonshot.ai/v1",
+                ),
+                reasoning_effort=_moonshot_reasoning_effort(provider_config),
+                thinking=thinking,
             )
         return OpenAIProvider(api_key=api_key_lookup.value, model=resolved_model, max_tokens=max_tokens)
     except RuntimeError as exc:
@@ -233,11 +266,33 @@ def _provider_max_tokens(config: Mapping[str, Any]) -> int:
     return configured
 
 
+def _moonshot_reasoning_effort(
+    config: Mapping[str, Any],
+) -> MoonshotReasoningEffort:
+    value = _str_provider_value(config, "reasoning_effort", "max").lower()
+    if value not in {"low", "high", "max"}:
+        raise ProviderConfigurationError(
+            "[providers.moonshot].reasoning_effort must be 'low', 'high', or 'max'."
+        )
+    return value  # type: ignore[return-value]
+
+
+def _moonshot_thinking_value(config: Mapping[str, Any]) -> MoonshotThinking:
+    value = _str_provider_value(config, "thinking", "auto").lower()
+    if value not in {"auto", "enabled", "disabled"}:
+        raise ProviderConfigurationError(
+            "[providers.moonshot].thinking must be 'auto', 'enabled', or 'disabled'."
+        )
+    return value  # type: ignore[return-value]
+
+
 def _default_api_key_env(provider_name: str) -> str:
     if provider_name == "openrouter":
         return "OPENROUTER_API_KEY"
     if provider_name == "openai":
         return "OPENAI_API_KEY"
+    if provider_name == "moonshot":
+        return "MOONSHOT_API_KEY"
     return "ANTHROPIC_API_KEY"
 
 
@@ -246,6 +301,7 @@ def _provider_label(provider_name: str) -> str:
         "anthropic": "Anthropic",
         "openai": "OpenAI",
         "openrouter": "OpenRouter",
+        "moonshot": "Moonshot AI",
         "codex": "Codex",
     }
     return labels.get(provider_name, provider_name)
@@ -273,6 +329,8 @@ def _fallback_model(provider_name: str) -> str:
         return "gpt-4o"
     if provider_name == "openrouter":
         return "openrouter/auto"
+    if provider_name == "moonshot":
+        return "kimi-k3"
     if provider_name == "codex":
         return "gpt-5.5"
     if provider_name == "ollama":

@@ -57,7 +57,11 @@ Initial shippable Libre Claw release.
   `.libre-claw/skills/`, AgentSkills-style `SKILL.md` discovery, `/skills`
   management commands, and relevant skill injection across TUI, Telegram, and
   daemon agent runs.
-- Anthropic, OpenAI, OpenRouter, and Ollama providers. Defaults are `claude-opus-4-8`, `gpt-5.5`, and `qwen3.6:27b`; Anthropic direct API presets include `claude-sonnet-5`, and OpenRouter presets include `anthropic/claude-sonnet-5`.
+- Anthropic, OpenAI, OpenRouter, Moonshot AI, Ollama, and Codex providers.
+  Direct Moonshot Platform support includes current `kimi-k3`,
+  `kimi-k2.7-code`, `kimi-k2.7-code-highspeed`, and `kimi-k2.6` presets,
+  Kimi-specific token/thinking parameters, static published context limits,
+  vision input, and private reasoning continuity across tool calls.
 - Added OpenRouter usage accounting and recommended model presets for TUI,
   Telegram, and usage reports.
 - Added the `moonshotai/kimi-k3` OpenRouter preset to the shared TUI,

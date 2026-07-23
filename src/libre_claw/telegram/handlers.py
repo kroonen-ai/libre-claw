@@ -31,6 +31,7 @@ from libre_claw.core.permissions import PermissionResolution
 from libre_claw.core.session import UserAttachment
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
+from libre_claw.providers.moonshot_catalog import MOONSHOT_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
 from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
 from libre_claw.telegram.auth import TelegramAuth
@@ -119,6 +120,7 @@ TELEGRAM_PROVIDER_LABELS: dict[str, str] = {
     "anthropic": "Anthropic",
     "openai": "OpenAI API",
     "openrouter": "OpenRouter",
+    "moonshot": "Moonshot AI / Kimi",
     "ollama": "Ollama Cloud/Local",
     "codex": "OpenAI Codex",
 }
@@ -127,6 +129,10 @@ TELEGRAM_MODEL_PRESETS: dict[str, tuple[TelegramModelPreset, ...]] = {
     "ollama": tuple(TelegramModelPreset("ollama", preset.model, preset.label) for preset in OLLAMA_MODEL_PRESETS),
     "openrouter": (
         *(TelegramModelPreset("openrouter", preset.model, preset.label) for preset in OPENROUTER_MODEL_PRESETS),
+    ),
+    "moonshot": tuple(
+        TelegramModelPreset("moonshot", preset.model, preset.label)
+        for preset in MOONSHOT_MODEL_PRESETS
     ),
     "openai": (
         TelegramModelPreset("openai", "gpt-5.5", "GPT-5.5"),

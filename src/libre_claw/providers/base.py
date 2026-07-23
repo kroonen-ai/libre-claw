@@ -60,6 +60,14 @@ class TextDelta:
 
 
 @dataclass(frozen=True)
+class ReasoningDelta:
+    """Provider-private reasoning that must be retained across tool turns."""
+
+    text: str
+    provider: str
+
+
+@dataclass(frozen=True)
 class ToolCallStart:
     tool_call_id: str
     name: str
@@ -90,7 +98,15 @@ class ProviderError:
     message: str
 
 
-StreamEvent = TextDelta | ToolCallStart | ToolCallDelta | ToolCallReady | Done | ProviderError
+StreamEvent = (
+    TextDelta
+    | ReasoningDelta
+    | ToolCallStart
+    | ToolCallDelta
+    | ToolCallReady
+    | Done
+    | ProviderError
+)
 
 
 class LLMProvider(ABC):

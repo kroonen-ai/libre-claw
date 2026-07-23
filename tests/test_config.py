@@ -44,6 +44,10 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.agent.provider_retry_initial_delay == 1.0
     assert config.agent.tool_allowlist == ()
     assert config.agent.tool_denylist == ()
+    assert config.providers["moonshot"]["api_key_env"] == "MOONSHOT_API_KEY"
+    assert config.providers["moonshot"]["base_url"] == "https://api.moonshot.ai/v1"
+    assert config.providers["moonshot"]["default_model"] == "kimi-k3"
+    assert config.providers["moonshot"]["reasoning_effort"] == "max"
     assert config.fallback.recheck_after_attempts == 3
     assert config.goal.max_turns == 20
     assert config.goal.judge_provider == "current"

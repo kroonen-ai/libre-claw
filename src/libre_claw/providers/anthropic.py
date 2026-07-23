@@ -163,7 +163,11 @@ class AnthropicProvider(LLMProvider):
         return [
             {
                 "role": message.role,
-                "content": [_format_anthropic_block(block) for block in message.content],
+                "content": [
+                    _format_anthropic_block(block)
+                    for block in message.content
+                    if block.get("type") != "provider_reasoning"
+                ],
             }
             for message in messages
         ]

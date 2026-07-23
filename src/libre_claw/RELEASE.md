@@ -103,17 +103,23 @@ First shippable Libre Claw release, built by Kroonen AI.
 - File explorer hidden by default, with parent-directory navigation, agent
   working-directory sync, a visible `Hide` control, a left-side `Files` rail
   for restoring the sidebar, and `Ctrl+B` toggling.
-- Provider support for Anthropic, OpenAI, OpenRouter, Ollama, and Codex CLI
+- Provider support for Anthropic, OpenAI, OpenRouter, Moonshot AI, Ollama, and Codex CLI
   auth. Default model selections are `claude-opus-4-8`, `gpt-5.5`, and
   `qwen3.6:27b`, with Anthropic direct API presets updated to `claude-sonnet-5`,
   `claude-opus-4-8`, `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001`, plus expanded
   Ollama Cloud presets covering the current cloud library aliases such as
   `minimax-m3:cloud`, `kimi-k2.6:cloud`, `qwen3.5:cloud`,
   `gemma4:31b-cloud`, `glm-5.2:cloud`, `deepseek-v4-flash:cloud`, and `gpt-oss:120b`.
+- First-class Moonshot Platform support for `kimi-k3`, `kimi-k2.7-code`,
+  `kimi-k2.7-code-highspeed`, and `kimi-k2.6`, including direct API-key
+  setup, TUI/Telegram/dashboard selectors, schedules and fallbacks, published
+  context limits, vision input, model-specific thinking controls, and opaque
+  reasoning continuity across tool calls.
 - Codex/ChatGPT login can be started from inside the TUI with `/codex login`,
-  then used through `/provider codex` or `/model codex:gpt-5.5`, with Codex
-  OAuth picker presets for `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
-  `gpt-5.3-codex`, `gpt-5.3-codex-spark`, and `gpt-5.2`.
+  then used through `/provider codex` or `/model codex:gpt-5.6-sol`. The OAuth
+  picker follows OpenAI's current Codex model guide with `gpt-5.6-sol`,
+  `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.3-codex-spark`,
+  `gpt-5.4`, and `gpt-5.4-mini`; deprecated ChatGPT sign-in models are omitted.
 - OpenRouter support with usage accounting and a shared recommended model preset
   catalog for TUI, Telegram, and usage reports, including
   `deepseek/deepseek-v4-flash`, `sakana/fugu-ultra`,
