@@ -52,6 +52,7 @@ class ViewImageTool(BaseTool):
 
     async def execute(
         self,
+        *,
         path: str,
         frame: int = 0,
         max_dimension: int = DEFAULT_MAX_DIMENSION,

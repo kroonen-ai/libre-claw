@@ -165,7 +165,7 @@ async def test_headless_cancel_preserves_latest_atif_checkpoint(monkeypatch, tmp
     checkpoint = json.loads(trajectory_path.read_text(encoding="utf-8"))
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, timeout=1)
     cancelled = json.loads(trajectory_path.read_text(encoding="utf-8"))
 
     assert checkpoint["trajectory_id"] == cancelled["trajectory_id"]

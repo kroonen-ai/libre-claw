@@ -127,7 +127,7 @@ class DelayTool(BaseTool):
     required = ("value", "delay")
     permission_level = "allow"
 
-    async def execute(self, value: str, delay: float) -> ToolResult:
+    async def execute(self, *, value: str, delay: float) -> ToolResult:
         await asyncio.sleep(delay)
         return ToolResult(content=value)
 

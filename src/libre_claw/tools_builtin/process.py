@@ -11,7 +11,6 @@ import secrets
 import signal
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 from libre_claw.core.sandbox import SandboxViolation
 from libre_claw.core.tools import BaseTool, ToolResult, register_tool
@@ -199,6 +198,7 @@ class ProcessTool(BaseTool):
 
     async def execute(
         self,
+        *,
         action: str,
         command: str = "",
         session_id: str = "",
@@ -352,6 +352,7 @@ async def _monitor_process(session: _ProcessSession) -> None:
                     timeout=READER_DRAIN_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError:
+                # The group is already killed; reader cleanup below is bounded separately.
                 pass
 
         reader_task = session.reader_task
@@ -381,6 +382,7 @@ async def _monitor_process(session: _ProcessSession) -> None:
                     timeout=READER_DRAIN_TIMEOUT_SECONDS,
                 )
             except (asyncio.CancelledError, asyncio.TimeoutError, OSError):
+                # Cleanup is best-effort; the original cancellation must still propagate.
                 pass
         reader_task = session.reader_task
         if reader_task is not None and not reader_task.done():
@@ -574,6 +576,7 @@ def _kill_active_processes_at_exit() -> None:
             else:
                 os.killpg(process_group, signal.SIGKILL)
         except (ProcessLookupError, OSError):
+            # Processes can exit during interpreter teardown; atexit cleanup must not raise.
             pass
 
 

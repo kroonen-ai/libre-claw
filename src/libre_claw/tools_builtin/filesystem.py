@@ -304,7 +304,7 @@ class ApplyPatchTool(BaseTool):
     required = ("edits",)
     permission_level = "ask"
 
-    async def execute(self, edits: list[dict[str, Any]]) -> ToolResult:
+    async def execute(self, *, edits: list[dict[str, Any]]) -> ToolResult:
         try:
             outcome = await asyncio.to_thread(self._apply, edits)
         except Exception as exc:

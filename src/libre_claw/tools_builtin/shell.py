@@ -136,6 +136,7 @@ class BashTool(BaseTool):
                         timeout=READER_DRAIN_TIMEOUT_SECONDS,
                     )
                 except asyncio.TimeoutError:
+                    # The group is terminated; reader-task cleanup below is bounded separately.
                     pass
                 await _finish_reader_tasks(process, stdout_task, stderr_task)
                 return _timeout_result(
