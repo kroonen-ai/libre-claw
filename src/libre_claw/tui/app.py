@@ -5268,8 +5268,10 @@ def _provider_help_text(config: LibreClawConfig) -> str:
     provider = _canonical_tui_provider(config.general.default_provider)
     lines = [
         f"Current provider: {provider}",
-        "Use `/provider anthropic|openai|openrouter|moonshot|ollama|codex`, "
-        "or use `/model <provider>:<name>` to switch both.",
+        (
+            "Use `/provider anthropic|openai|openrouter|moonshot|ollama|codex`, "
+            + "or use `/model <provider>:<name>` to switch both."
+        ),
         "For Codex/ChatGPT auth, run `/codex login` then `/provider codex`.",
     ]
     return "\n".join(lines)
