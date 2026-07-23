@@ -122,6 +122,12 @@ from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
+from libre_claw.updater import (
+    UpdateError,
+    libre_claw_checkout_path,
+    update_checkout,
+    update_result_text,
+)
 
 
 TranscriptRole = Literal["startup", "user", "assistant", "system", "tool", "permission", "file", "attachment"]
@@ -257,6 +263,7 @@ class ProcessCapture:
 SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/help", "/help", "Show available commands"),
     SlashCommand("/status", "/status", "Show model, context, token, cost, and daemon status"),
+    SlashCommand("/update", "/update [--dry-run]", "Safely update Libre Claw from origin/main"),
     SlashCommand("/clear", "/clear", "Clear transcript and session history"),
     SlashCommand("/new", "/new", "Start a fresh TUI session"),
     SlashCommand("/restart", "/restart", "Start a fresh TUI session"),
@@ -1383,6 +1390,9 @@ class LibreClawApp(App[None]):
         if command == "/status":
             self._append_system(await self._status_report_text())
             return
+        if command == "/update":
+            await self._handle_update_command(argument)
+            return
         if command == "/cost":
             self._append_system(self._cost_text())
             return
@@ -1475,6 +1485,30 @@ class LibreClawApp(App[None]):
             return
 
         self._append_system(f"Unknown command: {command}")
+
+    async def _handle_update_command(self, argument: str) -> None:
+        normalized = argument.strip().lower()
+        if normalized not in {"", "--dry-run"}:
+            self._append_system("Usage: /update [--dry-run]")
+            return
+        dry_run = normalized == "--dry-run"
+        self._append_system("Checking origin/main for Libre Claw updates...")
+        try:
+            result = await asyncio.to_thread(
+                update_checkout,
+                libre_claw_checkout_path(),
+                dry_run=dry_run,
+            )
+        except (UpdateError, OSError) as exc:
+            self._append_system(f"Update failed: {exc}")
+            return
+        self._append_system(
+            update_result_text(
+                result,
+                apply_command="/update",
+                restart_hint="Exit and restart Libre Claw to load the updated code.",
+            )
+        )
 
     async def _handle_petdex_command(self, argument: str) -> None:
         parts = argument.split(maxsplit=2)
@@ -4308,6 +4342,15 @@ class LibreClawApp(App[None]):
 
     def _slash_argument_suggestions(self, text: str) -> list[SlashCommand]:
         lowered = text.lower()
+        if lowered.startswith("/update "):
+            query = lowered.removeprefix("/update ").strip()
+            suggestion = SlashCommand(
+                "/update --dry-run",
+                "/update --dry-run",
+                "Check origin/main without changing files",
+            )
+            return [suggestion] if not query or "--dry-run".startswith(query) else []
+
         if lowered.startswith("/provider "):
             query = lowered.removeprefix("/provider ").strip()
             return [

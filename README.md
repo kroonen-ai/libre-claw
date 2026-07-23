@@ -83,6 +83,10 @@ The updater fetches `origin/main`, compares commits, writes a backup under
 to pull over uncommitted changes; use `libre-claw update --dry-run` to check
 first.
 
+The same updater is available as `/update` in the TUI and authorized Telegram
+chats. Use `/update --dry-run` to check only. After an update, restart the TUI
+or run `/restart` in Telegram to load the new code.
+
 Optional Petdex companion integration:
 
 ```toml

@@ -8,9 +8,10 @@ a direct model client.
 
 The benchmark profile deliberately keeps only the coding tools needed by
 Terminal-Bench, compacts context earlier than an interactive session, allows
-long build/test commands, and writes atomic ATIF checkpoints throughout the
-run. Harbor instructions are piped over stdin, so task text beginning with a
-hyphen cannot be parsed as a Libre Claw option.
+long build/test commands, offers validated multi-file patches and managed
+process sessions, and writes atomic ATIF checkpoints throughout the run.
+Harbor instructions are piped over stdin, so task text beginning with a hyphen
+cannot be parsed as a Libre Claw option.
 
 ## Terminal-Bench
 

@@ -49,6 +49,10 @@ The updater fetches `origin/main`, writes a backup under
 `~/.libre-claw/backups/updates/`, and only applies a clean fast-forward. Use
 `libre-claw update --dry-run` to check first without changing files.
 
+From the TUI or an authorized Telegram chat, use `/update --dry-run` to check
+and `/update` to apply. Restart the TUI afterward, or run `/restart` in
+Telegram, to load the new code.
+
 ## 3. Set up a provider
 
 Inside the TUI:

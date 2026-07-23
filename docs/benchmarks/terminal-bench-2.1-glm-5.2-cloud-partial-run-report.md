@@ -56,6 +56,17 @@ The follow-up harness pass implements the code-level remediations identified her
   cancellation preserves the latest valid trajectory.
 - Empty provider responses receive bounded retries; parallel tool calls retain
   results that finish before the deadline.
+- The focused coding profile now includes validated batched patches and managed
+  long-running/interactive process sessions without restoring the unrelated
+  production schemas removed from benchmark requests.
+- Shell capture retains both the beginning and diagnostic tail of large output,
+  returns partial output on timeout, and terminates inherited-pipe descendants
+  without hanging the agent. Context compaction retains bounded tool arguments
+  and result findings instead of reducing them to opaque call IDs.
+- Production also exposes the new process and patch tools plus a read-only
+  `view_image` tool that returns bounded visual previews to vision-capable
+  providers. The current benchmark profile does not advertise that visual
+  schema.
 - Production automations now enforce concurrency and finalizer limits and apply
   provider-specific exponential cooldowns after confirmed quota failures.
 

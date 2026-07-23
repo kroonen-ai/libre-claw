@@ -8,7 +8,10 @@ import difflib
 import os
 import stat
 import tempfile
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from libre_claw.core.tools import BaseTool, ToolResult, register_tool
 
@@ -16,6 +19,8 @@ from libre_claw.core.tools import BaseTool, ToolResult, register_tool
 MAX_READ_LINES = 2000
 MAX_LIST_DEPTH = 8
 MAX_LIST_ENTRIES = 1000
+MAX_PATCH_EDITS = 50
+MAX_PATCH_DIFF_CHARS = 20_000
 
 
 @register_tool
@@ -243,6 +248,248 @@ class EditFileTool(BaseTool):
         )
 
 
+@dataclass(frozen=True)
+class _PatchChange:
+    path: Path
+    before: str
+    after: str
+    created: bool
+    replacements: int
+
+
+@dataclass(frozen=True)
+class _PatchOutcome:
+    result: ToolResult
+    changes: tuple[_PatchChange, ...] = ()
+
+
+@register_tool
+class ApplyPatchTool(BaseTool):
+    name = "apply_patch"
+    description = (
+        "Apply a validated batch of exact text replacements across UTF-8 files. "
+        "All edits are checked before writing; use create_if_missing with empty old_text for new files."
+    )
+    parameters = {
+        "edits": {
+            "type": "array",
+            "description": f"Ordered exact-text edits, capped at {MAX_PATCH_EDITS}",
+            "minItems": 1,
+            "maxItems": MAX_PATCH_EDITS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute or relative file path"},
+                    "old_text": {"type": "string", "description": "Exact text to replace"},
+                    "new_text": {"type": "string", "description": "Replacement text"},
+                    "occurrence": {
+                        "type": "integer",
+                        "description": "1-based occurrence; omit to require exactly one match",
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace every occurrence",
+                        "default": False,
+                    },
+                    "create_if_missing": {
+                        "type": "boolean",
+                        "description": "Create a missing file; requires old_text to be empty",
+                        "default": False,
+                    },
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+        }
+    }
+    required = ("edits",)
+    permission_level = "ask"
+
+    async def execute(self, edits: list[dict[str, Any]]) -> ToolResult:
+        try:
+            outcome = await asyncio.to_thread(self._apply, edits)
+        except Exception as exc:
+            return ToolResult(error=str(exc))
+        if outcome.result.is_error:
+            return outcome.result
+
+        memory_store = self.context.memory_store
+        if memory_store is not None:
+            for change in outcome.changes:
+                if change.before == change.after:
+                    continue
+                await memory_store.log_file_edit(
+                    path=str(change.path),
+                    tool_name=self.name,
+                    before=change.before,
+                    after=change.after,
+                )
+        return outcome.result
+
+    def _apply(self, edits: list[dict[str, Any]]) -> _PatchOutcome:
+        if not isinstance(edits, list):
+            return _PatchOutcome(ToolResult(error="edits must be a list"))
+        if not edits:
+            return _PatchOutcome(ToolResult(error="edits must not be empty"))
+        if len(edits) > MAX_PATCH_EDITS:
+            return _PatchOutcome(ToolResult(error=f"edits must contain at most {MAX_PATCH_EDITS} items"))
+
+        states: dict[Path, _PatchChange] = {}
+        for index, raw_edit in enumerate(edits, start=1):
+            error = self._prepare_edit(states, raw_edit, index=index)
+            if error is not None:
+                return _PatchOutcome(ToolResult(error=error))
+
+        changes = tuple(
+            change
+            for change in states.values()
+            if change.created or change.before != change.after
+        )
+        if not changes:
+            return _PatchOutcome(
+                ToolResult(
+                    content="No changes; every replacement produced identical content.",
+                    metadata={"changed": False, "files_changed": 0, "edit_count": len(edits)},
+                )
+            )
+
+        written: list[_PatchChange] = []
+        try:
+            for change in changes:
+                change.path.parent.mkdir(parents=True, exist_ok=True)
+                _write_text_atomic(change.path, change.after)
+                written.append(change)
+        except OSError as exc:
+            rollback_errors = _rollback_patch(written)
+            detail = f"Could not apply patch: {exc}"
+            if rollback_errors:
+                detail += "; rollback errors: " + "; ".join(rollback_errors)
+            return _PatchOutcome(ToolResult(error=detail))
+
+        full_diff = "\n\n".join(
+            _unified_diff(change.before, change.after, change.path)
+            for change in changes
+        )
+        diff = _bounded_patch_diff(full_diff)
+        paths = [str(change.path) for change in changes]
+        replacements = sum(change.replacements for change in changes)
+        return _PatchOutcome(
+            ToolResult(
+                content=(
+                    f"Applied {len(edits)} edit(s) across {len(changes)} file(s)"
+                    f" ({replacements} replacement(s)).\n\n{diff}"
+                ).rstrip(),
+                metadata={
+                    "changed": True,
+                    "files_changed": len(changes),
+                    "edit_count": len(edits),
+                    "replacements": replacements,
+                    "paths": paths,
+                    "created_paths": [str(change.path) for change in changes if change.created],
+                    "diff": diff,
+                    "diff_truncated": len(full_diff) > MAX_PATCH_DIFF_CHARS,
+                },
+            ),
+            changes=changes,
+        )
+
+    def _prepare_edit(
+        self,
+        states: dict[Path, _PatchChange],
+        raw_edit: object,
+        *,
+        index: int,
+    ) -> str | None:
+        prefix = f"edit {index}"
+        if not isinstance(raw_edit, Mapping):
+            return f"{prefix} must be an object"
+
+        path = raw_edit.get("path")
+        old_text = raw_edit.get("old_text")
+        new_text = raw_edit.get("new_text")
+        if not isinstance(path, str) or not path.strip():
+            return f"{prefix} path must be a non-empty string"
+        if not isinstance(old_text, str):
+            return f"{prefix} old_text must be a string"
+        if not isinstance(new_text, str):
+            return f"{prefix} new_text must be a string"
+
+        occurrence = raw_edit.get("occurrence")
+        replace_all = raw_edit.get("replace_all", False)
+        create_if_missing = raw_edit.get("create_if_missing", False)
+        if occurrence is not None and (
+            not isinstance(occurrence, int) or isinstance(occurrence, bool) or occurrence < 1
+        ):
+            return f"{prefix} occurrence must be an integer >= 1"
+        if not isinstance(replace_all, bool):
+            return f"{prefix} replace_all must be a boolean"
+        if not isinstance(create_if_missing, bool):
+            return f"{prefix} create_if_missing must be a boolean"
+        if occurrence is not None and replace_all:
+            return f"{prefix} occurrence and replace_all cannot both be set"
+
+        resolved = self.resolve_path(path)
+        state = states.get(resolved)
+        if state is None:
+            if resolved.exists() and not resolved.is_file():
+                return f"{prefix} path is not a file: {resolved}"
+            if resolved.exists():
+                before = resolved.read_text(encoding="utf-8", errors="replace")
+                state = _PatchChange(
+                    path=resolved,
+                    before=before,
+                    after=before,
+                    created=False,
+                    replacements=0,
+                )
+            elif create_if_missing and old_text == "":
+                states[resolved] = _PatchChange(
+                    path=resolved,
+                    before="",
+                    after=new_text,
+                    created=True,
+                    replacements=0,
+                )
+                return None
+            else:
+                return f"{prefix} file does not exist: {resolved}"
+
+        if old_text == "":
+            return f"{prefix} old_text must not be empty for an existing or staged file"
+        matches = state.after.count(old_text)
+        if matches == 0:
+            return f"{prefix} old_text was not found in {resolved}"
+        if occurrence is None and not replace_all and matches > 1:
+            return (
+                f"{prefix} old_text matched {matches} times in {resolved}; "
+                "set occurrence or replace_all"
+            )
+        if occurrence is not None and occurrence > matches:
+            return (
+                f"{prefix} occurrence {occurrence} was requested, "
+                f"but old_text matched {matches} times in {resolved}"
+            )
+
+        if replace_all:
+            after = state.after.replace(old_text, new_text)
+            replacements = matches
+        else:
+            after = _replace_occurrence(
+                state.after,
+                old_text,
+                new_text,
+                occurrence or 1,
+            )
+            replacements = 1
+        states[resolved] = _PatchChange(
+            path=resolved,
+            before=state.before,
+            after=after,
+            created=state.created,
+            replacements=state.replacements + replacements,
+        )
+        return None
+
+
 @register_tool
 class ListDirectoryTool(BaseTool):
     name = "list_directory"
@@ -366,6 +613,32 @@ def _unified_diff(before: str, after: str, path: Path) -> str:
         lineterm="",
     )
     return "\n".join(diff_lines).rstrip()
+
+
+def _bounded_patch_diff(diff: str) -> str:
+    if len(diff) <= MAX_PATCH_DIFF_CHARS:
+        return diff
+    head_chars = (MAX_PATCH_DIFF_CHARS + 1) // 2
+    tail_chars = MAX_PATCH_DIFF_CHARS - head_chars
+    omitted = len(diff) - MAX_PATCH_DIFF_CHARS
+    return (
+        diff[:head_chars]
+        + f"\n... patch diff truncated {omitted} characters; showing head and tail ...\n"
+        + diff[-tail_chars:]
+    )
+
+
+def _rollback_patch(changes: list[_PatchChange]) -> list[str]:
+    errors: list[str] = []
+    for change in reversed(changes):
+        try:
+            if change.created:
+                change.path.unlink(missing_ok=True)
+            else:
+                _write_text_atomic(change.path, change.before)
+        except OSError as exc:
+            errors.append(f"{change.path}: {exc}")
+    return errors
 
 
 def _list_entries(root: Path, depth: int, max_entries: int, include_hidden: bool) -> tuple[list[str], bool]:

@@ -70,6 +70,7 @@ from libre_claw.tui.app import (
     _tool_preview,
     _transcript_from_run_events,
 )
+from libre_claw.updater import UpdateError, UpdateResult
 
 
 TINY_PNG = base64.b64decode(
@@ -192,14 +193,84 @@ def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
     assert app._status_text().endswith(" | idle")
     assert app._palette_matches("memory")[0].name == "/memory"
     assert app._palette_matches("telegram")[0].name == "/telegram"
+    assert app._palette_matches("update")[0].name == "/update"
     assert app._slash_suggestion_matches("/")[0].name == "/help"
     assert app._slash_suggestion_matches("/bt")[0].name == "/btw"
     assert app._slash_suggestion_matches("/ste")[0].name == "/steer"
     assert [command.name for command in app._slash_suggestion_matches("/m")] == ["/model", "/models", "/memory"]
     assert app._slash_suggestion_matches("/g")[0].name == "/goal"
     assert app._slash_suggestion_matches("/memory ")[0].name == "/memory status"
+    assert app._slash_suggestion_matches("/update ")[0].name == "/update --dry-run"
     assert app._slash_suggestion_matches("/w")[0].name == "/workspace"
     assert app._slash_suggestion_matches("/workspace ")[0].name == "/workspace status"
+
+
+async def test_tui_update_command_applies_update_and_requests_restart(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    seen: dict[str, object] = {}
+    backup = tmp_path / "backup"
+
+    def fake_update(repo_path: Path, *, dry_run: bool) -> UpdateResult:
+        seen["repo_path"] = repo_path
+        seen["dry_run"] = dry_run
+        return UpdateResult(
+            repo_root=tmp_path / "libre-claw",
+            local_head="a" * 40,
+            remote_head="b" * 40,
+            remote_ref="origin/main",
+            backup_dir=backup,
+            updated=True,
+        )
+
+    monkeypatch.setattr("libre_claw.tui.app.update_checkout", fake_update)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        await app._handle_command("/update")
+
+    system_text = "\n".join(entry.content for entry in app.transcript if entry.role == "system")
+    assert seen["dry_run"] is False
+    assert seen["repo_path"] != tmp_path
+    assert "Checking origin/main for Libre Claw updates" in system_text
+    assert f"Backup: {backup}" in system_text
+    assert "Updated Libre Claw to bbbbbbbbbbbb." in system_text
+    assert "Exit and restart Libre Claw" in system_text
+
+
+async def test_tui_update_command_supports_dry_run_and_reports_errors(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls: list[bool] = []
+
+    def fake_update(repo_path: Path, *, dry_run: bool) -> UpdateResult:
+        del repo_path
+        calls.append(dry_run)
+        if len(calls) > 1:
+            raise UpdateError("fetch failed")
+        return UpdateResult(
+            repo_root=tmp_path / "libre-claw",
+            local_head="a" * 40,
+            remote_head="b" * 40,
+            remote_ref="origin/main",
+            backup_dir=None,
+            updated=True,
+            dry_run=True,
+        )
+
+    monkeypatch.setattr("libre_claw.tui.app.update_checkout", fake_update)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        await app._handle_command("/update --dry-run")
+        await app._handle_command("/update")
+
+    system_text = "\n".join(entry.content for entry in app.transcript if entry.role == "system")
+    assert calls == [True, False]
+    assert "Update available. Run `/update`" in system_text
+    assert "Update failed: fetch failed" in system_text
 
 
 def test_tui_diff_text(monkeypatch, tmp_path: Path) -> None:

@@ -55,6 +55,7 @@ from libre_claw.telegram.formatting import (
     markdown_to_telegram_html,
     telegram_html_chunks,
 )
+from libre_claw.updater import UpdateError, UpdateResult
 
 
 class FakeProvider(LLMProvider):
@@ -205,6 +206,7 @@ def test_telegram_help_text_lists_slash_commands() -> None:
     assert "/help" in text
     assert "/start" in text
     assert "/restart - Restart the Libre Claw daemon/Telegram stack" in text
+    assert "/update [--dry-run] - Safely update Libre Claw from origin/main" in text
     assert "/model - Open provider/model buttons" in text
     assert "/models - Open provider/model buttons" in text
     assert "/provider - Open provider buttons" in text
@@ -643,6 +645,7 @@ def test_telegram_command_specs_drive_bot_menu() -> None:
     assert commands["help"] == "Show Telegram slash commands"
     assert "start" in commands
     assert commands["restart"] == "Restart Libre Claw"
+    assert commands["update"] == "Safely update Libre Claw"
     assert commands["models"] == "Open model configuration"
     assert commands["status"] == "Show model, context, tokens, and cost"
     assert commands["usage"] == "Show provider usage analytics"
@@ -676,6 +679,124 @@ def test_telegram_restart_spawns_cli_lifecycle_restart(monkeypatch, tmp_path: Pa
     assert calls[0][0] == ["libre-claw", "restart", "--force"]
     assert calls[0][1]["cwd"] == tmp_path
     assert calls[0][1]["start_new_session"] is True
+
+
+async def test_telegram_update_command_applies_update_and_requests_restart(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    seen: dict[str, object] = {}
+    backup = tmp_path / "backup"
+
+    def fake_update(repo_path: Path, *, dry_run: bool) -> UpdateResult:
+        seen["repo_path"] = repo_path
+        seen["dry_run"] = dry_run
+        return UpdateResult(
+            repo_root=tmp_path / "libre-claw",
+            local_head="a" * 40,
+            remote_head="b" * 40,
+            remote_ref="origin/main",
+            backup_dir=backup,
+            updated=True,
+        )
+
+    monkeypatch.setattr("libre_claw.telegram.handlers.update_checkout", fake_update)
+
+    class Bridge:
+        config = load_config()
+
+    class User:
+        id = 123
+        username = "allowed"
+
+    class Message:
+        def __init__(self) -> None:
+            self.replies: list[str] = []
+
+        async def reply_text(self, text: str, **kwargs: object) -> None:
+            del kwargs
+            self.replies.append(text)
+
+    class Update:
+        effective_user = User()
+
+        def __init__(self) -> None:
+            self.effective_message = Message()
+
+    class Context:
+        args: list[str] = []
+
+    handlers = TelegramHandlers(Bridge(), TelegramAuth(allowed_user_ids=frozenset({123})))  # type: ignore[arg-type]
+    update = Update()
+
+    await handlers.update(update, Context())  # type: ignore[arg-type]
+
+    assert seen["dry_run"] is False
+    assert seen["repo_path"] != tmp_path
+    assert update.effective_message.replies[0] == "Checking origin/main for Libre Claw updates..."
+    assert f"Backup: {backup}" in update.effective_message.replies[1]
+    assert "Updated Libre Claw to bbbbbbbbbbbb." in update.effective_message.replies[1]
+    assert "Run /restart to load the updated code." in update.effective_message.replies[1]
+
+
+async def test_telegram_update_command_supports_dry_run_and_reports_errors(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    calls: list[bool] = []
+
+    def fake_update(repo_path: Path, *, dry_run: bool) -> UpdateResult:
+        del repo_path
+        calls.append(dry_run)
+        if len(calls) > 1:
+            raise UpdateError("fetch failed")
+        return UpdateResult(
+            repo_root=tmp_path / "libre-claw",
+            local_head="a" * 40,
+            remote_head="b" * 40,
+            remote_ref="origin/main",
+            backup_dir=None,
+            updated=True,
+            dry_run=True,
+        )
+
+    monkeypatch.setattr("libre_claw.telegram.handlers.update_checkout", fake_update)
+
+    class Bridge:
+        config = load_config()
+
+    class User:
+        id = 123
+        username = "allowed"
+
+    class Message:
+        def __init__(self) -> None:
+            self.replies: list[str] = []
+
+        async def reply_text(self, text: str, **kwargs: object) -> None:
+            del kwargs
+            self.replies.append(text)
+
+    class Update:
+        effective_user = User()
+
+        def __init__(self) -> None:
+            self.effective_message = Message()
+
+    class DryRunContext:
+        args = ["--dry-run"]
+
+    class ApplyContext:
+        args: list[str] = []
+
+    handlers = TelegramHandlers(Bridge(), TelegramAuth(allowed_user_ids=frozenset({123})))  # type: ignore[arg-type]
+    dry_run_update = Update()
+    failed_update = Update()
+
+    await handlers.update(dry_run_update, DryRunContext())  # type: ignore[arg-type]
+    await handlers.update(failed_update, ApplyContext())  # type: ignore[arg-type]
+
+    assert calls == [True, False]
+    assert "Update available. Run <code>/update</code>" in dry_run_update.effective_message.replies[1]
+    assert failed_update.effective_message.replies[-1] == "Update failed: fetch failed"
 
 
 async def test_telegram_daemon_commands_report_remote_state(monkeypatch, tmp_path: Path) -> None:

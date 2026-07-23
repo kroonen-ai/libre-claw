@@ -17,7 +17,7 @@ from libre_claw.core.memory import (
 from libre_claw.core.session import ChatMessage, Session, estimate_context_tokens, text_block, tool_result_block, tool_use_block
 from libre_claw.core.tools import ToolContext
 from libre_claw.providers.base import Done, LLMProvider, StreamEvent, TextDelta, ToolSchema
-from libre_claw.tools_builtin.filesystem import EditFileTool, WriteFileTool
+from libre_claw.tools_builtin.filesystem import ApplyPatchTool, EditFileTool, WriteFileTool
 
 
 class FakeMemoryProvider(LLMProvider):
@@ -163,12 +163,23 @@ async def test_memory_store_logs_file_edits_from_tools(tmp_path: Path) -> None:
 
     await WriteFileTool(context).execute(path="file.txt", content="hello world")
     await EditFileTool(context).execute(path="file.txt", old_text="world", new_text="Libre Claw")
+    await ApplyPatchTool(context).execute(
+        edits=[
+            {
+                "path": "file.txt",
+                "old_text": "hello",
+                "new_text": "Hello",
+            }
+        ]
+    )
     edits = await store.list_file_edits()
 
-    assert [edit.tool_name for edit in edits] == ["write_file", "edit_file"]
+    assert [edit.tool_name for edit in edits] == ["write_file", "edit_file", "apply_patch"]
     assert edits[0].path == str(path)
     assert edits[1].before == "hello world"
     assert edits[1].after == "hello Libre Claw"
+    assert edits[2].before == "hello Libre Claw"
+    assert edits[2].after == "Hello Libre Claw"
 
 
 def test_session_compaction_summarizes_older_messages() -> None:
@@ -196,6 +207,33 @@ def test_session_repeated_compaction_bounds_the_rolling_summary() -> None:
     assert summary.startswith("[Earlier compacted context omitted]\n")
     assert "recent message 3" in summary
     assert len(session.messages) == 2
+
+
+def test_session_compaction_preserves_bounded_tool_arguments_and_findings() -> None:
+    session = Session()
+    session.add_assistant_blocks(
+        [tool_use_block("toolu_1", "read_file", {"path": "src/important.py"})]
+    )
+    session.add_tool_result_blocks(
+        [
+            tool_result_block(
+                "toolu_1",
+                "important-start " + ("x" * 1_000) + " important-end",
+            )
+        ]
+    )
+    session.add_user_message("keep this recent")
+
+    summary = session.compact(keep_last=1)
+
+    assert summary is not None
+    assert "called read_file" in summary
+    assert "src/important.py" in summary
+    assert "read_file result" in summary
+    assert "important-start" in summary
+    assert "important-end" in summary
+    assert "chars omitted" in summary
+    assert len(session.messages) == 1
 
 
 def test_summarize_session_for_memory_redacts_and_bounds() -> None:

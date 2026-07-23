@@ -35,6 +35,7 @@ class PermissionManager:
             "list_directory",
             "glob",
             "search_files",
+            "view_image",
             "git_status",
             "think",
             "browser_read",
@@ -52,6 +53,11 @@ class PermissionManager:
             has_body = bool(call.arguments.get("body") or call.arguments.get("json_body"))
             has_output = bool(call.arguments.get("output_path"))
             if method in {"GET", "HEAD"} and not has_body and not has_output:
+                return "allow"
+
+        if self.config.auto_approve_read and call.name == "process":
+            action = str(call.arguments.get("action", "")).lower()
+            if action in {"poll", "list"}:
                 return "allow"
 
         if tool.permission_level in {"allow", "ask", "deny"}:

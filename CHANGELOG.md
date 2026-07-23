@@ -30,9 +30,10 @@ Initial shippable Libre Claw release.
   `libre-claw restart` for shutting down or restarting the daemon/Telegram
   stack from another terminal. `libre-claw stop` now cancels the active daemon
   turn without stopping Libre Claw.
-- Safe self-update command with `libre-claw update`, which checks `origin/main`,
-  writes a rollback backup under `~/.libre-claw/backups/updates/`, refuses dirty
-  worktrees, and applies only fast-forward updates.
+- Safe self-update with `libre-claw update` or `/update` in the TUI and
+  authorized Telegram chats. It checks `origin/main`, writes a rollback backup
+  under `~/.libre-claw/backups/updates/`, refuses dirty worktrees, and applies
+  only fast-forward updates; `--dry-run` checks without changing files.
 - Local web dashboard served by the daemon at `/dashboard` for starting runs,
   reviewing timelines, approving blocked tools, managing schedules, and checking
   usage.
@@ -66,9 +67,13 @@ Initial shippable Libre Claw release.
   provider-reported request cost, cached tokens, and reasoning tokens.
 - Native Ollama tool calling and XML tool-call fallback for models without native support.
 - ReAct-style async agent loop with concurrent tool execution.
-- Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, `glob`,
-  `search_files`, `git_status`, `git_commit`, `think`, `browser_navigate`,
-  `browser_read`, `browser_screenshot`, and `bash` tools.
+- Built-in `read_file`, `write_file`, `edit_file`, `apply_patch`,
+  `list_directory`, `glob`, `search_files`, `view_image`, `git_status`,
+  `git_commit`, `think`, `browser_navigate`, `browser_read`,
+  `browser_screenshot`, `bash`, and managed `process` tools.
+- Tool-heavy runs retain bounded command heads and diagnostic tails, preserve
+  partial timeout output and important tool findings through compaction, and
+  avoid hanging when descendants inherit a completed shell's output pipes.
 - Working-directory sandboxing, blocked shell command patterns, and approval gates for side-effecting tools.
 - File explorer parent navigation that updates the agent working directory, plus visible hide/show controls and a left-side restore rail.
 - TUI polish including thin `#0070F3` scrollbars, blue user labels, purple `#8B5CF6` Libre Claw assistant labels, and cleaner panel borders.

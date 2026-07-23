@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import shlex
 import shutil
 import subprocess
@@ -13,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
+from PIL import Image
 
 from libre_claw.core.tools import BaseTool, ToolCall, ToolContext, ToolRegistry, ToolRegistryError, ToolResult
 from libre_claw.tools_builtin import browser as browser_tools
@@ -30,9 +33,17 @@ from libre_claw.tools_builtin.browser import (
     BrowserTypeTool,
     BrowserWaitTool,
 )
-from libre_claw.tools_builtin.filesystem import EditFileTool, ListDirectoryTool, ReadFileTool, WriteFileTool
+from libre_claw.tools_builtin.filesystem import (
+    ApplyPatchTool,
+    EditFileTool,
+    ListDirectoryTool,
+    ReadFileTool,
+    WriteFileTool,
+)
 from libre_claw.tools_builtin.git import GitCommitTool, GitStatusTool
 from libre_claw.tools_builtin.http import HTTPRequestTool
+from libre_claw.tools_builtin.image import ViewImageTool
+from libre_claw.tools_builtin.process import ProcessTool
 from libre_claw.tools_builtin.schedule import ScheduleListTool, ScheduleTool
 from libre_claw.tools_builtin.search import GlobTool, SearchFilesTool
 from libre_claw.tools_builtin.shell import BashTool
@@ -99,6 +110,7 @@ def test_builtin_registry_exposes_production_toolset(monkeypatch, tmp_path: Path
         "read_file",
         "write_file",
         "edit_file",
+        "apply_patch",
         "list_directory",
         "glob",
         "search_files",
@@ -117,9 +129,11 @@ def test_builtin_registry_exposes_production_toolset(monkeypatch, tmp_path: Path
         "browser_screenshot",
         "web_search",
         "http_request",
+        "view_image",
         "schedule_list",
         "schedule",
         "bash",
+        "process",
     }.issubset(names)
     assert "skills_search" not in names
 
@@ -197,6 +211,44 @@ async def test_read_file_reports_truncation_and_can_hide_line_numbers(tmp_path: 
 
     assert result.content == "a\nb"
     assert result.metadata["truncated"] is True
+
+
+async def test_view_image_attaches_bounded_visual_preview(tmp_path: Path) -> None:
+    path = tmp_path / "large.png"
+    Image.new("RGBA", (320, 160), (255, 0, 0, 128)).save(path)
+
+    result = await ViewImageTool(context(tmp_path)).execute(
+        path="large.png",
+        max_dimension=64,
+    )
+
+    assert result.error is None
+    assert result.metadata["original_width"] == 320
+    assert result.metadata["original_height"] == 160
+    assert result.metadata["preview_width"] == 64
+    assert result.metadata["preview_height"] == 32
+    assert result.metadata["resized"] is True
+    assert len(result.attachments) == 1
+    attachment = result.attachments[0]
+    assert attachment.media_type == "image/jpeg"
+    assert attachment.path == str(path)
+    with Image.open(io.BytesIO(base64.b64decode(attachment.data))) as preview:
+        assert preview.format == "JPEG"
+        assert preview.size == (64, 32)
+
+
+async def test_view_image_validates_files_frames_and_dimensions(tmp_path: Path) -> None:
+    path = tmp_path / "image.png"
+    Image.new("RGB", (10, 10), "blue").save(path)
+    tool = ViewImageTool(context(tmp_path))
+
+    assert (await tool.execute(path="missing.png")).error is not None
+    assert (await tool.execute(path="image.png", frame=1)).error == (
+        "frame 1 was requested, but the image has 1 frame(s)"
+    )
+    assert (await tool.execute(path="image.png", max_dimension=63)).error == (
+        "max_dimension must be >= 64"
+    )
 
 
 async def test_list_directory_with_depth(tmp_path: Path) -> None:
@@ -340,6 +392,130 @@ async def test_edit_file_requires_precision_for_multiple_matches(tmp_path: Path)
     assert second.metadata["matches"] == 3
 
 
+async def test_apply_patch_batches_existing_and_new_file_edits(tmp_path: Path) -> None:
+    first = tmp_path / "first.txt"
+    first.write_text("alpha beta\n", encoding="utf-8")
+    tool = ApplyPatchTool(context(tmp_path))
+
+    result = await tool.execute(
+        edits=[
+            {
+                "path": "first.txt",
+                "old_text": "beta",
+                "new_text": "gamma",
+            },
+            {
+                "path": "nested/new.txt",
+                "old_text": "",
+                "new_text": "draft\n",
+                "create_if_missing": True,
+            },
+            {
+                "path": "nested/new.txt",
+                "old_text": "draft",
+                "new_text": "ready",
+            },
+        ]
+    )
+
+    assert result.error is None
+    assert first.read_text(encoding="utf-8") == "alpha gamma\n"
+    assert (tmp_path / "nested" / "new.txt").read_text(encoding="utf-8") == "ready\n"
+    assert result.metadata["files_changed"] == 2
+    assert result.metadata["edit_count"] == 3
+    assert result.metadata["replacements"] == 2
+    assert result.metadata["created_paths"] == [str(tmp_path / "nested" / "new.txt")]
+    assert "first.txt" in result.content
+    assert "new.txt" in result.content
+
+
+async def test_apply_patch_validation_failure_leaves_every_file_unchanged(tmp_path: Path) -> None:
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("alpha\n", encoding="utf-8")
+    second.write_text("beta\n", encoding="utf-8")
+
+    result = await ApplyPatchTool(context(tmp_path)).execute(
+        edits=[
+            {
+                "path": "first.txt",
+                "old_text": "alpha",
+                "new_text": "changed",
+            },
+            {
+                "path": "second.txt",
+                "old_text": "missing",
+                "new_text": "changed",
+            },
+        ]
+    )
+
+    assert result.error is not None
+    assert result.error.startswith("edit 2 old_text was not found")
+    assert first.read_text(encoding="utf-8") == "alpha\n"
+    assert second.read_text(encoding="utf-8") == "beta\n"
+
+
+async def test_apply_patch_rolls_back_files_after_write_failure(monkeypatch, tmp_path: Path) -> None:
+    from libre_claw.tools_builtin import filesystem
+
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("alpha\n", encoding="utf-8")
+    second.write_text("beta\n", encoding="utf-8")
+    real_write = filesystem._write_text_atomic
+
+    def flaky_write(path: Path, content: str) -> None:
+        if path == second and content == "changed\n":
+            raise OSError("simulated write failure")
+        real_write(path, content)
+
+    monkeypatch.setattr(filesystem, "_write_text_atomic", flaky_write)
+    result = await ApplyPatchTool(context(tmp_path)).execute(
+        edits=[
+            {
+                "path": "first.txt",
+                "old_text": "alpha",
+                "new_text": "changed",
+            },
+            {
+                "path": "second.txt",
+                "old_text": "beta",
+                "new_text": "changed",
+            },
+        ]
+    )
+
+    assert result.error == "Could not apply patch: simulated write failure"
+    assert first.read_text(encoding="utf-8") == "alpha\n"
+    assert second.read_text(encoding="utf-8") == "beta\n"
+
+
+async def test_apply_patch_requires_precise_matches(tmp_path: Path) -> None:
+    path = tmp_path / "sample.txt"
+    path.write_text("same same", encoding="utf-8")
+    tool = ApplyPatchTool(context(tmp_path))
+
+    ambiguous = await tool.execute(
+        edits=[{"path": "sample.txt", "old_text": "same", "new_text": "changed"}]
+    )
+    precise = await tool.execute(
+        edits=[
+            {
+                "path": "sample.txt",
+                "old_text": "same",
+                "new_text": "changed",
+                "occurrence": 2,
+            }
+        ]
+    )
+
+    assert ambiguous.error is not None
+    assert "matched 2 times" in ambiguous.error
+    assert precise.error is None
+    assert path.read_text(encoding="utf-8") == "same changed"
+
+
 async def test_bash_success_failure_and_timeout(tmp_path: Path) -> None:
     tool = BashTool(context(tmp_path, timeout=1))
 
@@ -352,6 +528,19 @@ async def test_bash_success_failure_and_timeout(tmp_path: Path) -> None:
     assert timeout.error == "Command timed out after 1 seconds"
 
 
+async def test_bash_timeout_returns_partial_output(tmp_path: Path) -> None:
+    script = "import time; print('before-timeout', flush=True); time.sleep(2)"
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+    result = await BashTool(context(tmp_path)).execute(command=command, timeout=1)
+
+    assert result.error is not None
+    assert result.error.startswith("Command timed out after 1 seconds")
+    assert "partial stdout:\nbefore-timeout" in result.error
+    assert result.metadata["timed_out"] is True
+    assert result.metadata["stdout_chars"] == len("before-timeout\n")
+
+
 async def test_bash_validates_and_truncates_output(tmp_path: Path) -> None:
     tool = BashTool(context(tmp_path))
 
@@ -361,9 +550,12 @@ async def test_bash_validates_and_truncates_output(tmp_path: Path) -> None:
 
     assert invalid_timeout.error == "timeout must be >= 1"
     assert invalid_limit.error == "max_output_chars must be >= 1"
-    assert "abc\n... truncated 3 characters ..." in truncated.content
+    assert "ab\n... truncated 3 characters; showing first 2 and last 1 ...\nf" in truncated.content
     assert truncated.metadata["stdout_truncated"] is True
-    assert truncated.metadata["stdout"] == "abc\n... truncated 3 characters ..."
+    assert (
+        truncated.metadata["stdout"]
+        == "ab\n... truncated 3 characters; showing first 2 and last 1 ...\nf"
+    )
     assert truncated.metadata["stdout_chars"] == 6
     assert truncated.metadata["stdout_bytes"] == 6
 
@@ -381,10 +573,12 @@ async def test_bash_caps_large_stdout_stderr_metadata(tmp_path: Path) -> None:
     assert result.metadata["stderr_chars"] == 4000
     assert result.metadata["stdout_bytes"] == 5000
     assert result.metadata["stderr_bytes"] == 4000
-    assert result.metadata["stdout"].startswith("x" * 25)
-    assert result.metadata["stderr"].startswith("e" * 25)
-    assert len(result.metadata["stdout"]) < 100
-    assert len(result.metadata["stderr"]) < 100
+    assert result.metadata["stdout"].startswith("x" * 13)
+    assert result.metadata["stdout"].endswith("x" * 12)
+    assert result.metadata["stderr"].startswith("e" * 13)
+    assert result.metadata["stderr"].endswith("e" * 12)
+    assert len(result.metadata["stdout"]) < 130
+    assert len(result.metadata["stderr"]) < 130
     assert "truncated 4975 characters" in result.content
     assert "truncated 3975 characters" in result.content
 
@@ -398,6 +592,24 @@ async def test_bash_cancellation_cleans_up_reader_tasks(tmp_path: Path) -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=2)
+
+
+async def test_bash_does_not_hang_when_background_child_keeps_output_pipe_open(tmp_path: Path) -> None:
+    child = "import time; time.sleep(30)"
+    parent = (
+        "import subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "print('spawned', flush=True)"
+    )
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(parent)}"
+
+    result = await asyncio.wait_for(
+        BashTool(context(tmp_path)).execute(command=command),
+        timeout=4,
+    )
+
+    assert result.error is None
+    assert "spawned" in result.content
 
 
 async def test_bash_blocks_configured_patterns(tmp_path: Path) -> None:
@@ -416,6 +628,147 @@ async def test_bash_blocks_sudo_remote_install_and_root_rm_variants(tmp_path: Pa
     assert sudo.error == "Command blocked by sandbox: sudo is disabled"
     assert remote_install.error == "Command blocked by sandbox: remote install pipe is disabled"
     assert root_rm.error == "Command blocked by sandbox: recursive removal of root is disabled"
+
+
+async def test_process_tool_runs_in_workspace_and_supports_interactive_input(tmp_path: Path) -> None:
+    script = (
+        "import os, sys; "
+        "print('cwd:' + os.getcwd() + '\\nready', flush=True); "
+        "line = sys.stdin.readline(); "
+        "print('got:' + line.strip().upper(), flush=True)"
+    )
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+    tool = ProcessTool(context(tmp_path, timeout=5))
+
+    started = await tool.execute(action="start", command=command, wait_ms=1000)
+    session_id = str(started.metadata["session_id"])
+    written = await tool.execute(
+        action="write",
+        session_id=session_id,
+        input="hello\n",
+        close_stdin=True,
+        wait_ms=1000,
+    )
+    completed = await tool.execute(action="poll", session_id=session_id, wait_ms=1000)
+
+    assert started.error is None
+    assert f"cwd:{tmp_path}" in started.content
+    assert "ready" in started.content
+    assert written.error is None
+    assert "got:HELLO" in written.content
+    assert completed.metadata["status"] == "completed"
+    assert completed.metadata["exit_code"] == 0
+
+
+async def test_process_tool_lists_stops_and_bounds_output(tmp_path: Path) -> None:
+    tool = ProcessTool(context(tmp_path, timeout=30))
+    script = "import sys, time; sys.stdout.write('abcdefghij'); sys.stdout.flush(); time.sleep(30)"
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+    started = await tool.execute(
+        action="start",
+        command=command,
+        wait_ms=1000,
+        max_output_chars=4,
+    )
+    session_id = str(started.metadata["session_id"])
+    listed = await tool.execute(action="list")
+    stopped = await tool.execute(action="stop", session_id=session_id, wait_ms=0)
+
+    assert "ab" in started.content
+    assert "ij" in started.content
+    assert "truncated 6 characters" in started.content
+    assert session_id in listed.content
+    assert listed.metadata["running"] == 1
+    assert stopped.metadata["status"] == "completed"
+    assert stopped.metadata["exit_code"] is not None
+
+
+async def test_process_tool_finishes_when_descendant_keeps_output_pipe_open(tmp_path: Path) -> None:
+    child = "import time; time.sleep(30)"
+    parent = (
+        "import subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "print('spawned', flush=True)"
+    )
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(parent)}"
+    tool = ProcessTool(context(tmp_path, timeout=10))
+
+    started = await asyncio.wait_for(
+        tool.execute(
+            action="start",
+            command=command,
+            wait_ms=3000,
+        ),
+        timeout=4,
+    )
+    result = started
+    if result.metadata["status"] == "running":
+        result = await tool.execute(
+            action="poll",
+            session_id=str(result.metadata["session_id"]),
+            wait_ms=3000,
+        )
+
+    assert "spawned" in started.content
+    assert result.metadata["status"] == "completed"
+
+
+async def test_process_tool_sessions_survive_registry_context_rebuilds(tmp_path: Path) -> None:
+    first_tool = ProcessTool(context(tmp_path, timeout=30))
+    started = await first_tool.execute(
+        action="start",
+        command="sleep 30",
+        wait_ms=0,
+    )
+    session_id = str(started.metadata["session_id"])
+
+    rebuilt_tool = ProcessTool(context(tmp_path, timeout=30))
+    listed = await rebuilt_tool.execute(action="list")
+    stopped = await rebuilt_tool.execute(action="stop", session_id=session_id, wait_ms=0)
+
+    assert session_id in listed.content
+    assert "command=sleep 30" in listed.content
+    assert stopped.metadata["status"] == "completed"
+
+
+async def test_process_tool_enforces_total_runtime_timeout(tmp_path: Path) -> None:
+    script = "import time; print('started', flush=True); time.sleep(30)"
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+    tool = ProcessTool(context(tmp_path, timeout=5))
+    started = await tool.execute(
+        action="start",
+        command=command,
+        timeout=1,
+        wait_ms=1000,
+    )
+    session_id = str(started.metadata["session_id"])
+    completed = await tool.execute(
+        action="poll",
+        session_id=session_id,
+        wait_ms=2000,
+    )
+
+    assert "started" in started.content
+    assert completed.metadata["status"] == "timed_out"
+    assert completed.metadata["timed_out"] is True
+    assert completed.metadata["exit_code"] is not None
+
+
+async def test_process_tool_validates_actions_sessions_and_timeouts(tmp_path: Path) -> None:
+    tool = ProcessTool(context(tmp_path))
+
+    assert (await tool.execute(action="missing")).error == "action must be start, poll, write, stop, or list"
+    assert (await tool.execute(action="start")).error == "command is required for action=start"
+    assert (await tool.execute(action="poll")).error == "session_id is required for action=poll"
+    assert (await tool.execute(action="poll", session_id="proc_missing")).error == (
+        "Unknown process session: proc_missing"
+    )
+    assert (await tool.execute(action="start", command="true", timeout=0)).error == "timeout must be >= 1"
+    assert (await tool.execute(action="list", wait_ms=-1)).error == "wait_ms must be >= 0"
+    assert (await tool.execute(action="start", command="rm -rf /")).error == (
+        "Command blocked by sandbox pattern: rm -rf /"
+    )
 
 
 async def test_git_status_and_commit_tools(tmp_path: Path) -> None:

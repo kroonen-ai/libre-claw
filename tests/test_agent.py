@@ -22,7 +22,15 @@ from libre_claw.core.agent import (
     SkillProvider,
 )
 from libre_claw.core.permissions import PermissionManager
-from libre_claw.core.session import ChatMessage, Session, text_block, tool_result_block, tool_use_block
+from libre_claw.core.session import (
+    ChatMessage,
+    Session,
+    UserAttachment,
+    image_block,
+    text_block,
+    tool_result_block,
+    tool_use_block,
+)
 from libre_claw.core.tools import BaseTool, ToolCall, ToolContext, ToolRegistry, ToolResult
 from libre_claw.providers.base import (
     Done,
@@ -74,6 +82,22 @@ class EchoTool(BaseTool):
 class AskTool(EchoTool):
     name = "ask_echo"
     permission_level = "ask"
+
+
+class AttachmentTool(BaseTool):
+    name = "attachment"
+    description = "Return an image attachment."
+    parameters = {}
+    permission_level = "allow"
+
+    async def execute(self) -> ToolResult:
+        attachment = UserAttachment(
+            media_type="image/png",
+            data="aGVsbG8=",
+            filename="preview.png",
+            path="/tmp/preview.png",
+        )
+        return ToolResult(content="attached", attachments=(attachment,))
 
 
 class BarrierTool(BaseTool):
@@ -274,6 +298,34 @@ async def test_agent_executes_tool_then_continues_to_final_answer() -> None:
         role="user",
         content=[tool_result_block("toolu_1", "echo:x")],
     )
+
+
+async def test_agent_sends_tool_attachments_back_to_provider() -> None:
+    provider = ScriptedProvider(
+        [
+            [ToolCallReady("toolu_1", "attachment", {}), Done(stop_reason="tool_use")],
+            [TextDelta("seen"), Done()],
+        ]
+    )
+    registry = ToolRegistry([AttachmentTool(ToolContext(working_directory=Path.cwd()))])
+    agent = make_agent(provider, registry)
+
+    await collect_events(agent, "Inspect")
+
+    attachment = UserAttachment(
+        media_type="image/png",
+        data="aGVsbG8=",
+        filename="preview.png",
+        path="/tmp/preview.png",
+    )
+    assert agent.session.messages[2] == ChatMessage(
+        role="user",
+        content=[
+            tool_result_block("toolu_1", "attached"),
+            image_block(attachment),
+        ],
+    )
+    assert provider.received_messages[1][2] == agent.session.messages[2]
 
 
 async def test_agent_accumulates_usage_across_tool_loop() -> None:

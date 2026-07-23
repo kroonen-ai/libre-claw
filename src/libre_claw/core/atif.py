@@ -240,7 +240,7 @@ def _has_tool_calls(step: dict[str, Any]) -> bool:
 
 
 def _is_tool_result_message(message: ChatMessage) -> bool:
-    return bool(message.content) and all(
+    return any(
         block.get("type") == "tool_result" for block in message.content
     )
 

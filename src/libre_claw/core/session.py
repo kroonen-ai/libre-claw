@@ -13,6 +13,9 @@ from typing import Any, Literal, TypeAlias, cast
 MessageRole: TypeAlias = Literal["user", "assistant"]
 ContentBlock: TypeAlias = dict[str, Any]
 DEFAULT_COMPACT_SUMMARY_MAX_CHARS = 12_000
+COMPACT_MESSAGE_MAX_CHARS = 800
+COMPACT_TOOL_ARGUMENT_MAX_CHARS = 180
+COMPACT_TOOL_RESULT_MAX_CHARS = 360
 
 
 @dataclass(frozen=True)
@@ -127,24 +130,63 @@ def tool_result_block(tool_use_id: str, content: str, is_error: bool = False) ->
 
 def summarize_messages(messages: list[ChatMessage]) -> str:
     lines: list[str] = []
+    tool_names: dict[str, str] = {}
     for message in messages:
         text_parts: list[str] = []
         tool_parts: list[str] = []
         for block in message.content:
             block_type = block.get("type")
             if block_type == "text":
-                text_parts.append(str(block.get("text", "")))
+                text_parts.append(_compact_summary_fragment(str(block.get("text", "")), 500))
             elif block_type == "tool_use":
-                tool_parts.append(f"called {block.get('name', 'tool')}")
+                tool_name = str(block.get("name", "tool"))
+                tool_use_id = str(block.get("id", ""))
+                if tool_use_id:
+                    tool_names[tool_use_id] = tool_name
+                arguments = _compact_summary_fragment(
+                    json.dumps(block.get("input", {}), sort_keys=True, default=str),
+                    COMPACT_TOOL_ARGUMENT_MAX_CHARS,
+                )
+                tool_parts.append(f"called {tool_name} {arguments}".rstrip())
             elif block_type == "tool_result":
-                tool_parts.append(f"tool result {block.get('tool_use_id', '')}")
+                tool_use_id = str(block.get("tool_use_id", ""))
+                tool_name = tool_names.get(tool_use_id, f"tool {tool_use_id}".rstrip())
+                status = " error" if block.get("is_error") else " result"
+                result = _compact_summary_fragment(
+                    str(block.get("content", "")),
+                    COMPACT_TOOL_RESULT_MAX_CHARS,
+                )
+                tool_parts.append(f"{tool_name}{status}: {result}".rstrip())
             elif block_type == "image":
                 tool_parts.append(f"attached image {block.get('filename') or block.get('media_type', '')}")
 
         content = " ".join(part for part in text_parts + tool_parts if part).strip()
         if content:
-            lines.append(f"{message.role}: {content[:500]}")
+            lines.append(
+                f"{message.role}: "
+                f"{_compact_summary_fragment(content, COMPACT_MESSAGE_MAX_CHARS)}"
+            )
     return "\n".join(lines)
+
+
+def _compact_summary_fragment(value: str, limit: int) -> str:
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    omitted = len(compact) - limit
+    for _ in range(3):
+        marker = f" ... [{omitted} chars omitted] ... "
+        retained_chars = max(0, limit - len(marker))
+        next_omitted = len(compact) - retained_chars
+        if next_omitted == omitted:
+            break
+        omitted = next_omitted
+    marker = f" ... [{omitted} chars omitted] ... "
+    retained_chars = max(0, limit - len(marker))
+    head_chars = (retained_chars + 1) // 2
+    tail_chars = retained_chars - head_chars
+    tail = compact[-tail_chars:] if tail_chars else ""
+    return compact[:head_chars] + marker + tail
 
 
 def _bounded_compact_summary(summary: str, *, max_chars: int) -> str:

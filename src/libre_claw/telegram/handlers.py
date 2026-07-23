@@ -51,6 +51,12 @@ from libre_claw.telegram.formatting import (
     telegram_html_chunks,
     telegram_message_limit,
 )
+from libre_claw.updater import (
+    UpdateError,
+    libre_claw_checkout_path,
+    update_checkout,
+    update_result_text,
+)
 
 TELEGRAM_CONTINUED_SUFFIX = "\n\n...[continued]"
 TELEGRAM_TYPING_INTERVAL_SECONDS = 4.0
@@ -184,6 +190,34 @@ class TelegramHandlers:
         await update.effective_message.reply_text(
             "Restart requested. Libre Claw will briefly disconnect and come back online.\n"
             f"Log: {log_path}"
+        )
+
+    async def update(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        argument = " ".join(context.args or []).strip().lower()
+        if argument not in {"", "--dry-run"}:
+            await update.effective_message.reply_text("Usage: /update [--dry-run]")
+            return
+        dry_run = argument == "--dry-run"
+        await update.effective_message.reply_text("Checking origin/main for Libre Claw updates...")
+        try:
+            result = await asyncio.to_thread(
+                update_checkout,
+                libre_claw_checkout_path(),
+                dry_run=dry_run,
+            )
+        except (UpdateError, OSError) as exc:
+            await update.effective_message.reply_text(f"Update failed: {exc}")
+            return
+        await _reply_text_chunks(
+            update.effective_message,
+            update_result_text(
+                result,
+                apply_command="/update",
+                restart_hint="Run /restart to load the updated code.",
+            ),
+            self.bridge.config.telegram.max_message_length,
         )
 
     async def cost(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1647,6 +1681,7 @@ def _telegram_help_text() -> str:
             "/help - Show this command list",
             "/new - Start a fresh chat session",
             "/restart - Restart the Libre Claw daemon/Telegram stack",
+            "/update [--dry-run] - Safely update Libre Claw from origin/main",
             "/model - Open provider/model buttons",
             "/model <provider>:<name> - Switch model by text",
             "/models - Open provider/model buttons",
@@ -1681,6 +1716,7 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("help", "Show Telegram slash commands"),
         ("new", "Start a fresh chat session"),
         ("restart", "Restart Libre Claw"),
+        ("update", "Safely update Libre Claw"),
         ("model", "Open model configuration"),
         ("models", "Open model configuration"),
         ("fallback", "Manage fallback models"),

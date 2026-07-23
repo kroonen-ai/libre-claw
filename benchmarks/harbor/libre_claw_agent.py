@@ -176,19 +176,23 @@ def _benchmark_config(model: str, *, command_timeout: int = 600) -> str:
         "You are Libre Claw running an isolated Terminal-Bench task. Complete the requested "
         "change in the current workspace. Inspect before editing, use the supplied coding tools, "
         "preserve unrelated files, and verify the result. Avoid broad environment exploration, "
-        "unnecessary dependency installation, and repeated commands. Keep enough time to run a "
-        "focused verification and leave the workspace in its final state. Do not wait for approval."
+        "unnecessary dependency installation, and repeated commands. Use apply_patch for compact "
+        "validated edit batches and process for long-running or interactive commands. Keep enough "
+        "time to run a focused verification and leave the workspace in its final state. Do not "
+        "wait for approval."
     )
     tool_allowlist = [
         "read_file",
         "write_file",
         "edit_file",
+        "apply_patch",
         "list_directory",
         "glob",
         "search_files",
         "git_status",
         "think",
         "bash",
+        "process",
     ]
     return f"""[general]
 default_provider = "ollama"

@@ -17,6 +17,7 @@ from libre_claw.core.session import (
     Session,
     UserAttachment,
     estimate_context_tokens,
+    image_block,
     text_block,
     tool_result_block,
     tool_use_block,
@@ -342,12 +343,16 @@ class Agent:
                 immediate_results[call.id] = result
 
             ordered_results = [(call, immediate_results[call.id]) for call in tool_calls]
-            self.session.add_tool_result_blocks(
-                [
-                    tool_result_block(call.id, result.as_text(), is_error=result.is_error)
-                    for call, result in ordered_results
-                ]
+            result_blocks = [
+                tool_result_block(call.id, result.as_text(), is_error=result.is_error)
+                for call, result in ordered_results
+            ]
+            result_blocks.extend(
+                image_block(attachment)
+                for _, result in ordered_results
+                for attachment in result.attachments
             )
+            self.session.add_tool_result_blocks(result_blocks)
 
             for call, result in ordered_results:
                 yield AgentToolResult(call=call, result=result)
