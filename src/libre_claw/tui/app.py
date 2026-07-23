@@ -324,11 +324,8 @@ MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "openai": (
         ("gpt-5.6-sol", "GPT-5.6 Sol"),
-        ("gpt-5.6-sol-pro", "GPT-5.6 Sol Pro"),
         ("gpt-5.6-terra", "GPT-5.6 Terra"),
-        ("gpt-5.6-terra-pro", "GPT-5.6 Terra Pro"),
         ("gpt-5.6-luna", "GPT-5.6 Luna"),
-        ("gpt-5.6-luna-pro", "GPT-5.6 Luna Pro"),
         ("gpt-5.5", "GPT-5.5"),
         ("gpt-4o", "GPT-4o"),
         ("gpt-4.1", "GPT-4.1"),

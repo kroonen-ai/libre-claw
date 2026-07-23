@@ -94,21 +94,25 @@ def test_ollama_cloud_presets_include_current_library_names() -> None:
     assert len(preset_names) == len(OLLAMA_MODEL_PRESETS)
 
 
-def test_codex_oauth_presets_include_current_cli_model_names() -> None:
+def test_codex_oauth_presets_match_official_codex_model_guide() -> None:
     preset_names = {preset.model for preset in CODEX_MODEL_PRESETS}
 
-    assert "gpt-5.6-sol" in preset_names
-    assert "gpt-5.6-sol-pro" in preset_names
-    assert "gpt-5.6-terra" in preset_names
-    assert "gpt-5.6-terra-pro" in preset_names
-    assert "gpt-5.6-luna" in preset_names
-    assert "gpt-5.6-luna-pro" in preset_names
-    assert "gpt-5.5" in preset_names
-    assert "gpt-5.4" in preset_names
-    assert "gpt-5.4-mini" in preset_names
-    assert "gpt-5.3-codex" in preset_names
-    assert "gpt-5.3-codex-spark" in preset_names
-    assert "gpt-5.2" in preset_names
+    assert preset_names == {
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.3-codex-spark",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+    }
+    assert not {
+        "gpt-5.6-sol-pro",
+        "gpt-5.6-terra-pro",
+        "gpt-5.6-luna-pro",
+        "gpt-5.3-codex",
+        "gpt-5.2",
+    } & preset_names
     assert "codex-auto-review" not in preset_names
 
 

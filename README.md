@@ -206,7 +206,7 @@ Key lookup order:
 /model anthropic:claude-sonnet-5 --global
 /model anthropic:claude-opus-4-8 --global
 /model openai:gpt-5.5 --global
-/model codex:gpt-5.5 --global
+/model codex:gpt-5.6-sol --global
 ```
 
 Fallback slots let Libre Claw keep working if the primary provider is rate-limited
@@ -275,8 +275,25 @@ Or inside the TUI:
 ```text
 /codex login
 /provider codex
-/model codex:gpt-5.5 --global
+/model codex:gpt-5.6-sol --global
 ```
+
+Libre Claw's OAuth picker follows
+[OpenAI's current Codex model guide](https://developers.openai.com/codex/models):
+
+| Model | Best fit |
+| --- | --- |
+| `gpt-5.6-sol` | Flagship model for complex coding, computer use, research, and cybersecurity. |
+| `gpt-5.6-terra` | Balanced everyday work with strong reasoning and tool use at a lower cost. |
+| `gpt-5.6-luna` | Fast, affordable execution for clear, repeatable, high-volume tasks. |
+| `gpt-5.5` | Previous-generation frontier model for complex coding and knowledge work. |
+| `gpt-5.3-codex-spark` | Text-only, near-instant coding research preview for ChatGPT Pro users. |
+| `gpt-5.4` | Professional work with strong coding, reasoning, tool use, and agentic workflows. |
+| `gpt-5.4-mini` | Fast, efficient coding tasks and subagents. |
+
+OpenAI marks `gpt-5.2` and `gpt-5.3-codex` as deprecated for ChatGPT
+sign-in, so Libre Claw excludes them from the OAuth picker. Model availability
+still depends on the signed-in ChatGPT account and workspace.
 
 ## Run Surfaces
 

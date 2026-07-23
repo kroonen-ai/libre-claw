@@ -13,67 +13,42 @@ class CodexModelPreset:
     description: str
 
 
-# Mirrors the listed models exposed by Codex CLI 0.133.0 / its model catalog.
-# Keep hidden internal helpers such as codex-auto-review out of the picker.
+# Source: https://developers.openai.com/codex/models
+# Keep deprecated models and hidden internal helpers out of the picker.
 CODEX_MODEL_PRESETS: tuple[CodexModelPreset, ...] = (
     CodexModelPreset(
         "gpt-5.6-sol",
         "GPT-5.6 Sol",
-        "OpenAI GPT-5.6 Sol coding and agent model via Codex CLI.",
-    ),
-    CodexModelPreset(
-        "gpt-5.6-sol-pro",
-        "GPT-5.6 Sol Pro",
-        "OpenAI GPT-5.6 Sol Pro higher-capacity coding model via Codex CLI.",
+        "Flagship model for complex coding, computer use, research, and cybersecurity.",
     ),
     CodexModelPreset(
         "gpt-5.6-terra",
         "GPT-5.6 Terra",
-        "OpenAI GPT-5.6 Terra reasoning and agent model via Codex CLI.",
-    ),
-    CodexModelPreset(
-        "gpt-5.6-terra-pro",
-        "GPT-5.6 Terra Pro",
-        "OpenAI GPT-5.6 Terra Pro higher-capacity reasoning model via Codex CLI.",
+        "Balanced everyday model with strong reasoning and tool use at a lower cost.",
     ),
     CodexModelPreset(
         "gpt-5.6-luna",
         "GPT-5.6 Luna",
-        "OpenAI GPT-5.6 Luna general and agent model via Codex CLI.",
-    ),
-    CodexModelPreset(
-        "gpt-5.6-luna-pro",
-        "GPT-5.6 Luna Pro",
-        "OpenAI GPT-5.6 Luna Pro higher-capacity general model via Codex CLI.",
+        "Fast, affordable model for clear, repeatable, high-volume tasks.",
     ),
     CodexModelPreset(
         "gpt-5.5",
         "GPT-5.5",
-        "Frontier Codex model for complex coding, research, and real-world work.",
-    ),
-    CodexModelPreset(
-        "gpt-5.4",
-        "GPT-5.4",
-        "Strong model for everyday coding and professional work.",
-    ),
-    CodexModelPreset(
-        "gpt-5.4-mini",
-        "GPT-5.4 Mini",
-        "Small, fast model for simpler coding tasks and cheaper throughput.",
-    ),
-    CodexModelPreset(
-        "gpt-5.3-codex",
-        "GPT-5.3 Codex",
-        "Coding-optimized Codex model.",
+        "Previous-generation frontier model for complex coding and knowledge work.",
     ),
     CodexModelPreset(
         "gpt-5.3-codex-spark",
         "GPT-5.3 Codex Spark",
-        "Ultra-fast Codex research preview.",
+        "Text-only, near-instant coding research preview for ChatGPT Pro users.",
     ),
     CodexModelPreset(
-        "gpt-5.2",
-        "GPT-5.2",
-        "Legacy professional-work model for long-running agents.",
+        "gpt-5.4",
+        "GPT-5.4",
+        "Frontier model for professional work, coding, reasoning, and tool use.",
+    ),
+    CodexModelPreset(
+        "gpt-5.4-mini",
+        "GPT-5.4 Mini",
+        "Fast, efficient mini model for responsive coding tasks and subagents.",
     ),
 )

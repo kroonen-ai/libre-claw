@@ -116,9 +116,10 @@ First shippable Libre Claw release, built by Kroonen AI.
   context limits, vision input, model-specific thinking controls, and opaque
   reasoning continuity across tool calls.
 - Codex/ChatGPT login can be started from inside the TUI with `/codex login`,
-  then used through `/provider codex` or `/model codex:gpt-5.5`, with Codex
-  OAuth picker presets for `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
-  `gpt-5.3-codex`, `gpt-5.3-codex-spark`, and `gpt-5.2`.
+  then used through `/provider codex` or `/model codex:gpt-5.6-sol`. The OAuth
+  picker follows OpenAI's current Codex model guide with `gpt-5.6-sol`,
+  `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.3-codex-spark`,
+  `gpt-5.4`, and `gpt-5.4-mini`; deprecated ChatGPT sign-in models are omitted.
 - OpenRouter support with usage accounting and a shared recommended model preset
   catalog for TUI, Telegram, and usage reports, including
   `deepseek/deepseek-v4-flash`, `sakana/fugu-ultra`,
