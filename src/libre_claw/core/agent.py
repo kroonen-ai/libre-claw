@@ -14,10 +14,12 @@ import structlog
 
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.session import (
+    ContentBlock,
     Session,
     UserAttachment,
     estimate_context_tokens,
     image_block,
+    provider_reasoning_block,
     text_block,
     tool_result_block,
     tool_use_block,
@@ -28,6 +30,7 @@ from libre_claw.providers.base import (
     Done,
     LLMProvider,
     ProviderError,
+    ReasoningDelta,
     StreamEvent,
     TextDelta,
     ToolCallReady,
@@ -176,6 +179,7 @@ class Agent:
                 active_provider_index = 0
                 fallback_calls_since_recheck = 0
             assistant_chunks: list[str] = []
+            reasoning_chunks: list[ReasoningDelta] = []
             tool_calls: list[ToolCall] = []
             provider_failed = False
             provider_error = ""
@@ -190,6 +194,10 @@ class Agent:
                         if isinstance(event, TextDelta):
                             assistant_chunks.append(event.text)
                             yield AgentTextDelta(event.text)
+                            continue
+
+                        if isinstance(event, ReasoningDelta):
+                            reasoning_chunks.append(event)
                             continue
 
                         if isinstance(event, ToolCallReady):
@@ -250,6 +258,7 @@ class Agent:
                         await asyncio.sleep(retry_delay)
                     provider_failed = False
                     provider_error = ""
+                    reasoning_chunks.clear()
                     continue
 
                 next_provider_index = provider_index + 1
@@ -267,6 +276,7 @@ class Agent:
                 active_provider = provider_chain[provider_index][1]
                 provider_attempt = 0
                 fallback_calls_since_recheck = 0
+                reasoning_chunks.clear()
                 yield AgentFallback(
                     provider_label=provider_chain[provider_index][0],
                     reason=provider_error,
@@ -283,7 +293,7 @@ class Agent:
                 fallback_calls_since_recheck += 1
 
             if not tool_calls:
-                self._save_assistant_text(assistant_chunks)
+                self._save_assistant_text(assistant_chunks, reasoning_chunks)
                 yield AgentDone(turn_usage)
                 return
 
@@ -292,7 +302,7 @@ class Agent:
                 yield AgentError(f"Stopped after exceeding {self.max_tool_calls_per_turn} tool calls in one turn.")
                 return
 
-            self._save_assistant_tool_request(assistant_chunks, tool_calls)
+            self._save_assistant_tool_request(assistant_chunks, reasoning_chunks, tool_calls)
 
             immediate_results: dict[str, ToolResult] = {}
             executable_calls: list[ToolCall] = []
@@ -357,14 +367,27 @@ class Agent:
             for call, result in ordered_results:
                 yield AgentToolResult(call=call, result=result)
 
-    def _save_assistant_text(self, chunks: list[str]) -> None:
+    def _save_assistant_text(
+        self,
+        chunks: list[str],
+        reasoning_chunks: list[ReasoningDelta] | None = None,
+    ) -> None:
+        blocks = _provider_reasoning_blocks(reasoning_chunks or [])
         text = "".join(chunks)
         if text:
-            self.session.add_assistant_message(text)
-            chunks.clear()
+            blocks.append(text_block(text))
+        self.session.add_assistant_blocks(blocks)
+        chunks.clear()
+        if reasoning_chunks is not None:
+            reasoning_chunks.clear()
 
-    def _save_assistant_tool_request(self, chunks: list[str], tool_calls: list[ToolCall]) -> None:
-        blocks = []
+    def _save_assistant_tool_request(
+        self,
+        chunks: list[str],
+        reasoning_chunks: list[ReasoningDelta],
+        tool_calls: list[ToolCall],
+    ) -> None:
+        blocks = _provider_reasoning_blocks(reasoning_chunks)
         text = "".join(chunks)
         if text:
             blocks.append(text_block(text))
@@ -374,6 +397,7 @@ class Agent:
         )
         self.session.add_assistant_blocks(blocks)
         chunks.clear()
+        reasoning_chunks.clear()
 
     def _maybe_compact_session(self) -> None:
         estimated_tokens = estimate_context_tokens(
@@ -558,6 +582,17 @@ class Agent:
         except Exception as exc:
             self._logger.warning("memory_load_failed", error=str(exc))
             return []
+
+
+def _provider_reasoning_blocks(chunks: Sequence[ReasoningDelta]) -> list[ContentBlock]:
+    grouped: dict[str, list[str]] = {}
+    for chunk in chunks:
+        grouped.setdefault(chunk.provider, []).append(chunk.text)
+    return [
+        provider_reasoning_block("".join(parts), provider)
+        for provider, parts in grouped.items()
+        if any(parts)
+    ]
 
 
 def _dedupe_texts(texts: Sequence[str]) -> list[str]:

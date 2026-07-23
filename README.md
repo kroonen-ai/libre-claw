@@ -23,7 +23,7 @@ Current release: Version `0.1.0`.
 | Local dashboard | Start, inspect, cancel, and approve daemon-owned runs from a browser on localhost. |
 | Memory and skills | Local persistent memory, `SOUL.md` persona files, user/project `SKILL.md` workflows, and optional Vercel Skills discovery. |
 | Real tools | File edits, shell, code search, web search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
-| Provider routing | OpenRouter, Ollama/Ollama Cloud, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
+| Provider routing | Moonshot AI / Kimi, OpenRouter, Ollama/Ollama Cloud, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
 | Reproducible evals | A Harbor adapter runs the real Libre Claw loop against Terminal-Bench 2.1. |
 | Petdex companion | Optional local state updates for the Petdex desktop companion app. |
 | Safe defaults | API keys stay out of project config, dangerous commands are blocked, and writes require approval. |
@@ -156,6 +156,7 @@ Libre Claw does not need real API keys in project files. Use the key store:
 
 ```bash
 libre-claw auth set-key openrouter
+libre-claw auth set-key moonshot
 libre-claw auth set-key anthropic
 libre-claw auth set-key openai
 libre-claw auth set-key ollama
@@ -166,6 +167,7 @@ Or use environment variables:
 
 ```bash
 export OPENROUTER_API_KEY="..."
+export MOONSHOT_API_KEY="..."
 export ANTHROPIC_API_KEY="..."
 export OPENAI_API_KEY="..."
 export OLLAMA_API_KEY="..."
@@ -194,6 +196,10 @@ Key lookup order:
 /model openrouter:google/gemini-3.5-flash-lite --global
 /model openrouter:anthropic/claude-sonnet-5 --global
 /model openrouter:nvidia/nemotron-3-ultra-550b-a55b:free --global
+/model moonshot:kimi-k3 --global
+/model moonshot:kimi-k2.7-code --global
+/model moonshot:kimi-k2.7-code-highspeed --global
+/model moonshot:kimi-k2.6 --global
 /model ollama:glm-5.2:cloud --global
 /model ollama:minimax-m3:cloud --global
 /model ollama:kimi-k2.6:cloud --global
@@ -249,6 +255,7 @@ Use `/provider` when you only want to switch providers:
 
 ```text
 /provider openrouter
+/provider moonshot
 /provider ollama
 /provider anthropic
 /provider openai
@@ -627,7 +634,8 @@ libre-claw auth status
 libre-claw auth set-key openrouter
 ```
 
-Replace `openrouter` with `anthropic`, `openai`, or `ollama`. For Codex:
+Replace `openrouter` with `moonshot`, `anthropic`, `openai`, or `ollama`. For
+Codex:
 
 ```bash
 libre-claw auth codex-login
@@ -664,6 +672,7 @@ api_key_env = ""
 - Website: [libreclaw.sh](https://libreclaw.sh)
 - Docs: [libreclaw.sh/docs](https://libreclaw.sh/docs/)
 - Getting started: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+- Moonshot AI / Kimi integration: [docs/MOONSHOT_KIMI.md](docs/MOONSHOT_KIMI.md)
 - SearXNG integration: [docs/SEARXNG_INTEGRATION.md](docs/SEARXNG_INTEGRATION.md)
 - Vercel Skills integration: [docs/VERCEL_SKILLS_INTEGRATION.md](docs/VERCEL_SKILLS_INTEGRATION.md)
 - Security: [SECURITY.md](SECURITY.md)

@@ -1248,7 +1248,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
         <form id="runForm" class="body stack">
           <label>Message<textarea id="runMessage" required placeholder="Ask Libre Claw to do something"></textarea></label>
           <div class="grid-2">
-            <label>Provider<input id="runProvider" placeholder="default"></label>
+            <label>Provider<select id="runProvider">
+              <option value="">default</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI API</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="moonshot">Moonshot AI / Kimi</option>
+              <option value="ollama">Ollama Cloud/Local</option>
+              <option value="codex">OpenAI Codex</option>
+            </select></label>
             <label>Model<input id="runModel" placeholder="default"></label>
           </div>
           <button class="primary" type="submit">Start</button>
@@ -1352,7 +1360,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
               </div>
               <div class="grid-2">
                 <label>Status<select id="automationStatus"><option value="active">active</option><option value="paused">paused</option></select></label>
-                <label>Provider<input id="automationProvider" placeholder="default"></label>
+                <label>Provider<select id="automationProvider">
+                  <option value="">default</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="openai">OpenAI API</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="moonshot">Moonshot AI / Kimi</option>
+                  <option value="ollama">Ollama Cloud/Local</option>
+                  <option value="codex">OpenAI Codex</option>
+                </select></label>
               </div>
               <label>Model<input id="automationModel" placeholder="default"></label>
               <div class="row">

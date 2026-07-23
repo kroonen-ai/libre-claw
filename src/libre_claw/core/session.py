@@ -108,6 +108,15 @@ def image_block(attachment: UserAttachment) -> ContentBlock:
     return block
 
 
+def provider_reasoning_block(text: str, provider: str) -> ContentBlock:
+    """Store opaque provider reasoning without presenting it as assistant text."""
+    return {
+        "type": "provider_reasoning",
+        "provider": provider,
+        "text": text,
+    }
+
+
 def tool_use_block(tool_use_id: str, name: str, input_data: dict[str, Any]) -> ContentBlock:
     return {
         "type": "tool_use",
@@ -247,6 +256,8 @@ def estimate_context_tokens(
         for block in message.content:
             block_type = block.get("type")
             if block_type == "text":
+                character_count += len(str(block.get("text", "")))
+            elif block_type == "provider_reasoning":
                 character_count += len(str(block.get("text", "")))
             elif block_type == "tool_use":
                 character_count += len(str(block.get("name", "")))

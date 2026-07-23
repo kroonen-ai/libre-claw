@@ -56,6 +56,15 @@ default_model = "openrouter/auto"
 max_tokens = 16384
 auto_context_window = true
 
+[providers.moonshot]
+api_key_env = "MOONSHOT_API_KEY"
+base_url = "https://api.moonshot.ai/v1"
+default_model = "kimi-k3"
+max_tokens = 131072
+reasoning_effort = "max" # Kimi K3: low | high | max
+thinking = "auto" # auto | enabled | disabled; only Kimi K2.6 supports disabled
+auto_context_window = true
+
 [providers.codex]
 default_model = "gpt-5.5"
 executable = "codex"
@@ -125,7 +134,7 @@ default_model = "claude-opus-4-8"
 
 [goal]
 max_turns = 20
-judge_provider = "current" # current | anthropic | openai | openrouter | ollama | codex
+judge_provider = "current" # current | anthropic | openai | openrouter | moonshot | ollama | codex
 judge_model = "" # empty means use the selected judge provider default/current model
 judge_temperature = 0.0
 judge_max_tokens = 1024

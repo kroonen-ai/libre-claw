@@ -1356,7 +1356,7 @@ def auth_status(ctx: click.Context) -> None:
     providers = [
         (name, _provider_api_key_env(provider_config))
         for name, provider_config in config.providers.items()
-        if name in {"anthropic", "openai", "openrouter", "ollama"}
+        if name in {"anthropic", "openai", "openrouter", "moonshot", "ollama"}
     ]
     providers.append(("telegram", config.telegram.bot_token_env))
     try:

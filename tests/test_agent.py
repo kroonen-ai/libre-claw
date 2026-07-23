@@ -27,6 +27,7 @@ from libre_claw.core.session import (
     Session,
     UserAttachment,
     image_block,
+    provider_reasoning_block,
     text_block,
     tool_result_block,
     tool_use_block,
@@ -36,6 +37,7 @@ from libre_claw.providers.base import (
     Done,
     LLMProvider,
     ProviderError,
+    ReasoningDelta,
     StreamEvent,
     TextDelta,
     ToolCallReady,
@@ -300,6 +302,44 @@ async def test_agent_executes_tool_then_continues_to_final_answer() -> None:
     )
 
 
+async def test_agent_retains_provider_reasoning_privately_across_tool_turns() -> None:
+    provider = ScriptedProvider(
+        [
+            [
+                ReasoningDelta("inspect privately", provider="moonshot"),
+                ToolCallReady("toolu_1", "echo", {"value": "x"}),
+                Done(stop_reason="tool_use"),
+            ],
+            [
+                ReasoningDelta("finish privately", provider="moonshot"),
+                TextDelta("done"),
+                Done(),
+            ],
+        ]
+    )
+    registry = ToolRegistry([EchoTool(ToolContext(working_directory=Path.cwd()))])
+    agent = make_agent(provider, registry)
+
+    events = await collect_events(agent, "Use a tool")
+
+    assert ReasoningDelta("inspect privately", provider="moonshot") not in events
+    assert events[-2:] == [AgentTextDelta("done"), AgentDone(None)]
+    assert agent.session.messages[1] == ChatMessage(
+        role="assistant",
+        content=[
+            provider_reasoning_block("inspect privately", "moonshot"),
+            tool_use_block("toolu_1", "echo", {"value": "x"}),
+        ],
+    )
+    assert agent.session.messages[-1] == ChatMessage(
+        role="assistant",
+        content=[
+            provider_reasoning_block("finish privately", "moonshot"),
+            text_block("done"),
+        ],
+    )
+
+
 async def test_agent_sends_tool_attachments_back_to_provider() -> None:
     provider = ScriptedProvider(
         [
@@ -447,6 +487,26 @@ async def test_agent_falls_back_when_primary_provider_fails_before_output() -> N
         AgentTextDelta("ok"),
         AgentDone(None),
     ]
+
+
+async def test_agent_discards_primary_reasoning_before_fallback() -> None:
+    primary = ScriptedProvider(
+        [[ReasoningDelta("primary private thought", provider="moonshot"), ProviderError("temporarily unavailable")]]
+    )
+    fallback = ScriptedProvider([[TextDelta("fallback"), Done()]])
+    agent = make_agent(
+        primary,
+        fallback_providers=(("openrouter:backup", fallback),),
+    )
+
+    events = await collect_events(agent, "Hi")
+
+    assert isinstance(events[0], AgentFallback)
+    assert events[-2:] == [AgentTextDelta("fallback"), AgentDone(None)]
+    assert agent.session.messages[-1] == ChatMessage(
+        role="assistant",
+        content=[text_block("fallback")],
+    )
     assert len(primary.received_messages) == 1
     assert len(fallback.received_messages) == 1
 

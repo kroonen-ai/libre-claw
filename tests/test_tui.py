@@ -471,7 +471,9 @@ def test_model_help_includes_enrollment_commands(monkeypatch, tmp_path: Path) ->
     assert "Current model: anthropic:claude-opus-4-8" in help_text
     assert "Add `--global`" in help_text
     assert "libre-claw auth set-key openrouter" in help_text
+    assert "libre-claw auth set-key moonshot" in help_text
     assert "/model openrouter:openrouter/auto" in help_text
+    assert "/model moonshot:kimi-k3" in help_text
 
 
 def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_path: Path) -> None:
@@ -494,6 +496,8 @@ def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_pat
     assert any(suggestion.name == "/model openrouter:minimax/minimax-m3" for suggestion in ollama_suggestions)
     glm_suggestions = app._slash_suggestion_matches("/model glm-5.2")
     assert any(suggestion.name == "/model ollama:glm-5.2:cloud" for suggestion in glm_suggestions)
+    kimi_suggestions = app._slash_suggestion_matches("/model moonshot:kimi-k3")
+    assert any(suggestion.name == "/model moonshot:kimi-k3" for suggestion in kimi_suggestions)
 
 
 def test_tui_parses_pasted_image_path(tmp_path: Path) -> None:
@@ -1138,6 +1142,22 @@ async def test_setup_key_flow_hides_and_stores_provider_key(monkeypatch, tmp_pat
     assert "Stored openrouter API key" in system_text
     assert "openrouter: encrypted_file" in system_text
     assert "sk-or-secret" not in system_text
+
+
+async def test_setup_key_flow_supports_moonshot(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    fake_store = FakeApiKeyStore()
+    monkeypatch.setattr("libre_claw.tui.app.ApiKeyStore.from_config", lambda _auth: fake_store)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        await app._handle_command("/setup key moonshot")
+        input_widget = app.query_one("#input")
+        assert input_widget.password is True
+        await app.handle_user_input("sk-moonshot-secret")
+
+    assert fake_store.keys == {"moonshot": "sk-moonshot-secret"}
 
 
 async def test_transcript_from_run_events_reconstructs_tool_entries(tmp_path: Path) -> None:

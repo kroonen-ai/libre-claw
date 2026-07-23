@@ -70,6 +70,7 @@ from libre_claw.core.usage import (
 from libre_claw.core.session import ChatMessage, UserAttachment, session_from_payload, text_block
 from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
 from libre_claw.providers import Done, LLMProvider, ProviderError, TextDelta, Usage, create_fallback_providers, create_provider
+from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.telegram.formatting import clean_final_answer_for_telegram, plain_text_chunks, telegram_html_chunks
 from libre_claw.tools_builtin import create_builtin_registry
@@ -1285,7 +1286,13 @@ class DaemonServer:
         )
 
     async def _with_openrouter_model_limits(self, config: LibreClawConfig) -> LibreClawConfig:
-        if config.general.default_provider.lower() not in {"openrouter"}:
+        provider = config.general.default_provider.lower()
+        if provider == "moonshot":
+            updated = apply_moonshot_model_limits(config)
+            if updated is not config and config is self.config:
+                self.config = updated
+            return updated
+        if provider != "openrouter":
             return config
         try:
             limits = await detect_openrouter_model_limits(config, model=config.general.default_model)
@@ -1918,15 +1925,15 @@ def _model_payload(config: LibreClawConfig) -> dict[str, Any]:
         "model": config.general.default_model,
         "context_window_tokens": config.agent.context_window_tokens,
     }
-    openrouter_config = config.providers.get("openrouter")
-    if isinstance(openrouter_config, Mapping):
+    provider_config = config.providers.get(str(payload["provider"]))
+    if isinstance(provider_config, Mapping):
         for source_key, payload_key in (
             ("detected_context_window_tokens", "detected_context_window_tokens"),
             ("detected_max_completion_tokens", "detected_max_completion_tokens"),
             ("detected_context_source", "detected_context_source"),
             ("detected_context_model", "detected_context_model"),
         ):
-            value = openrouter_config.get(source_key)
+            value = provider_config.get(source_key)
             if value not in (None, ""):
                 payload[payload_key] = value
     return payload

@@ -118,6 +118,8 @@ from libre_claw.providers import (
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
+from libre_claw.providers.moonshot_catalog import MOONSHOT_MODEL_PRESETS
+from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.release import latest_release_notes
@@ -279,8 +281,16 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/models", "/models", "Show model presets"),
     SlashCommand("/fallback", "/fallback list|set|clear", "Manage fallback provider/model slots"),
     SlashCommand("/theme", "/theme list|<name> [--global]", "Switch or persist the TUI/dashboard theme"),
-    SlashCommand("/provider", "/provider anthropic|openai|openrouter|ollama|codex", "Switch provider for new turns"),
-    SlashCommand("/setup", "/setup status|provider|key|model|openrouter|ollama-cloud|codex", "First-run provider and key setup"),
+    SlashCommand(
+        "/provider",
+        "/provider anthropic|openai|openrouter|moonshot|ollama|codex",
+        "Switch provider for new turns",
+    ),
+    SlashCommand(
+        "/setup",
+        "/setup status|provider|key|model|openrouter|moonshot|ollama-cloud|codex",
+        "First-run provider and key setup",
+    ),
     SlashCommand("/codex", "/codex login|status|logout|use [model]", "Manage Codex/ChatGPT login"),
     SlashCommand("/save", "/save [name]", "Save the current session"),
     SlashCommand("/load", "/load <name>", "Load a saved session"),
@@ -307,7 +317,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
 )
 SLASH_COMMAND_NAMES = frozenset(command.name for command in SLASH_COMMANDS)
 
-SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "ollama", "codex")
+SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "moonshot", "ollama", "codex")
 MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
     "anthropic": (
         *((preset.model, preset.label) for preset in ANTHROPIC_MODEL_PRESETS),
@@ -331,6 +341,9 @@ MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "openrouter": (
         *((preset.model, f"{preset.label} through OpenRouter") for preset in OPENROUTER_MODEL_PRESETS),
+    ),
+    "moonshot": (
+        *((preset.model, f"{preset.label} through Moonshot AI") for preset in MOONSHOT_MODEL_PRESETS),
     ),
     "ollama": (
         *((preset.model, preset.label) for preset in OLLAMA_MODEL_PRESETS),
@@ -973,6 +986,8 @@ class LibreClawApp(App[None]):
     def __init__(self, config: LibreClawConfig | None = None) -> None:
         super().__init__()
         self.config = config or load_config()
+        if _canonical_tui_provider(self.config.general.default_provider) == "moonshot":
+            self.config = apply_moonshot_model_limits(self.config)
         self._theme = tui_theme_palette(self.config.general.theme)
         self.session = Session()
         self.memory_store = MemoryStore()
@@ -2590,7 +2605,10 @@ class LibreClawApp(App[None]):
                 return
             parsed = _parse_model_argument(tokens.pop(0), self.config.general.default_provider)
             if parsed is None:
-                self._append_system("Fallback route must look like openrouter:openrouter/auto or ollama:kimi-k2.6:cloud.")
+                self._append_system(
+                    "Fallback route must look like moonshot:kimi-k3, "
+                    "openrouter:openrouter/auto, or ollama:kimi-k2.6:cloud."
+                )
                 return
             api_key_env, parse_error = _parse_fallback_key_env(tokens)
             if parse_error is not None:
@@ -2684,6 +2702,8 @@ class LibreClawApp(App[None]):
                 self.config = self._verified_global_model_config(provider, selected_model, persisted_path)
             except ConfigError as exc:
                 self._append_system(f"Model set for this session, but global config was not updated: {exc}")
+        if provider == "moonshot":
+            self.config = apply_moonshot_model_limits(self.config)
         self._sync_daemon_model_after_selection(provider, selected_model, persist_global=persist_global)
         if persist_global and self.daemon_client is None:
             self._track_run_background_task(self._update_local_scheduled_models(provider, selected_model))
@@ -2734,7 +2754,16 @@ class LibreClawApp(App[None]):
         return "Daemon fallback chain updated for new daemon-backed runs."
 
     async def _refresh_openrouter_model_limits(self) -> None:
-        if _canonical_tui_provider(self.config.general.default_provider) != "openrouter":
+        provider = _canonical_tui_provider(self.config.general.default_provider)
+        if provider == "moonshot":
+            updated = apply_moonshot_model_limits(self.config)
+            if not _runtime_model_metadata_changed(self.config, updated):
+                return
+            self.config = updated
+            self._rebuild_agent()
+            self._update_status()
+            return
+        if provider != "openrouter":
             return
         try:
             limits = await detect_openrouter_model_limits(self.config, model=self.config.general.default_model)
@@ -2785,6 +2814,8 @@ class LibreClawApp(App[None]):
             self._append_system(_provider_help_text(self.config))
             return
         self.config = _replace_general(self.config, default_provider=provider)
+        if provider == "moonshot":
+            self.config = apply_moonshot_model_limits(self.config)
         self._rebuild_agent()
         self._update_status()
         if self.provider_error:
@@ -2819,8 +2850,10 @@ class LibreClawApp(App[None]):
 
         if action == "key":
             provider = _canonical_tui_provider(value)
-            if provider not in {"anthropic", "openai", "openrouter", "ollama"}:
-                self._append_system("Usage: /setup key anthropic|openai|openrouter|ollama")
+            if provider not in {"anthropic", "openai", "openrouter", "moonshot", "ollama"}:
+                self._append_system(
+                    "Usage: /setup key anthropic|openai|openrouter|moonshot|ollama"
+                )
                 return
             self._append_system(f"Ready for {provider} API key. Paste it into the input box; it will be hidden.")
             self._begin_key_setup(provider)
@@ -2833,6 +2866,13 @@ class LibreClawApp(App[None]):
         if action == "openrouter":
             self._set_model("openrouter:qwen/qwen3.7-max --global")
             self._append_system("Next: run `/setup key openrouter` if the OpenRouter key is not stored yet.")
+            return
+
+        if action == "moonshot":
+            self._set_model("moonshot:kimi-k3 --global")
+            self._append_system(
+                "Next: run `/setup key moonshot` if the Moonshot Platform key is not stored yet."
+            )
             return
 
         if action == "ollama-cloud":
@@ -2851,7 +2891,7 @@ class LibreClawApp(App[None]):
         providers = [
             (name, _provider_api_key_env(provider_config))
             for name, provider_config in self.config.providers.items()
-            if name in {"anthropic", "openai", "openrouter", "ollama"}
+            if name in {"anthropic", "openai", "openrouter", "moonshot", "ollama"}
         ]
         try:
             statuses = await asyncio.to_thread(store.key_status, providers)
@@ -2874,6 +2914,7 @@ class LibreClawApp(App[None]):
                 "- /setup provider openrouter",
                 "- /setup key openrouter",
                 "- /model openrouter:qwen/qwen3.7-max --global",
+                "- /setup moonshot",
                 "- /setup codex",
             ]
         )
@@ -3435,7 +3476,8 @@ class LibreClawApp(App[None]):
         )
         if provider not in SUPPORTED_PROVIDERS:
             raise ProviderConfigurationError(
-                "[goal].judge_provider must be 'current', 'anthropic', 'openai', 'openrouter', 'ollama', or 'codex'."
+                "[goal].judge_provider must be 'current', 'anthropic', 'openai', "
+                "'openrouter', 'moonshot', 'ollama', or 'codex'."
             )
 
         model = self.config.goal.judge_model.strip()
@@ -4398,6 +4440,8 @@ class LibreClawApp(App[None]):
                 SlashCommand("/setup status", "/setup status", "Show provider and key readiness"),
                 SlashCommand("/setup provider openrouter", "/setup provider openrouter", "Switch to OpenRouter"),
                 SlashCommand("/setup key openrouter", "/setup key openrouter", "Store OpenRouter key inside the TUI"),
+                SlashCommand("/setup moonshot", "/setup moonshot", "Configure Moonshot AI with Kimi K3"),
+                SlashCommand("/setup key moonshot", "/setup key moonshot", "Store Moonshot Platform key inside the TUI"),
                 SlashCommand("/setup key anthropic", "/setup key anthropic", "Store Anthropic key inside the TUI"),
                 SlashCommand("/setup key openai", "/setup key openai", "Store OpenAI key inside the TUI"),
                 SlashCommand("/setup key ollama", "/setup key ollama", "Store Ollama Cloud key inside the TUI"),
@@ -5007,7 +5051,7 @@ def _config_with_daemon_model_payload(config: LibreClawConfig, payload: Mapping[
     provider = _canonical_tui_provider(str(payload.get("provider") or config.general.default_provider))
     model = str(payload.get("model") or config.general.default_model).strip()
     updated = _replace_model_selection(config, provider, model)
-    if provider != "openrouter":
+    if provider not in {"openrouter", "moonshot"}:
         return updated
 
     context_window = _positive_int(payload.get("detected_context_window_tokens")) or _positive_int(
@@ -5019,7 +5063,7 @@ def _config_with_daemon_model_payload(config: LibreClawConfig, payload: Mapping[
     providers: dict[str, Mapping[str, Any]] = {
         name: dict(value) if isinstance(value, Mapping) else value for name, value in updated.providers.items()
     }
-    openrouter_config = dict(providers.get("openrouter", {}))
+    provider_config = dict(providers.get(provider, {}))
     for key in (
         "detected_context_window_tokens",
         "detected_max_completion_tokens",
@@ -5028,23 +5072,24 @@ def _config_with_daemon_model_payload(config: LibreClawConfig, payload: Mapping[
     ):
         value = payload.get(key)
         if value not in (None, ""):
-            openrouter_config[key] = value
-    providers["openrouter"] = openrouter_config
+            provider_config[key] = value
+    providers[provider] = provider_config
     return replace(updated, providers=providers)
 
 
 def _runtime_model_metadata_changed(before: LibreClawConfig, after: LibreClawConfig) -> bool:
     if before.agent.context_window_tokens != after.agent.context_window_tokens:
         return True
-    return _openrouter_metadata_tuple(before) != _openrouter_metadata_tuple(after)
+    return _provider_metadata_tuple(before) != _provider_metadata_tuple(after)
 
 
-def _openrouter_metadata_tuple(config: LibreClawConfig) -> tuple[object, ...]:
-    openrouter_config = config.providers.get("openrouter", {})
-    if not isinstance(openrouter_config, Mapping):
+def _provider_metadata_tuple(config: LibreClawConfig) -> tuple[object, ...]:
+    provider = _canonical_tui_provider(config.general.default_provider)
+    provider_config = config.providers.get(provider, {})
+    if not isinstance(provider_config, Mapping):
         return ()
     return tuple(
-        openrouter_config.get(key)
+        provider_config.get(key)
         for key in (
             "detected_context_window_tokens",
             "detected_max_completion_tokens",
@@ -5226,7 +5271,8 @@ def _provider_help_text(config: LibreClawConfig) -> str:
     provider = _canonical_tui_provider(config.general.default_provider)
     lines = [
         f"Current provider: {provider}",
-        "Use `/provider anthropic|openai|openrouter|ollama|codex`, or use `/model <provider>:<name>` to switch both.",
+        "Use `/provider anthropic|openai|openrouter|moonshot|ollama|codex`, "
+        "or use `/model <provider>:<name>` to switch both.",
         "For Codex/ChatGPT auth, run `/codex login` then `/provider codex`.",
     ]
     return "\n".join(lines)
@@ -5237,10 +5283,11 @@ def _setup_help_text() -> str:
         [
             "Libre Claw first-run setup:",
             "/setup status",
-            "/setup provider anthropic|openai|openrouter|ollama|codex",
-            "/setup key anthropic|openai|openrouter|ollama",
+            "/setup provider anthropic|openai|openrouter|moonshot|ollama|codex",
+            "/setup key anthropic|openai|openrouter|moonshot|ollama",
             "/setup model <provider>:<model> [--global]",
             "/setup openrouter",
+            "/setup moonshot",
             "/setup ollama-cloud",
             "/setup codex",
             "",
