@@ -44,10 +44,11 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.agent.provider_retry_initial_delay == 1.0
     assert config.agent.tool_allowlist == ()
     assert config.agent.tool_denylist == ()
-    assert config.providers["moonshot"]["api_key_env"] == "MOONSHOT_API_KEY"
-    assert config.providers["moonshot"]["base_url"] == "https://api.moonshot.ai/v1"
-    assert config.providers["moonshot"]["default_model"] == "kimi-k3"
-    assert config.providers["moonshot"]["reasoning_effort"] == "max"
+    assert config.providers["moonshot"]["service"] == "kimi_code"
+    assert config.providers["moonshot"]["api_key_env"] == "KIMI_API_KEY"
+    assert config.providers["moonshot"]["base_url"] == "https://api.kimi.com/coding/v1"
+    assert config.providers["moonshot"]["default_model"] == "k3"
+    assert config.providers["moonshot"]["reasoning_effort"] == "high"
     assert config.fallback.recheck_after_attempts == 3
     assert config.goal.max_turns == 20
     assert config.goal.judge_provider == "current"
@@ -394,6 +395,68 @@ def test_set_global_default_model_updates_user_config(monkeypatch, tmp_path: Pat
     assert config.tui.show_file_tree is False
     assert config.tui.mouse is False
     assert config.tui.inline is False
+
+
+def test_set_global_default_model_migrates_legacy_kimi_code_selection(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = user_config_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "\n".join(
+            [
+                "[providers.moonshot]",
+                'api_key_env = "MOONSHOT_API_KEY"',
+                'base_url = "https://api.moonshot.ai/v1"',
+                'default_model = "kimi-k3"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    set_global_default_model("moonshot", "kimi-k3")
+
+    config = load_config()
+    assert config.general.default_provider == "moonshot"
+    assert config.general.default_model == "k3"
+    assert config.telegram.default_model == "k3"
+    assert config.providers["moonshot"]["service"] == "kimi_code"
+    assert config.providers["moonshot"]["api_key_env"] == "KIMI_API_KEY"
+    assert config.providers["moonshot"]["base_url"] == "https://api.kimi.com/coding/v1"
+    assert config.providers["moonshot"]["default_model"] == "k3"
+
+
+def test_explicit_moonshot_platform_service_preserves_platform_routing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[general]",
+                'default_provider = "moonshot"',
+                'default_model = "platform-model"',
+                "",
+                "[providers.moonshot]",
+                'service = "platform"',
+                'api_key_env = "MOONSHOT_API_KEY"',
+                'base_url = "https://api.moonshot.cn/v1"',
+                'default_model = "platform-model"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    config = load_config(config_path=config_path)
+
+    assert config.general.default_model == "platform-model"
+    assert config.providers["moonshot"]["service"] == "platform"
+    assert config.providers["moonshot"]["api_key_env"] == "MOONSHOT_API_KEY"
+    assert config.providers["moonshot"]["base_url"] == "https://api.moonshot.cn/v1"
 
 
 def test_tui_mouse_and_inline_overrides(monkeypatch, tmp_path: Path) -> None:

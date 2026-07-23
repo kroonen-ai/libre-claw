@@ -13,6 +13,12 @@ from pathlib import Path
 import re
 from typing import Any
 
+from libre_claw.kimi import (
+    canonical_kimi_code_model,
+    moonshot_service,
+    normalize_moonshot_selection,
+)
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:  # pragma: no cover - exercised only on Python 3.10 and earlier.
@@ -340,24 +346,38 @@ def set_global_default_model(
     if not clean_model:
         raise ConfigError("Model cannot be empty.")
 
-    path = Path(config_path).expanduser() if config_path is not None else user_config_path()
-    updates = {
-        "general": {
-            "default_provider": clean_provider,
-            "default_model": clean_model,
-        },
-        "telegram": {
-            "default_provider": clean_provider,
-            "default_model": clean_model,
-        },
-        f"providers.{clean_provider}": {
-            "default_model": clean_model,
-        },
-    }
-
     try:
+        path = Path(config_path).expanduser() if config_path is not None else user_config_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        provider_updates: dict[str, Any] = {"default_model": clean_model}
+        if clean_provider == "moonshot":
+            existing_data = tomllib.loads(existing) if existing.strip() else {}
+            existing_providers = existing_data.get("providers", {})
+            existing_provider = (
+                existing_providers.get("moonshot", {})
+                if isinstance(existing_providers, Mapping)
+                else {}
+            )
+            clean_model, normalized_provider = normalize_moonshot_selection(
+                existing_provider if isinstance(existing_provider, Mapping) else {},
+                clean_model,
+            )
+            provider_updates = {
+                key: normalized_provider[key]
+                for key in ("service", "api_key_env", "base_url", "default_model")
+            }
+        updates = {
+            "general": {
+                "default_provider": clean_provider,
+                "default_model": clean_model,
+            },
+            "telegram": {
+                "default_provider": clean_provider,
+                "default_model": clean_model,
+            },
+            f"providers.{clean_provider}": provider_updates,
+        }
         updated = _update_toml_sections(existing, updates)
         tomllib.loads(updated)
         path.write_text(updated, encoding="utf-8")
@@ -566,11 +586,12 @@ def _load_default_config() -> ConfigTable:
                 "max_tokens": 16384,
             },
             "moonshot": {
-                "api_key_env": "MOONSHOT_API_KEY",
-                "base_url": "https://api.moonshot.ai/v1",
-                "default_model": "kimi-k3",
+                "service": "kimi_code",
+                "api_key_env": "KIMI_API_KEY",
+                "base_url": "https://api.kimi.com/coding/v1",
+                "default_model": "k3",
                 "max_tokens": 131072,
-                "reasoning_effort": "max",
+                "reasoning_effort": "high",
                 "thinking": "auto",
                 "auto_context_window": True,
             },
@@ -970,14 +991,33 @@ def _normalize_provider_aliases(data: ConfigTable) -> None:
         return
 
     local_config = providers.pop("local", None)
-    if not isinstance(local_config, Mapping):
-        return
+    if isinstance(local_config, Mapping):
+        existing = providers.get("ollama")
+        if isinstance(existing, MutableMapping):
+            _deep_merge(existing, local_config)
+        else:
+            providers["ollama"] = dict(local_config)
 
-    existing = providers.get("ollama")
-    if isinstance(existing, MutableMapping):
-        _deep_merge(existing, local_config)
-    else:
-        providers["ollama"] = dict(local_config)
+    moonshot = providers.get("moonshot")
+    if not isinstance(moonshot, Mapping):
+        return
+    provider_model = str(moonshot.get("default_model", "k3"))
+    normalized_model, normalized_provider = normalize_moonshot_selection(
+        moonshot,
+        provider_model,
+    )
+    providers["moonshot"] = normalized_provider
+
+    if moonshot_service(normalized_provider) != "kimi_code":
+        return
+    for section_name in ("general", "telegram"):
+        section = data.get(section_name)
+        if not isinstance(section, MutableMapping):
+            continue
+        if str(section.get("default_provider", "")).strip().lower() != "moonshot":
+            continue
+        selected = str(section.get("default_model", normalized_model))
+        section["default_model"] = canonical_kimi_code_model(selected)
 
 
 def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> LibreClawConfig:

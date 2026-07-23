@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import Any
 
 from libre_claw.config import LibreClawConfig
+from libre_claw.kimi import canonical_kimi_code_model
 from libre_claw.providers.moonshot_catalog import moonshot_model_preset
 
 
@@ -16,12 +17,12 @@ def apply_moonshot_model_limits(
     *,
     model: str | None = None,
 ) -> LibreClawConfig:
-    """Apply Moonshot's published model limits without a network lookup."""
+    """Apply Kimi Code's published model limits without a network lookup."""
     provider_config = config.providers.get("moonshot", {})
     if isinstance(provider_config, Mapping) and provider_config.get("auto_context_window") is False:
         return config
 
-    selected_model = (model or _effective_moonshot_model(config)).strip()
+    selected_model = canonical_kimi_code_model(model or _effective_moonshot_model(config))
     preset = moonshot_model_preset(selected_model)
     if preset is None:
         return config
@@ -33,11 +34,13 @@ def apply_moonshot_model_limits(
     moonshot_config.update(
         {
             "detected_context_window_tokens": preset.context_window_tokens,
-            "detected_max_completion_tokens": preset.max_output_tokens,
-            "detected_context_source": "moonshot-docs",
+            "detected_context_source": "kimi-code-docs",
             "detected_context_model": selected_model,
         }
     )
+    moonshot_config.pop("detected_max_completion_tokens", None)
+    if preset.max_output_tokens is not None:
+        moonshot_config["detected_max_completion_tokens"] = preset.max_output_tokens
     providers["moonshot"] = moonshot_config
     return replace(
         config,
@@ -48,7 +51,7 @@ def apply_moonshot_model_limits(
 
 def _effective_moonshot_model(config: LibreClawConfig) -> str:
     provider_config = config.providers.get("moonshot", {})
-    provider_default = "kimi-k3"
+    provider_default = "k3"
     if isinstance(provider_config, Mapping):
         configured_default = provider_config.get("default_model")
         if isinstance(configured_default, str) and configured_default.strip():

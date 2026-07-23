@@ -266,7 +266,7 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert "/usage?limit=250" in response.text
     assert "/config/theme" in response.text
     assert "/assets/lobster-icon.svg" in response.text
-    assert '<option value="moonshot">Moonshot AI / Kimi</option>' in response.text
+    assert '<option value="moonshot">Kimi Code / Moonshot</option>' in response.text
     assert "https://github.com/kroonen-ai/libre-claw" in response.text
     assert "https://git.kroonen.ai/kroonen-ai/libre-claw" in response.text
     assert "GitLab mirror" in response.text

@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any, Literal
 
 from libre_claw.core.session import ContentBlock
+from libre_claw.kimi import MoonshotService
 from libre_claw.providers.base import ReasoningDelta
 from libre_claw.providers.openai import OpenAIProvider, _format_assistant_message, _object_field
 
@@ -16,7 +17,7 @@ MoonshotThinking = Literal["auto", "enabled", "disabled"]
 
 
 class MoonshotProvider(OpenAIProvider):
-    """Moonshot AI provider for Kimi models using the official Platform API."""
+    """OpenAI-compatible provider for Kimi Code and Moonshot Platform."""
 
     def __init__(
         self,
@@ -24,11 +25,13 @@ class MoonshotProvider(OpenAIProvider):
         model: str,
         max_tokens: int,
         *,
-        base_url: str = "https://api.moonshot.ai/v1",
-        reasoning_effort: MoonshotReasoningEffort = "max",
+        base_url: str = "https://api.kimi.com/coding/v1",
+        service: MoonshotService = "kimi_code",
+        reasoning_effort: MoonshotReasoningEffort = "high",
         thinking: MoonshotThinking = "auto",
         client: object | None = None,
     ) -> None:
+        self.service = service
         self.reasoning_effort = reasoning_effort
         self.thinking = thinking
         super().__init__(
@@ -36,7 +39,7 @@ class MoonshotProvider(OpenAIProvider):
             model=model,
             max_tokens=max_tokens,
             base_url=base_url,
-            display_name="Moonshot AI",
+            display_name="Kimi Code" if service == "kimi_code" else "Moonshot AI",
             client=client,
         )
 
@@ -54,7 +57,9 @@ class MoonshotProvider(OpenAIProvider):
         return _format_assistant_message(blocks, reasoning_provider="moonshot")
 
     def _max_tokens_field(self) -> str:
-        return "max_completion_tokens" if self._is_kimi_k3() else "max_tokens"
+        if self.service == "platform" and self.model.lower().startswith("kimi-k3"):
+            return "max_completion_tokens"
+        return "max_tokens"
 
     def _reasoning_delta(self, delta: Any) -> ReasoningDelta | None:
         content = _object_field(delta, "reasoning_content")
@@ -75,4 +80,5 @@ class MoonshotProvider(OpenAIProvider):
         return self.model.lower().startswith("kimi-k2.6")
 
     def _is_kimi_k3(self) -> bool:
-        return self.model.lower().startswith("kimi-k3")
+        normalized = self.model.lower()
+        return normalized == "k3" or normalized.startswith("kimi-k3")

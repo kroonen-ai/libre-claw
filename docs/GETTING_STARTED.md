@@ -64,14 +64,14 @@ Inside the TUI:
 /model openrouter:qwen/qwen3.7-max --global
 ```
 
-For direct Moonshot AI / Kimi access:
+For direct Kimi Code access:
 
 ```text
 /setup moonshot
-/model moonshot:kimi-k3 --global
+/model moonshot:k3 --global
 ```
 
-This uses `MOONSHOT_API_KEY` through the official Moonshot Platform API. See
+This uses `KIMI_API_KEY` through the Kimi Code OpenAI-compatible API. See
 [MOONSHOT_KIMI.md](MOONSHOT_KIMI.md) for model, reasoning, tool, and vision
 details.
 

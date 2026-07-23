@@ -1253,7 +1253,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
               <option value="anthropic">Anthropic</option>
               <option value="openai">OpenAI API</option>
               <option value="openrouter">OpenRouter</option>
-              <option value="moonshot">Moonshot AI / Kimi</option>
+              <option value="moonshot">Kimi Code / Moonshot</option>
               <option value="ollama">Ollama Cloud/Local</option>
               <option value="codex">OpenAI Codex</option>
             </select></label>
@@ -1365,7 +1365,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
                   <option value="anthropic">Anthropic</option>
                   <option value="openai">OpenAI API</option>
                   <option value="openrouter">OpenRouter</option>
-                  <option value="moonshot">Moonshot AI / Kimi</option>
+                  <option value="moonshot">Kimi Code / Moonshot</option>
                   <option value="ollama">Ollama Cloud/Local</option>
                   <option value="codex">OpenAI Codex</option>
                 </select></label>

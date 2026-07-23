@@ -473,7 +473,7 @@ def test_model_help_includes_enrollment_commands(monkeypatch, tmp_path: Path) ->
     assert "libre-claw auth set-key openrouter" in help_text
     assert "libre-claw auth set-key moonshot" in help_text
     assert "/model openrouter:openrouter/auto" in help_text
-    assert "/model moonshot:kimi-k3" in help_text
+    assert "/model moonshot:k3" in help_text
 
 
 def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_path: Path) -> None:
@@ -496,8 +496,8 @@ def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_pat
     assert any(suggestion.name == "/model openrouter:minimax/minimax-m3" for suggestion in ollama_suggestions)
     glm_suggestions = app._slash_suggestion_matches("/model glm-5.2")
     assert any(suggestion.name == "/model ollama:glm-5.2:cloud" for suggestion in glm_suggestions)
-    kimi_suggestions = app._slash_suggestion_matches("/model moonshot:kimi-k3")
-    assert any(suggestion.name == "/model moonshot:kimi-k3" for suggestion in kimi_suggestions)
+    kimi_suggestions = app._slash_suggestion_matches("/model moonshot:k3")
+    assert any(suggestion.name == "/model moonshot:k3" for suggestion in kimi_suggestions)
 
 
 def test_tui_parses_pasted_image_path(tmp_path: Path) -> None:

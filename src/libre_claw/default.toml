@@ -57,12 +57,13 @@ max_tokens = 16384
 auto_context_window = true
 
 [providers.moonshot]
-api_key_env = "MOONSHOT_API_KEY"
-base_url = "https://api.moonshot.ai/v1"
-default_model = "kimi-k3"
+service = "kimi_code" # kimi_code | platform
+api_key_env = "KIMI_API_KEY"
+base_url = "https://api.kimi.com/coding/v1"
+default_model = "k3"
 max_tokens = 131072
-reasoning_effort = "max" # Kimi K3: low | high | max
-thinking = "auto" # auto | enabled | disabled; only Kimi K2.6 supports disabled
+reasoning_effort = "high" # Kimi K3: low | high | max
+thinking = "auto" # auto | enabled | disabled
 auto_context_window = true
 
 [providers.codex]

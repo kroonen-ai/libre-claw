@@ -107,6 +107,7 @@ from libre_claw.core.workspace import (
 )
 from libre_claw.daemon import DaemonClient, daemon_base_url
 from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
+from libre_claw.kimi import normalize_moonshot_selection
 from libre_claw.providers import (
     LLMProvider,
     ProviderConfigurationError,
@@ -340,7 +341,7 @@ MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
         *((preset.model, f"{preset.label} through OpenRouter") for preset in OPENROUTER_MODEL_PRESETS),
     ),
     "moonshot": (
-        *((preset.model, f"{preset.label} through Moonshot AI") for preset in MOONSHOT_MODEL_PRESETS),
+        *((preset.model, f"{preset.label} through Kimi Code") for preset in MOONSHOT_MODEL_PRESETS),
     ),
     "ollama": (
         *((preset.model, preset.label) for preset in OLLAMA_MODEL_PRESETS),
@@ -2603,7 +2604,7 @@ class LibreClawApp(App[None]):
             parsed = _parse_model_argument(tokens.pop(0), self.config.general.default_provider)
             if parsed is None:
                 self._append_system(
-                    "Fallback route must look like moonshot:kimi-k3, "
+                    "Fallback route must look like moonshot:k3, "
                     "openrouter:openrouter/auto, or ollama:kimi-k2.6:cloud."
                 )
                 return
@@ -2687,6 +2688,12 @@ class LibreClawApp(App[None]):
             return
 
         provider, selected_model = parsed
+        if provider == "moonshot":
+            provider_config = self.config.providers.get("moonshot", {})
+            selected_model, _ = normalize_moonshot_selection(
+                provider_config if isinstance(provider_config, Mapping) else {},
+                selected_model,
+            )
         self.config = _replace_model_selection(self.config, provider, selected_model)
         persisted_path: Path | None = None
         if persist_global:
@@ -2866,9 +2873,9 @@ class LibreClawApp(App[None]):
             return
 
         if action == "moonshot":
-            self._set_model("moonshot:kimi-k3 --global")
+            self._set_model("moonshot:k3 --global")
             self._append_system(
-                "Next: run `/setup key moonshot` if the Moonshot Platform key is not stored yet."
+                "Next: run `/setup key moonshot` if the Kimi Code API key is not stored yet."
             )
             return
 
@@ -4437,8 +4444,8 @@ class LibreClawApp(App[None]):
                 SlashCommand("/setup status", "/setup status", "Show provider and key readiness"),
                 SlashCommand("/setup provider openrouter", "/setup provider openrouter", "Switch to OpenRouter"),
                 SlashCommand("/setup key openrouter", "/setup key openrouter", "Store OpenRouter key inside the TUI"),
-                SlashCommand("/setup moonshot", "/setup moonshot", "Configure Moonshot AI with Kimi K3"),
-                SlashCommand("/setup key moonshot", "/setup key moonshot", "Store Moonshot Platform key inside the TUI"),
+                SlashCommand("/setup moonshot", "/setup moonshot", "Configure Kimi Code with Kimi K3"),
+                SlashCommand("/setup key moonshot", "/setup key moonshot", "Store a Kimi Code or Platform key"),
                 SlashCommand("/setup key anthropic", "/setup key anthropic", "Store Anthropic key inside the TUI"),
                 SlashCommand("/setup key openai", "/setup key openai", "Store OpenAI key inside the TUI"),
                 SlashCommand("/setup key ollama", "/setup key ollama", "Store Ollama Cloud key inside the TUI"),
@@ -5037,8 +5044,14 @@ def _replace_model_selection(
     }
     provider_config = next_providers.get(clean_provider)
     if isinstance(provider_config, Mapping):
-        updated_provider = dict(provider_config)
-        updated_provider["default_model"] = clean_model
+        if clean_provider == "moonshot":
+            clean_model, updated_provider = normalize_moonshot_selection(
+                provider_config,
+                clean_model,
+            )
+        else:
+            updated_provider = dict(provider_config)
+            updated_provider["default_model"] = clean_model
         next_providers[clean_provider] = updated_provider
     updated = _replace_general(config, default_provider=clean_provider, default_model=clean_model)
     return replace(updated, providers=next_providers)

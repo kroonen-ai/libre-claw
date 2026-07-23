@@ -859,9 +859,9 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
     assert any(
         preset.model == "moonshotai/kimi-k3" for preset in TELEGRAM_MODEL_PRESETS["openrouter"]
     )
-    assert any("Moonshot AI / Kimi" in button.text for row in provider_keyboard.inline_keyboard for button in row)
+    assert any("Kimi Code / Moonshot" in button.text for row in provider_keyboard.inline_keyboard for button in row)
     assert any("Kimi K3" in button.text for row in moonshot_keyboard.inline_keyboard for button in row)
-    assert any(preset.model == "kimi-k3" for preset in TELEGRAM_MODEL_PRESETS["moonshot"])
+    assert any(preset.model == "k3" for preset in TELEGRAM_MODEL_PRESETS["moonshot"])
     assert any("MiniMax M3" in button.text for row in ollama_keyboard.inline_keyboard for button in row)
     assert any(preset.model == "minimax-m3:cloud" for preset in TELEGRAM_MODEL_PRESETS["ollama"])
     assert any("GLM 5.2" in button.text for row in ollama_keyboard.inline_keyboard for button in row)

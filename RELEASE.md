@@ -110,11 +110,12 @@ First shippable Libre Claw release, built by Kroonen AI.
   Ollama Cloud presets covering the current cloud library aliases such as
   `minimax-m3:cloud`, `kimi-k2.6:cloud`, `qwen3.5:cloud`,
   `gemma4:31b-cloud`, `glm-5.2:cloud`, `deepseek-v4-flash:cloud`, and `gpt-oss:120b`.
-- First-class Moonshot Platform support for `kimi-k3`, `kimi-k2.7-code`,
-  `kimi-k2.7-code-highspeed`, and `kimi-k2.6`, including direct API-key
-  setup, TUI/Telegram/dashboard selectors, schedules and fallbacks, published
-  context limits, vision input, model-specific thinking controls, and opaque
-  reasoning continuity across tool calls.
+- First-class Kimi Code support for the official `k3`, `kimi-for-coding`, and
+  `kimi-for-coding-highspeed` IDs, including automatic migration from earlier
+  Libre Claw aliases, correct membership API routing, TUI/Telegram/dashboard
+  selectors, schedules and fallbacks, vision input, and opaque reasoning
+  continuity across tool calls. Moonshot Platform remains an explicit service
+  option for Platform credentials and model IDs.
 - Codex/ChatGPT login can be started from inside the TUI with `/codex login`,
   then used through `/provider codex` or `/model codex:gpt-5.6-sol`. The OAuth
   picker follows OpenAI's current Codex model guide with `gpt-5.6-sol`,

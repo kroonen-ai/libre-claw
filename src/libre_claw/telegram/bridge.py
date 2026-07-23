@@ -46,6 +46,7 @@ from libre_claw.core.soul import SoulStore
 from libre_claw.core.tools import ToolCall
 from libre_claw.daemon import DaemonClient
 from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
+from libre_claw.kimi import normalize_moonshot_selection
 from libre_claw.providers import (
     ProviderConfigurationError,
     Usage,
@@ -933,12 +934,20 @@ def _provider_default_model(config: LibreClawConfig, provider: str) -> str:
 def _config_with_model_payload(config: LibreClawConfig, payload: Mapping[str, Any]) -> LibreClawConfig:
     provider = _canonical_provider(str(payload.get("provider") or config.general.default_provider))
     model = str(payload.get("model") or config.general.default_model)
+    if provider == "moonshot":
+        existing_provider = config.providers.get("moonshot", {})
+        model, _ = normalize_moonshot_selection(
+            existing_provider if isinstance(existing_provider, Mapping) else {},
+            model,
+        )
     general = replace(config.general, default_provider=provider, default_model=model)
     telegram = replace(config.telegram, default_provider=provider, default_model=model)
     providers: dict[str, Mapping[str, Any]] = {}
     for name, value in config.providers.items():
         providers[name] = dict(value) if isinstance(value, Mapping) else value
     provider_config = dict(providers.get(provider, {}))
+    if provider == "moonshot":
+        model, provider_config = normalize_moonshot_selection(provider_config, model)
     for key in (
         "detected_context_window_tokens",
         "detected_max_completion_tokens",

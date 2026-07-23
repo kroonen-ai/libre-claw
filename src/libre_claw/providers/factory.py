@@ -10,6 +10,13 @@ from urllib.parse import urlparse
 
 from libre_claw.auth.api_keys import ApiKeyStore
 from libre_claw.config import LibreClawConfig
+from libre_claw.kimi import (
+    KIMI_CODE_BASE_URL,
+    KIMI_CODE_MODEL_IDS,
+    is_kimi_code_model,
+    moonshot_service,
+    normalize_moonshot_selection,
+)
 from libre_claw.providers.anthropic import AnthropicProvider
 from libre_claw.providers.base import LLMProvider, ProviderConfigurationError
 from libre_claw.providers.codex import CodexProvider
@@ -70,22 +77,60 @@ def create_provider(
     if resolved_provider_name == "ollama":
         return _create_ollama_provider(config, provider_config, api_key_store)
 
+    resolved_model = model or _resolve_model(config, resolved_provider_name, provider_config)
+    if resolved_provider_name == "moonshot":
+        resolved_model, provider_config = normalize_moonshot_selection(
+            provider_config,
+            resolved_model,
+        )
+        if moonshot_service(provider_config) == "kimi_code" and not is_kimi_code_model(
+            resolved_model
+        ):
+            models = ", ".join(KIMI_CODE_MODEL_IDS)
+            raise ProviderConfigurationError(
+                f"Unknown Kimi Code model '{resolved_model}'. Use {models}, or set "
+                "[providers.moonshot].service = 'platform' for a Moonshot Platform model."
+            )
+
     resolved_api_key_env = _str_provider_value(
         provider_config,
         "api_key_env",
         _default_api_key_env(resolved_provider_name),
     )
     store = api_key_store or ApiKeyStore.from_config(config.auth)
-    api_key_lookup = store.get_api_key(resolved_provider_name, resolved_api_key_env)
-    if not api_key_lookup.value:
-        provider_label = _provider_label(resolved_provider_name)
-        msg = (
-            f"Missing {provider_label} API key. Set {resolved_api_key_env} or run "
-            f"`libre-claw auth set-key {resolved_provider_name}` before sending a message."
+    if resolved_provider_name == "moonshot":
+        api_key_lookup = store.get_api_key(
+            resolved_provider_name,
+            resolved_api_key_env,
+            aliases=("kimi",),
         )
+        alternate_env = (
+            "MOONSHOT_API_KEY"
+            if resolved_api_key_env != "MOONSHOT_API_KEY"
+            else "KIMI_API_KEY"
+        )
+        if not api_key_lookup.value:
+            api_key_lookup = store.get_api_key(
+                resolved_provider_name,
+                alternate_env,
+                aliases=("kimi",),
+            )
+    else:
+        api_key_lookup = store.get_api_key(resolved_provider_name, resolved_api_key_env)
+    if not api_key_lookup.value:
+        if resolved_provider_name == "moonshot":
+            msg = (
+                "Missing Kimi/Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY, "
+                "or run `libre-claw auth set-key moonshot` before sending a message."
+            )
+        else:
+            provider_label = _provider_label(resolved_provider_name)
+            msg = (
+                f"Missing {provider_label} API key. Set {resolved_api_key_env} or run "
+                f"`libre-claw auth set-key {resolved_provider_name}` before sending a message."
+            )
         raise ProviderConfigurationError(msg)
 
-    resolved_model = model or _resolve_model(config, resolved_provider_name, provider_config)
     max_tokens = _provider_max_tokens(provider_config)
     try:
         if resolved_provider_name == "anthropic":
@@ -100,7 +145,9 @@ def create_provider(
         if resolved_provider_name == "moonshot":
             thinking = _moonshot_thinking_value(provider_config)
             if thinking == "disabled" and (
-                resolved_model.lower().startswith("kimi-k3")
+                resolved_model.lower() == "k3"
+                or resolved_model.lower().startswith("kimi-k3")
+                or resolved_model.lower().startswith("kimi-for-coding")
                 or resolved_model.lower().startswith("kimi-k2.7")
             ):
                 raise ProviderConfigurationError(
@@ -113,8 +160,9 @@ def create_provider(
                 base_url=_str_provider_value(
                     provider_config,
                     "base_url",
-                    "https://api.moonshot.ai/v1",
+                    KIMI_CODE_BASE_URL,
                 ),
+                service=moonshot_service(provider_config),
                 reasoning_effort=_moonshot_reasoning_effort(provider_config),
                 thinking=thinking,
             )
@@ -269,7 +317,7 @@ def _provider_max_tokens(config: Mapping[str, Any]) -> int:
 def _moonshot_reasoning_effort(
     config: Mapping[str, Any],
 ) -> MoonshotReasoningEffort:
-    value = _str_provider_value(config, "reasoning_effort", "max").lower()
+    value = _str_provider_value(config, "reasoning_effort", "high").lower()
     if value not in {"low", "high", "max"}:
         raise ProviderConfigurationError(
             "[providers.moonshot].reasoning_effort must be 'low', 'high', or 'max'."
@@ -292,7 +340,7 @@ def _default_api_key_env(provider_name: str) -> str:
     if provider_name == "openai":
         return "OPENAI_API_KEY"
     if provider_name == "moonshot":
-        return "MOONSHOT_API_KEY"
+        return "KIMI_API_KEY"
     return "ANTHROPIC_API_KEY"
 
 
@@ -330,7 +378,7 @@ def _fallback_model(provider_name: str) -> str:
     if provider_name == "openrouter":
         return "openrouter/auto"
     if provider_name == "moonshot":
-        return "kimi-k3"
+        return "k3"
     if provider_name == "codex":
         return "gpt-5.5"
     if provider_name == "ollama":

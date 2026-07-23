@@ -82,7 +82,7 @@ async def test_kimi_k3_streams_reasoning_and_uses_k3_parameters() -> None:
     )
     provider = MoonshotProvider(
         api_key="test-key",
-        model="kimi-k3",
+        model="k3",
         max_tokens=4096,
         reasoning_effort="high",
         client=client,
@@ -103,9 +103,9 @@ async def test_kimi_k3_streams_reasoning_and_uses_k3_parameters() -> None:
     ]
     request = client.chat.completions.last_request
     assert request is not None
-    assert request["max_completion_tokens"] == 4096
+    assert request["max_tokens"] == 4096
     assert request["reasoning_effort"] == "high"
-    assert "max_tokens" not in request
+    assert "max_completion_tokens" not in request
     assert "stream_options" not in request
     assert "temperature" not in request
 
@@ -114,7 +114,7 @@ async def test_kimi_k2_7_uses_max_tokens_and_required_thinking_defaults() -> Non
     client = FakeClient([chunk(content="done", finish_reason="stop")])
     provider = MoonshotProvider(
         api_key="test-key",
-        model="kimi-k2.7-code",
+        model="kimi-for-coding",
         max_tokens=32768,
         client=client,
     )
@@ -141,6 +141,7 @@ async def test_kimi_k2_6_can_disable_thinking() -> None:
         api_key="test-key",
         model="kimi-k2.6",
         max_tokens=32768,
+        service="platform",
         thinking="disabled",
         client=client,
     )
@@ -163,6 +164,7 @@ async def test_moonshot_preserves_reasoning_and_tool_calls_in_assistant_history(
         api_key="test-key",
         model="kimi-k3",
         max_tokens=4096,
+        service="platform",
         client=client,
     )
 

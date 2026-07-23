@@ -69,6 +69,7 @@ from libre_claw.core.usage import (
 )
 from libre_claw.core.session import ChatMessage, UserAttachment, session_from_payload, text_block
 from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
+from libre_claw.kimi import normalize_moonshot_selection
 from libre_claw.providers import Done, LLMProvider, ProviderError, TextDelta, Usage, create_fallback_providers, create_provider
 from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
@@ -393,6 +394,12 @@ class DaemonServer:
             return _json_error("Field 'provider' is required.")
         if not model:
             return _json_error("Field 'model' is required.")
+        if provider == "moonshot":
+            provider_config = self.config.providers.get("moonshot", {})
+            model, _ = normalize_moonshot_selection(
+                provider_config if isinstance(provider_config, Mapping) else {},
+                model,
+            )
 
         persisted_path: str | None = None
         automations_updated = 0
@@ -1906,8 +1913,11 @@ def _config_with_model(config: LibreClawConfig, provider: str, model: str) -> Li
         provider_configs[name] = dict(value) if isinstance(value, Mapping) else value
     existing = provider_configs.get(provider)
     if isinstance(existing, Mapping):
-        updated = dict(existing)
-        updated["default_model"] = model
+        if provider == "moonshot":
+            model, updated = normalize_moonshot_selection(existing, model)
+        else:
+            updated = dict(existing)
+            updated["default_model"] = model
         provider_configs[provider] = updated
     general = replace(config.general, default_provider=provider, default_model=model)
     telegram = replace(config.telegram, default_provider=provider, default_model=model)

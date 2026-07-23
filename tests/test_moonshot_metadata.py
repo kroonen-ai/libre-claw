@@ -19,7 +19,7 @@ def test_moonshot_metadata_applies_published_kimi_k3_limits(
             [
                 "[general]",
                 'default_provider = "moonshot"',
-                'default_model = "kimi-k3"',
+                'default_model = "k3"',
             ]
         ),
         encoding="utf-8",
@@ -31,9 +31,9 @@ def test_moonshot_metadata_applies_published_kimi_k3_limits(
 
     assert updated.agent.context_window_tokens == 1_048_576
     assert updated.providers["moonshot"]["detected_context_window_tokens"] == 1_048_576
-    assert updated.providers["moonshot"]["detected_max_completion_tokens"] == 1_048_576
-    assert updated.providers["moonshot"]["detected_context_source"] == "moonshot-docs"
-    assert updated.providers["moonshot"]["detected_context_model"] == "kimi-k3"
+    assert "detected_max_completion_tokens" not in updated.providers["moonshot"]
+    assert updated.providers["moonshot"]["detected_context_source"] == "kimi-code-docs"
+    assert updated.providers["moonshot"]["detected_context_model"] == "k3"
 
 
 def test_moonshot_metadata_uses_provider_default_after_provider_only_switch(
@@ -57,7 +57,7 @@ def test_moonshot_metadata_uses_provider_default_after_provider_only_switch(
     updated = apply_moonshot_model_limits(config)
 
     assert updated.agent.context_window_tokens == 1_048_576
-    assert updated.providers["moonshot"]["detected_context_model"] == "kimi-k3"
+    assert updated.providers["moonshot"]["detected_context_model"] == "k3"
 
 
 def test_moonshot_metadata_can_be_disabled(monkeypatch, tmp_path: Path) -> None:

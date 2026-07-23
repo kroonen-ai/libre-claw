@@ -173,14 +173,13 @@ def test_openrouter_presets_include_recommended_models() -> None:
     assert len(preset_names) == len(OPENROUTER_MODEL_PRESETS)
 
 
-def test_moonshot_presets_include_current_platform_models() -> None:
+def test_moonshot_presets_match_official_kimi_code_model_ids() -> None:
     preset_names = {preset.model for preset in MOONSHOT_MODEL_PRESETS}
 
     assert preset_names == {
-        "kimi-k3",
-        "kimi-k2.7-code",
-        "kimi-k2.7-code-highspeed",
-        "kimi-k2.6",
+        "k3",
+        "kimi-for-coding",
+        "kimi-for-coding-highspeed",
     }
     assert all(preset.vision for preset in MOONSHOT_MODEL_PRESETS)
 
@@ -188,7 +187,7 @@ def test_moonshot_presets_include_current_platform_models() -> None:
 def test_provider_factory_fallback_models_match_public_defaults() -> None:
     assert _fallback_model("anthropic") == "claude-opus-4-8"
     assert _fallback_model("openrouter") == "openrouter/auto"
-    assert _fallback_model("moonshot") == "kimi-k3"
+    assert _fallback_model("moonshot") == "k3"
     assert _fallback_model("codex") == "gpt-5.5"
     assert _fallback_model("ollama") == "qwen3.6:27b"
 
@@ -285,10 +284,11 @@ def test_create_provider_requires_moonshot_api_key(monkeypatch, tmp_path: Path) 
     config_path.write_text("[general]\ndefault_provider = \"moonshot\"\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
     monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
     config = load_config(config_path=config_path)
 
-    with pytest.raises(ProviderConfigurationError, match="MOONSHOT_API_KEY"):
+    with pytest.raises(ProviderConfigurationError, match="KIMI_API_KEY"):
         create_provider(config)
 
 
@@ -320,9 +320,44 @@ def test_create_provider_supports_moonshot(monkeypatch, tmp_path: Path) -> None:
     )
 
     assert isinstance(provider, MoonshotProvider)
-    assert provider.model == "kimi-k3"
-    assert provider.base_url == "https://api.moonshot.ai/v1"
+    assert provider.model == "k3"
+    assert provider.base_url == "https://api.kimi.com/coding/v1"
+    assert provider.service == "kimi_code"
     assert provider.reasoning_effort == "high"
+
+
+def test_create_provider_preserves_explicit_moonshot_platform(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[general]",
+                'default_provider = "moonshot"',
+                'default_model = "platform-model"',
+                "",
+                "[providers.moonshot]",
+                'service = "platform"',
+                'default_model = "platform-model"',
+                'base_url = "https://api.moonshot.cn/v1"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = load_config(config_path=config_path)
+
+    provider = create_provider(
+        config,
+        api_key_store=FakeApiKeyStore("platform-key"),  # type: ignore[arg-type]
+    )
+
+    assert isinstance(provider, MoonshotProvider)
+    assert provider.model == "platform-model"
+    assert provider.base_url == "https://api.moonshot.cn/v1"
+    assert provider.service == "platform"
 
 
 def test_create_provider_rejects_disabled_thinking_for_kimi_k3(

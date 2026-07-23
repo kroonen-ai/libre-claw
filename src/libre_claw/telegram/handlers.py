@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -29,6 +29,7 @@ from libre_claw.core.automations import AutomationError
 from libre_claw.core.heartbeat import HeartbeatError, heartbeat_prompt, parse_heartbeat_interval
 from libre_claw.core.permissions import PermissionResolution
 from libre_claw.core.session import UserAttachment
+from libre_claw.kimi import normalize_moonshot_selection
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.moonshot_catalog import MOONSHOT_MODEL_PRESETS
@@ -120,7 +121,7 @@ TELEGRAM_PROVIDER_LABELS: dict[str, str] = {
     "anthropic": "Anthropic",
     "openai": "OpenAI API",
     "openrouter": "OpenRouter",
-    "moonshot": "Moonshot AI / Kimi",
+    "moonshot": "Kimi Code / Moonshot",
     "ollama": "Ollama Cloud/Local",
     "codex": "OpenAI Codex",
 }
@@ -370,6 +371,12 @@ class TelegramHandlers:
         if not selected_model:
             await update.effective_message.reply_text("Usage: /model <provider>:<name> [--global]")
             return
+        if provider == "moonshot":
+            provider_config = self.bridge.config.providers.get("moonshot", {})
+            selected_model, _ = normalize_moonshot_selection(
+                provider_config if isinstance(provider_config, Mapping) else {},
+                selected_model,
+            )
         self.bridge.config = _replace_general(self.bridge.config, default_provider=provider, default_model=selected_model)
         response = f"Model set to {provider}:{selected_model}."
         daemon_note = await self._sync_daemon_model(provider, selected_model, persist_global=persist_global)
