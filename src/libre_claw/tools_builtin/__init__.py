@@ -14,7 +14,9 @@ from libre_claw.tools_builtin import browser as _browser  # noqa: F401
 from libre_claw.tools_builtin import filesystem as _filesystem  # noqa: F401
 from libre_claw.tools_builtin import git as _git  # noqa: F401
 from libre_claw.tools_builtin import http as _http  # noqa: F401
+from libre_claw.tools_builtin import image as _image  # noqa: F401
 from libre_claw.tools_builtin import mcp as _mcp
+from libre_claw.tools_builtin import process as _process  # noqa: F401
 from libre_claw.tools_builtin import schedule as _schedule  # noqa: F401
 from libre_claw.tools_builtin import search as _search  # noqa: F401
 from libre_claw.tools_builtin import shell as _shell  # noqa: F401
@@ -57,6 +59,44 @@ def create_builtin_registry(config: LibreClawConfig, memory_store: MemoryStore |
         skills_cli_command=config.skills.cli_command,
         skills_cli_timeout=config.skills.cli_timeout,
     )
-    tools = [tool_type(context) for tool_type in registered_tool_types()]
-    tools.extend(_mcp.mcp_tools(config, context))
+    allowlist = set(config.agent.tool_allowlist)
+    denylist = set(config.agent.tool_denylist)
+    unavailable = _unavailable_tools(config)
+
+    tools = [
+        tool_type(context)
+        for tool_type in registered_tool_types()
+        if _tool_is_enabled(tool_type.name, allowlist, denylist, unavailable)
+    ]
+    tools.extend(
+        tool
+        for tool in _mcp.mcp_tools(config, context)
+        if _tool_is_enabled(tool.name, allowlist, denylist, unavailable)
+    )
     return ToolRegistry(tools)
+
+
+def _unavailable_tools(config: LibreClawConfig) -> set[str]:
+    unavailable: set[str] = set()
+    if not config.web_search.enabled:
+        unavailable.add("web_search")
+    if not config.automations.enabled:
+        unavailable.update({"schedule", "schedule_list"})
+    if not (
+        config.skills.enabled
+        and config.skills.external_discovery_enabled
+        and config.skills.cli_enabled
+    ):
+        unavailable.add("skills_search")
+    return unavailable
+
+
+def _tool_is_enabled(
+    name: str,
+    allowlist: set[str],
+    denylist: set[str],
+    unavailable: set[str],
+) -> bool:
+    if name in unavailable or name in denylist:
+        return False
+    return not allowlist or name in allowlist

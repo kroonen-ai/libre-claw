@@ -70,6 +70,16 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Sakana multi-agent orchestration model for complex reasoning, coding, and agentic workflows.",
     ),
     OpenRouterModelPreset(
+        "poolside/laguna-s-2.1",
+        "Laguna S 2.1",
+        "Poolside coding-agent preset for long-context software engineering workflows.",
+    ),
+    OpenRouterModelPreset(
+        "poolside/laguna-s-2.1:free",
+        "Laguna S 2.1 Free",
+        "Free-tier Poolside coding-agent preset for long-context software engineering workflows.",
+    ),
+    OpenRouterModelPreset(
         "qwen/qwen3.7-max",
         "Qwen3.7 Max",
         "Primary high-capacity coding preset.",
@@ -146,9 +156,19 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "MiniMax M3 coding, agentic, and productivity preset through OpenRouter.",
     ),
     OpenRouterModelPreset(
+        "google/gemini-3.6-flash",
+        "Gemini 3.6 Flash",
+        "Google high-efficiency multimodal preset for coding, agentic workflows, and app development.",
+    ),
+    OpenRouterModelPreset(
         "google/gemini-3.5-flash",
         "Gemini 3.5 Flash",
         "Google fast multimodal/general preset through OpenRouter.",
+    ),
+    OpenRouterModelPreset(
+        "google/gemini-3.5-flash-lite",
+        "Gemini 3.5 Flash-Lite",
+        "Google efficient multimodal preset for focused tasks and multi-agent subagents.",
     ),
     OpenRouterModelPreset(
         "openai/gpt-5.5",

@@ -73,6 +73,7 @@ def test_read_tools_auto_allowed_by_config() -> None:
         "list_directory",
         "glob",
         "search_files",
+        "view_image",
         "git_status",
         "think",
         "browser_read",
@@ -102,3 +103,16 @@ def test_http_request_auto_allows_safe_reads_only() -> None:
     assert manager.check(safe_head, AskTool(context)) == "allow"
     assert manager.check(post, AskTool(context)) == "ask"
     assert manager.check(download, AskTool(context)) == "ask"
+
+
+def test_process_auto_allows_observation_but_not_mutation() -> None:
+    context = ToolContext(working_directory=Path.cwd())
+    manager = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=True))
+
+    for action in ("poll", "list"):
+        call = ToolCall(id=action, name="process", arguments={"action": action})
+        assert manager.check(call, AskTool(context)) == "allow"
+
+    for action in ("start", "write", "stop"):
+        call = ToolCall(id=action, name="process", arguments={"action": action})
+        assert manager.check(call, AskTool(context)) == "ask"

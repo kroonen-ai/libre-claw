@@ -17,7 +17,13 @@ from libre_claw.core.automations import AutomationStore
 from libre_claw.core.runs import RunStore
 from libre_claw.core.session import ChatMessage
 from libre_claw.core.tools import BaseTool, ToolContext, ToolRegistry, ToolResult
-from libre_claw.daemon import DaemonClient, DaemonServer, _automation_finalizer_prompt, _automation_telegram_message
+from libre_claw.daemon import (
+    DaemonClient,
+    DaemonServer,
+    _automation_finalizer_prompt,
+    _automation_telegram_message,
+    _is_provider_quota_error,
+)
 from libre_claw.providers.base import Done, LLMProvider, ProviderError, StreamEvent, TextDelta, ToolCallReady, ToolSchema, Usage
 from libre_claw.providers.openrouter_metadata import OpenRouterModelLimits
 from libre_claw.web.dashboard import dashboard_html
@@ -65,6 +71,31 @@ class ScriptedProvider(LLMProvider):
             yield event
 
 
+class BlockingProvider(LLMProvider):
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+
+    async def complete(
+        self,
+        messages: Sequence[ChatMessage],
+        tools: Sequence[ToolSchema] | None = None,
+        system: str | None = None,
+        stream: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        del messages, tools, system, stream, temperature, max_tokens
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        if False:
+            yield Done()
+
+
 class AskEchoTool(BaseTool):
     name = "ask_echo"
     description = "Echo a value after approval."
@@ -107,6 +138,14 @@ async def _wait_for_event(server: DaemonServer, run_id: str, event_type: str) ->
                 return event
         await asyncio.sleep(0.01)
     raise AssertionError(f"Run {run_id} did not emit {event_type}")
+
+
+def _mark_automation_due(automation) -> None:  # type: ignore[no-untyped-def]
+    payload = automation.path.read_text(encoding="utf-8").replace(
+        automation.next_run_at,
+        "2000-01-01T00:00:00+00:00",
+    )
+    automation.path.write_text(payload, encoding="utf-8")
 
 
 async def test_daemon_autostarts_telegram_bridge_when_configured(monkeypatch, tmp_path: Path) -> None:
@@ -858,6 +897,224 @@ async def test_daemon_can_run_automation_now(monkeypatch, tmp_path: Path) -> Non
     assert any(event.type == "automation_triggered" for event in events)
 
 
+async def test_daemon_automation_uses_its_configured_working_directory(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    workspace = tmp_path / "automation-workspace"
+    workspace.mkdir()
+    server = DaemonServer(load_config(), run_store=RunStore(tmp_path / "runs"))
+    server.automation_store = AutomationStore(tmp_path / "automations")
+    automation = await server.automation_store.create(
+        name="Workspace",
+        prompt="Inspect this workspace",
+        schedule="daily 09:00",
+        route="report",
+        provider=server.config.general.default_provider,
+        model=server.config.general.default_model,
+        working_directory=workspace,
+    )
+
+    config = await server._config_for_automation(automation)
+
+    assert config.general.working_directory == workspace.resolve()
+
+
+async def test_daemon_automation_concurrency_limit_starts_only_one_due_run(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = replace(
+        config,
+        automations=replace(config.automations, max_concurrent_runs=1),
+    )
+    provider = BlockingProvider()
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    server.automation_store = AutomationStore(tmp_path / "automations")
+    for name in ("First", "Second"):
+        automation = await server.automation_store.create(
+            name=name,
+            prompt="Wait",
+            schedule="every 1 minutes",
+            route="report",
+            provider=config.general.default_provider,
+            model=config.general.default_model,
+        )
+        _mark_automation_due(automation)
+
+    await server._tick_automations()
+    await asyncio.wait_for(provider.started.wait(), timeout=1)
+
+    assert server._active_automation_count() == 1
+    assert len(await server.run_store.list_runs(limit=10)) == 1
+
+    active = next(iter(server.active_runs.values()))
+    active.task.cancel()
+    await active.task
+
+
+async def test_daemon_quota_failure_cools_provider_and_skips_next_due_run(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = replace(
+        config,
+        agent=replace(config.agent, provider_retry_attempts=0),
+        automations=replace(
+            config.automations,
+            provider_cooldown_initial_seconds=3600,
+            provider_cooldown_max_seconds=3600,
+        ),
+    )
+    provider = ScriptedProvider(
+        [[ProviderError("ollama.ApiRateLimitError: daily quota exhausted")]]
+    )
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    server.automation_store = AutomationStore(tmp_path / "automations")
+    automation = await server.automation_store.create(
+        name="Quota",
+        prompt="Run once",
+        schedule="every 1 minutes",
+        route="report",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
+    )
+    _mark_automation_due(automation)
+
+    await server._tick_automations()
+    first = (await server.run_store.list_runs(limit=1))[0]
+    await _wait_for_state(server, first.run_id, "failed")
+    events = await server.run_store.load_events(first.run_id)
+    assert any(event.type == "provider_cooldown_started" for event in events)
+
+    updated = await server.automation_store.load(automation.automation_id)
+    assert updated is not None
+    _mark_automation_due(updated)
+    await server._tick_automations()
+
+    assert len(await server.run_store.list_runs(limit=10)) == 1
+
+
+async def test_daemon_automation_timeout_cancels_primary_and_runs_finalizer(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = replace(
+        config,
+        automations=replace(
+            config.automations,
+            run_timeout_seconds=1,
+            finalizer_timeout_seconds=1,
+        ),
+    )
+    primary = BlockingProvider()
+    finalizer = ScriptedProvider([[TextDelta("Recovered from saved events."), Done()]])
+    providers = iter((primary, finalizer))
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: next(providers),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    server.automation_store = AutomationStore(tmp_path / "automations")
+    automation = await server.automation_store.create(
+        name="Timeout",
+        prompt="Wait forever",
+        schedule="every 1 minutes",
+        route="report",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
+    )
+    _mark_automation_due(automation)
+
+    await server._tick_automations()
+    active = next(iter(server.active_runs.values()))
+    await asyncio.wait_for(primary.started.wait(), timeout=1)
+    await asyncio.wait_for(active.task, timeout=3)
+    run = await server.run_store.load_run(active.run_id)
+    events = await server.run_store.load_events(active.run_id)
+
+    assert primary.cancelled.is_set()
+    assert run is not None
+    assert run.state == "done"
+    assert any(event.type == "automation_timeout" for event in events)
+    assert any(event.type == "automation_finalized" for event in events)
+
+
+async def test_daemon_automation_finalizer_has_its_own_timeout(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = replace(
+        config,
+        agent=replace(config.agent, provider_retry_attempts=0),
+        automations=replace(config.automations, finalizer_timeout_seconds=1),
+    )
+    primary = ScriptedProvider([[ProviderError("provider failed")]])
+    finalizer = BlockingProvider()
+    providers = iter((primary, finalizer))
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: next(providers),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    server.automation_store = AutomationStore(tmp_path / "automations")
+    automation = await server.automation_store.create(
+        name="Finalizer timeout",
+        prompt="Fail",
+        schedule="every 1 minutes",
+        route="report",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
+    )
+    _mark_automation_due(automation)
+
+    await server._tick_automations()
+    active = next(iter(server.active_runs.values()))
+    await asyncio.wait_for(finalizer.started.wait(), timeout=1)
+    await asyncio.wait_for(active.task, timeout=3)
+    run = await server.run_store.load_run(active.run_id)
+    events = await server.run_store.load_events(active.run_id)
+
+    assert finalizer.cancelled.is_set()
+    assert run is not None
+    assert run.state == "failed"
+    assert any(event.type == "automation_finalizer_timeout" for event in events)
+
+
+def test_provider_quota_detection_ignores_unrelated_task_status_values() -> None:
+    assert _is_provider_quota_error("ApiRateLimitError: daily limit reached")
+    assert _is_provider_quota_error("OpenRouter error code: 429")
+    assert not _is_provider_quota_error(
+        "Verifier fixture contains HTTP status 429 among the expected task responses."
+    )
+
+
 async def test_daemon_tick_runs_due_automation_and_writes_report(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -1020,6 +1277,10 @@ async def test_daemon_automation_finalizer_recovers_empty_provider_output(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     config = load_config()
+    config = replace(
+        config,
+        agent=replace(config.agent, provider_retry_attempts=0),
+    )
     sent: list[tuple[int, str]] = []
 
     async def fake_telegram_sender(_config: object, chat_id: int, text: str) -> None:

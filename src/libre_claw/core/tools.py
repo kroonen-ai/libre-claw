@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from libre_claw.core.memory import MemoryStore
 
 from libre_claw.core.sandbox import SandboxPolicy
+from libre_claw.core.session import UserAttachment
 
 
 PermissionLevel = Literal["allow", "ask", "deny"]
@@ -83,6 +84,7 @@ class ToolResult:
     content: str = ""
     error: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    attachments: tuple[UserAttachment, ...] = ()
 
     @property
     def is_error(self) -> bool:

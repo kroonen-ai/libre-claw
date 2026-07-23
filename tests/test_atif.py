@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from libre_claw.core.atif import RecordingSession, write_atif_trajectory
-from libre_claw.core.session import text_block, tool_result_block, tool_use_block
+from libre_claw.core.session import UserAttachment, image_block, text_block, tool_result_block, tool_use_block
 from libre_claw.providers.base import Usage
 
 
@@ -105,3 +105,47 @@ def test_atif_export_records_errors_without_dropping_trace(tmp_path: Path) -> No
     }
     assert "provider unavailable" in payload["notes"]
     assert payload["final_metrics"] == {"total_steps": 2}
+
+
+def test_atif_keeps_tool_observation_when_result_includes_image(tmp_path: Path) -> None:
+    session = RecordingSession()
+    session.add_user_message("Inspect the image")
+    session.add_assistant_blocks(
+        [tool_use_block("call-image", "view_image", {"path": "shot.png"})]
+    )
+    session.add_tool_result_blocks(
+        [
+            tool_result_block("call-image", "Attached preview."),
+            image_block(
+                UserAttachment(
+                    media_type="image/jpeg",
+                    data="aGVsbG8=",
+                    filename="shot-preview.jpg",
+                )
+            ),
+        ]
+    )
+    session.add_assistant_message("The preview is red.")
+    path = tmp_path / "trajectory.json"
+
+    write_atif_trajectory(
+        path,
+        session=session,
+        system_prompt="System prompt",
+        agent_version="0.1.0",
+        model_name="vision-model",
+        tool_schemas=[],
+        usage=None,
+        error=None,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    tool_step = payload["steps"][2]
+    assert tool_step["observation"]["results"] == [
+        {
+            "source_call_id": "call-image",
+            "content": "Attached preview.",
+            "extra": {"is_error": False},
+        }
+    ]
+    assert payload["steps"][3]["message"] == "The preview is red."

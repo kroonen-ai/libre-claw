@@ -83,6 +83,10 @@ The updater fetches `origin/main`, compares commits, writes a backup under
 to pull over uncommitted changes; use `libre-claw update --dry-run` to check
 first.
 
+The same updater is available as `/update` in the TUI and authorized Telegram
+chats. Use `/update --dry-run` to check only. After an update, restart the TUI
+or run `/restart` in Telegram to load the new code.
+
 Optional Petdex companion integration:
 
 ```toml
@@ -179,11 +183,15 @@ Key lookup order:
 /model list
 /model openrouter:qwen/qwen3.7-max --global
 /model openrouter:sakana/fugu-ultra --global
+/model openrouter:poolside/laguna-s-2.1 --global
+/model openrouter:poolside/laguna-s-2.1:free --global
 /model openrouter:deepseek/deepseek-v4-flash --global
 /model openrouter:moonshotai/kimi-k3 --global
 /model openrouter:moonshotai/kimi-k2.7-code --global
 /model openrouter:z-ai/glm-5.2 --global
 /model openrouter:minimax/minimax-m3 --global
+/model openrouter:google/gemini-3.6-flash --global
+/model openrouter:google/gemini-3.5-flash-lite --global
 /model openrouter:anthropic/claude-sonnet-5 --global
 /model openrouter:nvidia/nemotron-3-ultra-550b-a55b:free --global
 /model ollama:glm-5.2:cloud --global
@@ -490,6 +498,13 @@ The agent can also create and edit Libre Claw schedules itself with the
 cron entries, so they stay portable across TUI, dashboard, and Telegram.
 Use an IANA timezone suffix such as `@ America/Montreal` for location-specific
 jobs; otherwise schedules use the daemon's local timezone.
+
+Scheduled runs are bounded by the `[automations]` settings in
+`~/.libre-claw/config.toml`. Libre Claw limits concurrent runs, preserves time
+for a final response, gives partial-report finalization its own timeout, and
+backs off a provider after confirmed quota or rate-limit failures. Adjust
+`max_concurrent_runs`, `run_timeout_seconds`, `deadline_reserve_seconds`, and
+the provider cooldown values when operating under tighter service limits.
 
 Start lightweight periodic check-ins:
 

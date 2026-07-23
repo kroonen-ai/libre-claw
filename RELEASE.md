@@ -35,9 +35,10 @@ First shippable Libre Claw release, built by Kroonen AI.
   `libre-claw restart` for shutting down or restarting the daemon/Telegram
   stack from another terminal. `libre-claw stop` now cancels the active daemon
   turn without stopping Libre Claw.
-- Safe self-update command with `libre-claw update`, which checks `origin/main`,
-  writes a rollback backup under `~/.libre-claw/backups/updates/`, refuses dirty
-  worktrees, and applies only fast-forward updates.
+- Safe self-update with `libre-claw update` or `/update` in the TUI and
+  authorized Telegram chats. It checks `origin/main`, writes a rollback backup
+  under `~/.libre-claw/backups/updates/`, refuses dirty worktrees, and applies
+  only fast-forward updates; `--dry-run` checks without changing files.
 - Local web dashboard at `http://127.0.0.1:8766/dashboard` for starting runs,
   reviewing timelines, approving blocked tools, managing schedules, and checking
   usage from the daemon.
@@ -115,10 +116,12 @@ First shippable Libre Claw release, built by Kroonen AI.
   `gpt-5.3-codex`, `gpt-5.3-codex-spark`, and `gpt-5.2`.
 - OpenRouter support with usage accounting and a shared recommended model preset
   catalog for TUI, Telegram, and usage reports, including
-  `deepseek/deepseek-v4-flash`, `sakana/fugu-ultra`, `qwen/qwen3.7-max`,
+  `deepseek/deepseek-v4-flash`, `sakana/fugu-ultra`,
+  `poolside/laguna-s-2.1`, `poolside/laguna-s-2.1:free`, `qwen/qwen3.7-max`,
   `moonshotai/kimi-k3`, `moonshotai/kimi-k2.6`,
   `moonshotai/kimi-k2.7-code`, `z-ai/glm-5.2`,
-  `minimax/minimax-m3`,
+  `minimax/minimax-m3`, `google/gemini-3.6-flash`,
+  `google/gemini-3.5-flash-lite`,
   `nvidia/nemotron-3-ultra-550b-a55b:free`,
   `anthropic/claude-sonnet-5`, `anthropic/claude-opus-4.8`, and `openai/gpt-5.5`.
 - Ordered provider fallback slots are configurable from TUI and Telegram with
@@ -142,16 +145,19 @@ First shippable Libre Claw release, built by Kroonen AI.
 - ReAct-style async agent loop with tool calling, concurrent tool execution,
   interrupt handling, context compaction, and configurable system prompt from
   TOML.
-- Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, `glob`,
-  `search_files`, `git_status`, `git_commit`, `think`, `browser_navigate`,
+- Built-in `read_file`, `write_file`, `edit_file`, `apply_patch`,
+  `list_directory`, `glob`, `search_files`, `view_image`, `git_status`,
+  `git_commit`, `think`, `browser_navigate`,
   `browser_read`, `browser_extract`, `browser_execute`,
   `browser_dismiss_cookies`, `browser_click`, `browser_type`, `browser_wait`,
   `browser_download`, `browser_screenshot`, `web_search`, `http_request`,
-  `schedule_list`, `schedule`, `skills_search`, and `bash` tools,
+  `schedule_list`, `schedule`, `skills_search`, `bash`, and managed `process`
+  tools,
   with bounded reads/listing/search, atomic writes/edits, occurrence targeting,
-  diffs, git inspection/commit support, persistent browser profiles, browser
-  artifact capture with graceful dependency errors, direct HTTP fetches,
-  scratchpad thinking, and bounded shell output.
+  validated multi-file edit batches, diffs, git inspection/commit support,
+  persistent browser/process sessions, local visual previews, browser artifact
+  capture with graceful dependency errors, direct HTTP fetches, scratchpad
+  thinking, and bounded head-and-tail shell output.
 - Interactive TUI permission panel with approve, deny, always allow tool, and
   always allow exact command options. Dangerous sandbox-blocked commands show a
   warning and require one-time approval or denial.

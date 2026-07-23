@@ -6,9 +6,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from importlib.resources import files
+from pathlib import Path
 from typing import Any, Literal, cast
 
 import httpx
@@ -118,7 +120,15 @@ DASHBOARD_ASSET_TYPES = {
 class ActiveRun:
     run_id: str
     task: asyncio.Task[None]
+    surface: str = "daemon"
     pending_permissions: dict[str, AgentPermissionRequest] = field(default_factory=dict)
+
+
+@dataclass
+class ProviderCooldown:
+    failures: int
+    until_monotonic: float
+    reason: str
 
 
 class DaemonServer:
@@ -146,6 +156,7 @@ class DaemonServer:
         self.memory_store = MemoryStore()
         self.automation_store = AutomationStore(config.automations.root)
         self.active_runs: dict[str, ActiveRun] = {}
+        self._provider_cooldowns: dict[str, ProviderCooldown] = {}
         self._app: web.Application | None = None
         self._automation_task: asyncio.Task[None] | None = None
         self._telegram_task: asyncio.Task[None] | None = None
@@ -494,7 +505,7 @@ class DaemonServer:
                 telegram_chat_id=telegram_chat_id,
             )
         )
-        active = ActiveRun(run_id=run.run_id, task=task)
+        active = ActiveRun(run_id=run.run_id, task=task, surface=surface)
         self.active_runs[run.run_id] = active
         task.add_done_callback(lambda _task, run_id=run.run_id: self.active_runs.pop(run_id, None))
         return web.json_response({"run": _run_payload(run)}, status=202)
@@ -641,6 +652,19 @@ class DaemonServer:
         automation = await self.automation_store.load(request.match_info["automation_id"])
         if automation is None:
             return _json_error("Unknown automation.", status=404)
+        if self._active_automation_count() >= self.config.automations.max_concurrent_runs:
+            return _json_error(
+                "Automation concurrency limit reached; wait for an active scheduled run to finish.",
+                status=409,
+            )
+        provider = automation.provider or self.config.general.default_provider
+        cooldown_remaining = self._provider_cooldown_remaining(provider)
+        if cooldown_remaining > 0:
+            return _json_error(
+                f"Provider {provider} is cooling down after a quota or rate-limit failure; "
+                f"retry in about {max(1, int(cooldown_remaining))} seconds.",
+                status=429,
+            )
         run = await self._start_automation_run(automation)
         updated = await self.automation_store.load(automation.automation_id)
         return web.json_response(
@@ -702,9 +726,12 @@ class DaemonServer:
         session: Session | None = None,
         attachments: tuple[UserAttachment, ...] = (),
         telegram_chat_id: int | None = None,
+        deadline_monotonic: float | None = None,
+        deadline_reserve_seconds: float = 0.0,
     ) -> RunState:
         assistant_chunks: list[str] = []
         state: RunState = "done"
+        primary_rate_limited = False
         try:
             await self.run_store.update_state(run.run_id, "running")
             await self._send_petdex_state(
@@ -733,7 +760,14 @@ class DaemonServer:
                     "attachments": [_attachment_metadata(attachment) for attachment in attachments],
                 },
             )
-            agent = await self._create_agent(config, session=session, surface=surface, telegram_chat_id=telegram_chat_id)
+            agent = await self._create_agent(
+                config,
+                session=session,
+                surface=surface,
+                telegram_chat_id=telegram_chat_id,
+                deadline_monotonic=deadline_monotonic,
+                deadline_reserve_seconds=deadline_reserve_seconds,
+            )
             async for event in agent.run(message, attachments=attachments):
                 if isinstance(event, AgentTextDelta):
                     assistant_chunks.append(event.text)
@@ -803,6 +837,47 @@ class DaemonServer:
                     continue
                 if isinstance(event, AgentError):
                     state = "failed"
+                    if (
+                        surface.startswith("automation:")
+                        and event.message.startswith("Run deadline reached")
+                    ):
+                        await self.run_store.append_event(
+                            run.run_id,
+                            "automation_timeout",
+                            {
+                                "timeout_seconds": config.automations.run_timeout_seconds,
+                                "source": "agent_deadline",
+                            },
+                        )
+                    if (
+                        event.provider_label is not None
+                        and _is_provider_quota_error(event.message)
+                    ):
+                        failed_provider = _provider_from_agent_label(
+                            config,
+                            event.provider_label,
+                        )
+                        primary_rate_limited = (
+                            primary_rate_limited
+                            or _provider_key(failed_provider)
+                            == _provider_key(config.general.default_provider)
+                        )
+                        cooldown = self._record_provider_cooldown(
+                            failed_provider,
+                            event.message,
+                        )
+                        await self.run_store.append_event(
+                            run.run_id,
+                            "provider_cooldown_started",
+                            {
+                                "provider": failed_provider,
+                                "failures": cooldown.failures,
+                                "retry_after_seconds": max(
+                                    0,
+                                    int(cooldown.until_monotonic - time.monotonic()),
+                                ),
+                            },
+                        )
                     await self._send_petdex_state(
                         "error",
                         message=event.message,
@@ -812,6 +887,32 @@ class DaemonServer:
                     await self.run_store.append_event(run.run_id, "error", {"message": event.message})
                     break
                 if isinstance(event, AgentFallback):
+                    if _is_provider_quota_error(event.reason):
+                        failed_provider = _provider_from_agent_label(
+                            config,
+                            event.failed_provider_label,
+                        )
+                        primary_rate_limited = (
+                            primary_rate_limited
+                            or _provider_key(failed_provider)
+                            == _provider_key(config.general.default_provider)
+                        )
+                        cooldown = self._record_provider_cooldown(
+                            failed_provider,
+                            event.reason,
+                        )
+                        await self.run_store.append_event(
+                            run.run_id,
+                            "provider_cooldown_started",
+                            {
+                                "provider": failed_provider,
+                                "failures": cooldown.failures,
+                                "retry_after_seconds": max(
+                                    0,
+                                    int(cooldown.until_monotonic - time.monotonic()),
+                                ),
+                            },
+                        )
                     await self._send_petdex_state(
                         "thinking",
                         message=f"Fallback: {event.provider_label}",
@@ -833,6 +934,7 @@ class DaemonServer:
                 surface=surface,
             )
             await self.run_store.append_event(run.run_id, "cancelled", {"reason": "Daemon task cancelled."})
+            raise
         except Exception as exc:
             state = "failed"
             await self._send_petdex_state(
@@ -863,6 +965,8 @@ class DaemonServer:
             )
             if state == "done":
                 await self._extract_run_memory(config, run, message, "".join(assistant_chunks))
+                if not primary_rate_limited:
+                    self._clear_provider_cooldown(config.general.default_provider)
         return state
 
     async def _automation_loop(self) -> None:
@@ -874,10 +978,22 @@ class DaemonServer:
             raise
 
     async def _tick_automations(self) -> None:
+        available_slots = max(
+            0,
+            self.config.automations.max_concurrent_runs - self._active_automation_count(),
+        )
+        if available_slots == 0:
+            return
         due = await self.automation_store.due(limit=max(1, self.config.automations.max_due_per_tick))
         for automation in due:
+            if available_slots == 0:
+                break
+            provider = automation.provider or self.config.general.default_provider
+            if self._provider_cooldown_remaining(provider) > 0:
+                continue
             try:
                 await self._start_automation_run(automation)
+                available_slots -= 1
             except Exception as exc:
                 await self._record_automation_error(automation, exc)
 
@@ -907,7 +1023,11 @@ class DaemonServer:
             },
         )
         task = asyncio.create_task(self._run_automation_agent(automation, run, config, report_path))
-        active = ActiveRun(run_id=run.run_id, task=task)
+        active = ActiveRun(
+            run_id=run.run_id,
+            task=task,
+            surface=f"automation:{automation.route}",
+        )
         self.active_runs[run.run_id] = active
         task.add_done_callback(lambda _task, run_id=run.run_id: self.active_runs.pop(run_id, None))
         return run
@@ -919,15 +1039,61 @@ class DaemonServer:
         config: LibreClawConfig,
         report_path: Path,
     ) -> None:
-        state = await self._run_agent(
-            run,
-            automation.prompt,
-            config,
-            surface=f"automation:{automation.route}",
-            hold_final_state=True,
+        timeout_seconds = max(1, config.automations.run_timeout_seconds)
+        deadline_reserve_seconds = min(
+            max(0.0, config.automations.deadline_reserve_seconds),
+            timeout_seconds * 0.1,
         )
-        if state != "done" or not _read_artifact(run, "summary.md").strip():
-            finalized = await self._finalize_partial_automation(automation, run, config, state)
+        deadline_monotonic = (
+            time.monotonic() + timeout_seconds - deadline_reserve_seconds
+        )
+        try:
+            state = await asyncio.wait_for(
+                self._run_agent(
+                    run,
+                    automation.prompt,
+                    config,
+                    surface=f"automation:{automation.route}",
+                    hold_final_state=True,
+                    deadline_monotonic=deadline_monotonic,
+                    deadline_reserve_seconds=deadline_reserve_seconds,
+                ),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            state = "failed"
+            await self.run_store.append_event(
+                run.run_id,
+                "automation_timeout",
+                {
+                    "automation_id": automation.automation_id,
+                    "timeout_seconds": timeout_seconds,
+                },
+            )
+        except asyncio.CancelledError:
+            state = "cancelled"
+        provider_cooled = self._provider_cooldown_remaining(
+            config.general.default_provider
+        ) > 0
+        if (
+            state != "cancelled"
+            and (state != "done" or not _read_artifact(run, "summary.md").strip())
+        ) and not provider_cooled:
+            try:
+                finalized = await asyncio.wait_for(
+                    self._finalize_partial_automation(automation, run, config, state),
+                    timeout=max(1, config.automations.finalizer_timeout_seconds),
+                )
+            except asyncio.TimeoutError:
+                finalized = False
+                await self.run_store.append_event(
+                    run.run_id,
+                    "automation_finalizer_timeout",
+                    {
+                        "automation_id": automation.automation_id,
+                        "timeout_seconds": config.automations.finalizer_timeout_seconds,
+                    },
+                )
             if finalized:
                 state = "done"
         try:
@@ -974,10 +1140,15 @@ class DaemonServer:
     async def _config_for_automation(self, automation: AutomationRecord) -> LibreClawConfig:
         provider = automation.provider or self.config.general.default_provider
         model = automation.model or self.config.general.default_model
+        working_directory = (
+            Path(automation.working_directory).expanduser().resolve()
+            if automation.working_directory.strip()
+            else self.config.general.working_directory
+        )
         general = GeneralConfig(
             default_provider="ollama" if provider == "local" else provider,
             default_model=model,
-            working_directory=self.config.general.working_directory,
+            working_directory=working_directory,
             theme=self.config.general.theme,
             log_level=self.config.general.log_level,
         )
@@ -1010,7 +1181,11 @@ class DaemonServer:
             kind="chat",
             provider=automation.provider or self.config.general.default_provider,
             model=automation.model or self.config.general.default_model,
-            working_directory=self.config.general.working_directory,
+            working_directory=(
+                Path(automation.working_directory).expanduser().resolve()
+                if automation.working_directory.strip()
+                else self.config.general.working_directory
+            ),
             state="failed",
         )
         message = str(exc)
@@ -1029,6 +1204,37 @@ class DaemonServer:
             browser="",
         )
 
+    def _active_automation_count(self) -> int:
+        return sum(
+            1
+            for active in self.active_runs.values()
+            if active.surface.startswith("automation:") and not active.task.done()
+        )
+
+    def _provider_cooldown_remaining(self, provider: str) -> float:
+        cooldown = self._provider_cooldowns.get(_provider_key(provider))
+        if cooldown is None:
+            return 0.0
+        return max(0.0, cooldown.until_monotonic - time.monotonic())
+
+    def _record_provider_cooldown(self, provider: str, reason: str) -> ProviderCooldown:
+        key = _provider_key(provider)
+        existing = self._provider_cooldowns.get(key)
+        failures = 1 if existing is None else existing.failures + 1
+        initial = max(1, self.config.automations.provider_cooldown_initial_seconds)
+        maximum = max(initial, self.config.automations.provider_cooldown_max_seconds)
+        delay = min(initial * (2 ** max(0, failures - 1)), maximum)
+        cooldown = ProviderCooldown(
+            failures=failures,
+            until_monotonic=time.monotonic() + delay,
+            reason=reason,
+        )
+        self._provider_cooldowns[key] = cooldown
+        return cooldown
+
+    def _clear_provider_cooldown(self, provider: str) -> None:
+        self._provider_cooldowns.pop(_provider_key(provider), None)
+
     async def _create_agent(
         self,
         config: LibreClawConfig,
@@ -1036,6 +1242,8 @@ class DaemonServer:
         session: Session | None = None,
         surface: str = "daemon",
         telegram_chat_id: int | None = None,
+        deadline_monotonic: float | None = None,
+        deadline_reserve_seconds: float = 0.0,
     ) -> Agent:
         provider = self.provider_factory(config)
         fallbacks = create_fallback_providers(config)
@@ -1054,6 +1262,7 @@ class DaemonServer:
             max_tool_calls_per_turn=config.agent.max_tool_calls_per_turn,
             auto_compact_threshold=config.agent.auto_compact_threshold,
             context_window_tokens=config.agent.context_window_tokens,
+            compact_keep_last=config.agent.compact_keep_last,
             provider_retry_attempts=config.agent.provider_retry_attempts,
             provider_retry_initial_delay=config.agent.provider_retry_initial_delay,
             memory_facts=memory_facts,
@@ -1062,11 +1271,17 @@ class DaemonServer:
                 surface,
                 telegram_chat_id=telegram_chat_id,
             ),
-            skill_provider=skill_store.relevant_skill_texts,
+            skill_provider=(
+                skill_store.relevant_skill_texts
+                if config.skills.enabled
+                else None
+            ),
             soul_provider=soul_store.soul_texts,
             memory_provider=lambda user_message: self._relevant_memory_texts(config, user_message),
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
             fallback_recheck_after_attempts=config.fallback.recheck_after_attempts,
+            deadline_monotonic=deadline_monotonic,
+            deadline_reserve_seconds=deadline_reserve_seconds,
         )
 
     async def _with_openrouter_model_limits(self, config: LibreClawConfig) -> LibreClawConfig:
@@ -1351,6 +1566,44 @@ def _telegram_token_available(config: LibreClawConfig) -> bool:
         LOGGER.warning("telegram_token_lookup_failed", error=str(exc))
         return False
     return bool(lookup.value)
+
+
+def _provider_key(provider: str) -> str:
+    normalized = provider.strip().lower()
+    return "ollama" if normalized == "local" else normalized
+
+
+def _provider_from_agent_label(
+    config: LibreClawConfig,
+    label: str,
+) -> str:
+    if label == "primary":
+        return config.general.default_provider
+    provider, _, _model = label.partition(":")
+    return provider or config.general.default_provider
+
+
+def _is_provider_quota_error(message: str) -> bool:
+    text = " ".join(message.lower().split())
+    semantic_markers = (
+        "apiratelimiterror",
+        "daily limit",
+        "insufficient quota",
+        "quota exceeded",
+        "quota exhausted",
+        "rate limit",
+        "rate-limit",
+        "too many requests",
+        "usage limit",
+    )
+    if any(marker in text for marker in semantic_markers):
+        return True
+    numeric_patterns = (
+        r"\berror code\s*[:=]?\s*429\b",
+        r"\b(?:provider|api|request|response) status\s*[:=]?\s*429\b",
+        r"\bhttp(?:x)?(?: response)?(?: error)?\s+429\b",
+    )
+    return any(re.search(pattern, text) is not None for pattern in numeric_patterns)
 
 
 def _surface_prompt_extra(existing: str, surface: str, *, telegram_chat_id: int | None = None) -> str:

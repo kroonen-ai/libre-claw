@@ -57,6 +57,7 @@ class TelegramBot:
         application.add_handler(CommandHandler("help", handlers.help))
         application.add_handler(CommandHandler("new", handlers.new))
         application.add_handler(CommandHandler("restart", handlers.restart))
+        application.add_handler(CommandHandler("update", handlers.update))
         application.add_handler(CommandHandler("cost", handlers.cost))
         application.add_handler(CommandHandler("usage", handlers.usage))
         application.add_handler(CommandHandler("status", handlers.cost))

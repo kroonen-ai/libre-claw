@@ -11,10 +11,8 @@ import signal
 import subprocess
 import sys
 import time
-import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, NoReturn
 from urllib.parse import urlparse
@@ -52,6 +50,11 @@ from libre_claw.daemon import DaemonServer, daemon_base_url
 from libre_claw.headless import run_headless
 from libre_claw.telegram.bot import TelegramBot
 from libre_claw.tui.app import LibreClawApp
+from libre_claw.updater import (
+    UpdateError,
+    update_checkout as _update_checkout,
+    update_result_text,
+)
 
 
 PROCESS_STATE_NAME = "process.json"
@@ -73,21 +76,6 @@ class StartedProcess:
     base_url: str
     log_path: Path
     mode: str
-
-
-@dataclass(frozen=True)
-class UpdateResult:
-    repo_root: Path
-    local_head: str
-    remote_head: str
-    remote_ref: str
-    backup_dir: Path | None
-    updated: bool
-    dry_run: bool = False
-
-
-class UpdateError(RuntimeError):
-    """Raised when the self-update command cannot safely continue."""
 
 
 def _raise_click_error(message: str) -> NoReturn:
@@ -213,6 +201,18 @@ def chat_command(ctx: click.Context, mouse: bool | None, inline: bool | None) ->
 )
 @click.option("--trajectory-agent-version", default=None, hidden=True)
 @click.option("--trajectory-reasoning-effort", default=None, hidden=True)
+@click.option(
+    "--deadline-seconds",
+    type=click.FloatRange(min=0.0, min_open=True),
+    default=None,
+    help="Stop the agent before this noninteractive run exceeds the given duration.",
+)
+@click.option(
+    "--deadline-reserve-seconds",
+    type=click.FloatRange(min=0.0),
+    default=0.0,
+    hidden=True,
+)
 @click.pass_context
 def run_command(
     ctx: click.Context,
@@ -222,6 +222,8 @@ def run_command(
     trajectory_path: Path | None,
     trajectory_agent_version: str | None,
     trajectory_reasoning_effort: str | None,
+    deadline_seconds: float | None,
+    deadline_reserve_seconds: float,
 ) -> None:
     """Run one complete agent turn without opening the TUI."""
     prompt = message if message is not None else sys.stdin.read()
@@ -246,6 +248,8 @@ def run_command(
             trajectory_path=trajectory_path,
             trajectory_agent_version=trajectory_agent_version,
             trajectory_reasoning_effort=trajectory_reasoning_effort,
+            deadline_seconds=deadline_seconds,
+            deadline_reserve_seconds=deadline_reserve_seconds,
         )
     )
     if wrote_text:
@@ -574,176 +578,17 @@ def restart_command(
 def update_command(repo_path: Path | None, remote: str, branch: str, dry_run: bool) -> None:
     """Safely update this Libre Claw checkout from the latest main commit."""
     try:
-        result = _update_checkout(repo_path, remote=remote, branch=branch, dry_run=dry_run)
+        result = _update_checkout(
+            repo_path,
+            remote=remote,
+            branch=branch,
+            dry_run=dry_run,
+            progress=click.echo,
+        )
     except UpdateError as exc:
         _raise_click_error(str(exc))
 
-    click.echo(f"Repository: {result.repo_root}")
-    click.echo(f"Remote: {result.remote_ref}")
-    click.echo(f"Current: {_short_commit(result.local_head)}")
-    click.echo(f"Latest:  {_short_commit(result.remote_head)}")
-    if result.dry_run:
-        if result.updated:
-            click.echo("Update available. Rerun without --dry-run to back up and fast-forward.")
-        else:
-            click.echo("Libre Claw is already up to date.")
-        return
-    if result.backup_dir is not None:
-        click.echo(f"Backup: {result.backup_dir}")
-    if result.updated:
-        click.echo(f"Updated Libre Claw to {_short_commit(result.remote_head)}.")
-    else:
-        click.echo("Libre Claw is already up to date.")
-
-
-def _update_checkout(repo_path: Path | None, *, remote: str, branch: str, dry_run: bool = False) -> UpdateResult:
-    repo_root = _resolve_update_repo(repo_path)
-    current_branch = _git_stdout(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"])
-    if current_branch == "HEAD":
-        raise UpdateError("Libre Claw update requires a branch checkout, but this repository is detached.")
-    if current_branch != branch:
-        raise UpdateError(f"Libre Claw update only updates `{branch}`. Current branch is `{current_branch}`.")
-
-    remote_ref = f"{remote}/{branch}"
-    click.echo(f"Checking {remote_ref}...")
-    _run_git(repo_root, ["fetch", "--prune", remote, branch])
-    local_head = _git_stdout(repo_root, ["rev-parse", "HEAD"])
-    remote_head = _git_stdout(repo_root, ["rev-parse", "--verify", remote_ref])
-    if local_head == remote_head:
-        return UpdateResult(repo_root, local_head, remote_head, remote_ref, None, updated=False, dry_run=dry_run)
-
-    if dry_run:
-        return UpdateResult(repo_root, local_head, remote_head, remote_ref, None, updated=True, dry_run=True)
-
-    backup_dir = _create_update_backup(repo_root, remote=remote, branch=branch, local_head=local_head, remote_head=remote_head)
-    if _git_dirty(repo_root):
-        raise UpdateError(
-            "Working tree has uncommitted changes. "
-            f"Backup written to {backup_dir}. Commit or stash your changes, then rerun `libre-claw update`."
-        )
-    if not _git_is_ancestor(repo_root, local_head, remote_head):
-        raise UpdateError(
-            f"Local `{branch}` cannot fast-forward to {remote_ref}. "
-            f"Backup written to {backup_dir}. Rebase or merge manually."
-        )
-
-    click.echo("Applying fast-forward update...")
-    _run_git(repo_root, ["merge", "--ff-only", remote_ref])
-    new_head = _git_stdout(repo_root, ["rev-parse", "HEAD"])
-    return UpdateResult(repo_root, local_head, new_head, remote_ref, backup_dir, updated=True)
-
-
-def _resolve_update_repo(repo_path: Path | None) -> Path:
-    candidates = [repo_path.expanduser() if repo_path is not None else Path.cwd()]
-    package_root = Path(__file__).resolve().parents[2]
-    if package_root not in candidates:
-        candidates.append(package_root)
-    for candidate in candidates:
-        try:
-            start = candidate.resolve()
-        except OSError:
-            continue
-        result = _run_git(start, ["rev-parse", "--show-toplevel"], check=False)
-        if result.returncode == 0:
-            root = Path(result.stdout.strip()).resolve()
-            if root.is_dir():
-                return root
-    raise UpdateError("Could not find a Libre Claw git checkout to update.")
-
-
-def _create_update_backup(repo_root: Path, *, remote: str, branch: str, local_head: str, remote_head: str) -> Path:
-    backup_dir = _update_backup_root() / f"{_utc_timestamp()}-{_short_commit(local_head)}"
-    backup_dir.mkdir(parents=True, exist_ok=False)
-    metadata = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "repo_root": str(repo_root),
-        "remote": remote,
-        "branch": branch,
-        "local_head": local_head,
-        "remote_head": remote_head,
-    }
-    (backup_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (backup_dir / "status.txt").write_text(_git_stdout(repo_root, ["status", "--short", "--branch"], allow_empty=True), encoding="utf-8")
-    (backup_dir / "working-tree.patch").write_text(
-        _git_stdout(repo_root, ["diff", "--binary"], allow_empty=True),
-        encoding="utf-8",
-    )
-    (backup_dir / "staged.patch").write_text(
-        _git_stdout(repo_root, ["diff", "--cached", "--binary"], allow_empty=True),
-        encoding="utf-8",
-    )
-    untracked = _git_stdout(repo_root, ["ls-files", "--others", "--exclude-standard"], allow_empty=True)
-    (backup_dir / "untracked.txt").write_text(untracked, encoding="utf-8")
-    _write_untracked_archive(repo_root, untracked.splitlines(), backup_dir)
-    _run_git(repo_root, ["bundle", "create", str(backup_dir / "head.bundle"), "HEAD"])
-    return backup_dir
-
-
-def _update_backup_root() -> Path:
-    return _runtime_dir() / "backups" / "updates"
-
-
-def _write_untracked_archive(repo_root: Path, files: list[str], backup_dir: Path) -> None:
-    safe_files: list[tuple[str, Path]] = []
-    for name in files:
-        candidate = (repo_root / name).resolve()
-        if not _path_is_relative_to(candidate, repo_root) or not candidate.is_file():
-            continue
-        safe_files.append((name, candidate))
-    if not safe_files:
-        return
-    with zipfile.ZipFile(backup_dir / "untracked.zip", "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, path in safe_files:
-            archive.write(path, arcname=name)
-
-
-def _path_is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
-
-
-def _git_dirty(repo_root: Path) -> bool:
-    return bool(_git_stdout(repo_root, ["status", "--porcelain"], allow_empty=True).strip())
-
-
-def _git_is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
-    return _run_git(repo_root, ["merge-base", "--is-ancestor", ancestor, descendant], check=False).returncode == 0
-
-
-def _git_stdout(repo_root: Path, args: list[str], *, allow_empty: bool = False) -> str:
-    result = _run_git(repo_root, args)
-    if not result.stdout and not allow_empty:
-        raise UpdateError(f"Git command returned no output: git {' '.join(args)}")
-    return result.stdout.strip() if not allow_empty else result.stdout
-
-
-def _run_git(repo_root: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    try:
-        result = subprocess.run(  # noqa: S603 - fixed git executable with structured arguments.
-            ["git", *args],
-            cwd=repo_root,
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=60.0,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise UpdateError(f"Could not run git {' '.join(args)}: {exc}") from exc
-    if check and result.returncode != 0:
-        details = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
-        raise UpdateError(f"Git command failed: git {' '.join(args)}\n{details}")
-    return result
-
-
-def _short_commit(commit: str) -> str:
-    return commit[:12]
-
-
-def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    click.echo(update_result_text(result))
 
 
 def _runtime_dir() -> Path:

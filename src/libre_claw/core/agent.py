@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
@@ -15,6 +17,7 @@ from libre_claw.core.session import (
     Session,
     UserAttachment,
     estimate_context_tokens,
+    image_block,
     text_block,
     tool_result_block,
     tool_use_block,
@@ -25,6 +28,7 @@ from libre_claw.providers.base import (
     Done,
     LLMProvider,
     ProviderError,
+    StreamEvent,
     TextDelta,
     ToolCallReady,
     Usage,
@@ -62,12 +66,14 @@ class AgentDone:
 @dataclass(frozen=True)
 class AgentError:
     message: str
+    provider_label: str | None = None
 
 
 @dataclass(frozen=True)
 class AgentFallback:
     provider_label: str
     reason: str
+    failed_provider_label: str = "primary"
 
 
 AgentEvent = (
@@ -84,6 +90,10 @@ SoulProvider = Callable[[], Sequence[str] | Awaitable[Sequence[str]]]
 MemoryProvider = Callable[[str], Sequence[str] | Awaitable[Sequence[str]]]
 
 
+class _AgentDeadlineReached(TimeoutError):
+    """Internal signal used to stop provider streams before the outer runner kills them."""
+
+
 class Agent:
     """ReAct-style agent loop with client-side tools."""
 
@@ -97,6 +107,7 @@ class Agent:
         max_tool_calls_per_turn: int = 50,
         auto_compact_threshold: float = 0.8,
         context_window_tokens: int = 200000,
+        compact_keep_last: int = 8,
         provider_retry_attempts: int = 0,
         provider_retry_initial_delay: float = 1.0,
         memory_facts: list[str] | None = None,
@@ -106,6 +117,8 @@ class Agent:
         memory_provider: MemoryProvider | None = None,
         fallback_providers: Sequence[tuple[str, LLMProvider]] | None = None,
         fallback_recheck_after_attempts: int = 3,
+        deadline_monotonic: float | None = None,
+        deadline_reserve_seconds: float = 0.0,
     ) -> None:
         self.session = session
         self.provider = provider
@@ -114,6 +127,7 @@ class Agent:
         self.max_tool_calls_per_turn = max_tool_calls_per_turn
         self.auto_compact_threshold = auto_compact_threshold
         self.context_window_tokens = context_window_tokens
+        self.compact_keep_last = max(1, compact_keep_last)
         self.provider_retry_attempts = max(0, provider_retry_attempts)
         self.provider_retry_initial_delay = max(0.0, provider_retry_initial_delay)
         self.memory_facts = memory_facts or []
@@ -124,6 +138,16 @@ class Agent:
         self.memory_provider = memory_provider
         self.fallback_providers = tuple(fallback_providers or ())
         self.fallback_recheck_after_attempts = max(1, fallback_recheck_after_attempts)
+        self.deadline_monotonic = deadline_monotonic
+        self.deadline_reserve_seconds = max(0.0, deadline_reserve_seconds)
+        self._tool_schemas = self.tool_registry.schemas()
+        self._serialized_tool_schemas = json.dumps(
+            self._tool_schemas,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        self._last_provider_input_tokens = 0
         self._active_skills: list[str] = []
         self._active_soul: list[str] = []
         self._active_memory: list[str] = []
@@ -145,6 +169,9 @@ class Agent:
         fallback_calls_since_recheck = 0
 
         while True:
+            if self._deadline_expired():
+                yield AgentError("Run deadline reached before a final response was produced.")
+                return
             if active_provider_index > 0 and fallback_calls_since_recheck >= self.fallback_recheck_after_attempts:
                 active_provider_index = 0
                 fallback_calls_since_recheck = 0
@@ -159,11 +186,7 @@ class Agent:
             while True:
                 try:
                     self._maybe_compact_session()
-                    async for event in active_provider.complete(
-                        messages=self.session.messages,
-                        tools=self.tool_registry.schemas(),
-                        system=self._build_system_prompt(),
-                    ):
+                    async for event in self._stream_provider(active_provider):
                         if isinstance(event, TextDelta):
                             assistant_chunks.append(event.text)
                             yield AgentTextDelta(event.text)
@@ -177,12 +200,23 @@ class Agent:
 
                         if isinstance(event, Done):
                             turn_usage = combine_usage(turn_usage, event.usage)
+                            if event.usage is not None:
+                                self._last_provider_input_tokens = max(
+                                    0,
+                                    event.usage.input_tokens,
+                                )
                             continue
 
                         if isinstance(event, ProviderError):
                             provider_failed = True
                             provider_error = event.message
                             break
+                except _AgentDeadlineReached:
+                    self._save_assistant_text(assistant_chunks)
+                    yield AgentError(
+                        "Run deadline reached before a final response was produced."
+                    )
+                    return
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -205,7 +239,15 @@ class Agent:
                 )
                 if can_retry_same_provider:
                     provider_attempt += 1
-                    await asyncio.sleep(_retry_delay(self.provider_retry_initial_delay, provider_attempt))
+                    retry_delay = _retry_delay(
+                        self.provider_retry_initial_delay,
+                        provider_attempt,
+                    )
+                    remaining = self._remaining_seconds()
+                    if remaining is not None:
+                        retry_delay = min(retry_delay, max(0.0, remaining))
+                    if retry_delay > 0:
+                        await asyncio.sleep(retry_delay)
                     provider_failed = False
                     provider_error = ""
                     continue
@@ -213,15 +255,23 @@ class Agent:
                 next_provider_index = provider_index + 1
                 if assistant_chunks or tool_calls or next_provider_index >= len(provider_chain):
                     self._save_assistant_text(assistant_chunks)
-                    yield AgentError(provider_error)
+                    yield AgentError(
+                        provider_error,
+                        provider_label=provider_chain[provider_index][0],
+                    )
                     break
 
+                failed_provider_label = provider_chain[provider_index][0]
                 provider_index = next_provider_index
                 active_provider_index = provider_index
                 active_provider = provider_chain[provider_index][1]
                 provider_attempt = 0
                 fallback_calls_since_recheck = 0
-                yield AgentFallback(provider_label=provider_chain[provider_index][0], reason=provider_error)
+                yield AgentFallback(
+                    provider_label=provider_chain[provider_index][0],
+                    reason=provider_error,
+                    failed_provider_label=failed_provider_label,
+                )
                 provider_failed = False
                 provider_error = ""
 
@@ -263,7 +313,22 @@ class Agent:
                     future: asyncio.Future[PermissionResolution] = asyncio.get_running_loop().create_future()
                     yield AgentPermissionRequest(call=call, future=future)
                     try:
-                        resolution = await future
+                        remaining = self._remaining_seconds()
+                        if remaining is None:
+                            resolution = await future
+                        elif remaining <= 0:
+                            future.cancel()
+                            yield AgentError(
+                                "Run deadline reached while waiting for tool approval."
+                            )
+                            return
+                        else:
+                            resolution = await asyncio.wait_for(future, timeout=remaining)
+                    except asyncio.TimeoutError:
+                        yield AgentError(
+                            "Run deadline reached while waiting for tool approval."
+                        )
+                        return
                     except asyncio.CancelledError:
                         raise
                     approved = self.permission_manager.apply_resolution(call, resolution)
@@ -273,17 +338,21 @@ class Agent:
 
                 executable_calls.append(call)
 
-            executed = await asyncio.gather(*(self.tool_registry.execute(call) for call in executable_calls))
+            executed = await self._execute_tools(executable_calls)
             for call, result in zip(executable_calls, executed, strict=True):
                 immediate_results[call.id] = result
 
             ordered_results = [(call, immediate_results[call.id]) for call in tool_calls]
-            self.session.add_tool_result_blocks(
-                [
-                    tool_result_block(call.id, result.as_text(), is_error=result.is_error)
-                    for call, result in ordered_results
-                ]
+            result_blocks = [
+                tool_result_block(call.id, result.as_text(), is_error=result.is_error)
+                for call, result in ordered_results
+            ]
+            result_blocks.extend(
+                image_block(attachment)
+                for _, result in ordered_results
+                for attachment in result.attachments
             )
+            self.session.add_tool_result_blocks(result_blocks)
 
             for call, result in ordered_results:
                 yield AgentToolResult(call=call, result=result)
@@ -310,11 +379,13 @@ class Agent:
         estimated_tokens = estimate_context_tokens(
             self.session.messages,
             summary=self.session.summary,
-            extra_texts=(self._build_system_prompt(),),
+            extra_texts=(self._build_system_prompt(), self._serialized_tool_schemas),
         )
+        estimated_tokens = max(estimated_tokens, self._last_provider_input_tokens)
         threshold = max(1, int(self.context_window_tokens * self.auto_compact_threshold))
         if estimated_tokens >= threshold:
-            self.session.compact(keep_last=8)
+            self.session.compact(keep_last=self.compact_keep_last)
+            self._last_provider_input_tokens = 0
 
     def _build_system_prompt(self) -> str:
         parts = [self.system_prompt]
@@ -338,13 +409,115 @@ class Agent:
             )
         if self.session.summary:
             parts.append("Compacted prior conversation summary:\n" + self.session.summary)
-        parts.append(
-            SKILL_AUTHORING_GUIDANCE
-            + "\n\n"
-            "If this task reveals a repeatable workflow that is not captured by the relevant skills, "
-            "briefly suggest a `/skills add <name> ...` command when you finish."
-        )
+        tool_names = [
+            str(schema.get("name", ""))
+            for schema in self._tool_schemas
+            if str(schema.get("name", "")).strip()
+        ]
+        if tool_names:
+            parts.append("Available tools for this run: " + ", ".join(tool_names) + ".")
+        else:
+            parts.append("No tools are enabled for this run.")
+        if self.skill_provider is not None:
+            parts.append(
+                SKILL_AUTHORING_GUIDANCE
+                + "\n\n"
+                "If this task reveals a repeatable workflow that is not captured by the relevant skills, "
+                "briefly suggest a `/skills add <name> ...` command when you finish."
+            )
+        remaining = self._remaining_seconds()
+        if remaining is not None:
+            parts.append(
+                f"Run deadline: about {max(0, int(remaining))} seconds remain. "
+                "Prioritize the requested result, stop starting nonessential work as the deadline "
+                "approaches, and return the best verified final answer before time expires."
+            )
         return "\n\n".join(parts)
+
+    async def _execute_tools(self, calls: list[ToolCall]) -> list[ToolResult]:
+        if not calls:
+            return []
+        remaining = self._remaining_seconds()
+        if remaining is None:
+            return list(
+                await asyncio.gather(*(self.tool_registry.execute(call) for call in calls))
+            )
+        available = remaining - self.deadline_reserve_seconds
+        if available <= 0:
+            return [
+                ToolResult(
+                    error=(
+                        "Run deadline is near. Do not call more tools; return the best final answer now."
+                    )
+                )
+                for _ in calls
+            ]
+        tasks = [
+            asyncio.create_task(self.tool_registry.execute(call))
+            for call in calls
+        ]
+        try:
+            _, pending = await asyncio.wait(tasks, timeout=available)
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        results: list[ToolResult] = []
+        for task in tasks:
+            if task in pending:
+                results.append(
+                    ToolResult(
+                        error=(
+                            "Tool execution was stopped to preserve time for a final answer "
+                            "before the run deadline."
+                        )
+                    )
+                )
+                continue
+            try:
+                results.append(task.result())
+            except Exception as exc:
+                results.append(ToolResult(error=str(exc)))
+        return results
+
+    async def _stream_provider(
+        self,
+        provider: LLMProvider,
+    ) -> AsyncIterator[StreamEvent]:
+        stream = provider.complete(
+            messages=self.session.messages,
+            tools=self._tool_schemas,
+            system=self._build_system_prompt(),
+        ).__aiter__()
+        while True:
+            remaining = self._remaining_seconds()
+            if remaining is not None and remaining <= 0:
+                raise _AgentDeadlineReached
+            try:
+                if remaining is None:
+                    event = await anext(stream)
+                else:
+                    event = await asyncio.wait_for(anext(stream), timeout=remaining)
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError as exc:
+                raise _AgentDeadlineReached from exc
+            yield event
+
+    def _remaining_seconds(self) -> float | None:
+        if self.deadline_monotonic is None:
+            return None
+        return self.deadline_monotonic - time.monotonic()
+
+    def _deadline_expired(self) -> bool:
+        remaining = self._remaining_seconds()
+        return remaining is not None and remaining <= 0
 
     def resolved_system_prompt(self) -> str:
         """Return the fully resolved prompt used by the current agent turn."""
@@ -413,6 +586,7 @@ def _should_retry_provider_error(message: str) -> bool:
         "connection",
         "connecterror",
         "network",
+        "no assistant text or tool calls",
         "overloaded",
         "rate limit",
         "readerror",

@@ -113,6 +113,8 @@ def test_cli_run_streams_headless_response(monkeypatch, tmp_path) -> None:
         seen["working_directory"] = config.general.working_directory
         seen["message"] = message
         seen["auto_approve"] = kwargs["auto_approve"]
+        seen["deadline_seconds"] = kwargs["deadline_seconds"]
+        seen["deadline_reserve_seconds"] = kwargs["deadline_reserve_seconds"]
         kwargs["on_text"]("benchmark ready")
         return HeadlessRunResult(text="benchmark ready")
 
@@ -120,7 +122,17 @@ def test_cli_run_streams_headless_response(monkeypatch, tmp_path) -> None:
 
     result = runner.invoke(
         main,
-        ["--working-directory", str(tmp_path), "run", "solve this", "--auto-approve"],
+        [
+            "--working-directory",
+            str(tmp_path),
+            "run",
+            "solve this",
+            "--auto-approve",
+            "--deadline-seconds",
+            "120",
+            "--deadline-reserve-seconds",
+            "5",
+        ],
     )
 
     assert result.exit_code == 0
@@ -129,6 +141,33 @@ def test_cli_run_streams_headless_response(monkeypatch, tmp_path) -> None:
         "working_directory": tmp_path.resolve(),
         "message": "solve this",
         "auto_approve": True,
+        "deadline_seconds": 120.0,
+        "deadline_reserve_seconds": 5.0,
+    }
+
+
+def test_cli_run_accepts_leading_hyphen_prompt_from_stdin(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    seen: dict[str, object] = {}
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    async def fake_run_headless(config, message, **kwargs):  # type: ignore[no-untyped-def]
+        seen["working_directory"] = config.general.working_directory
+        seen["message"] = message
+        return HeadlessRunResult(text="done")
+
+    monkeypatch.setattr("libre_claw.cli.run_headless", fake_run_headless)
+
+    result = runner.invoke(
+        main,
+        ["--working-directory", str(tmp_path), "run"],
+        input="-preserve this leading option-like text\n",
+    )
+
+    assert result.exit_code == 0
+    assert seen == {
+        "working_directory": tmp_path.resolve(),
+        "message": "-preserve this leading option-like text",
     }
 
 

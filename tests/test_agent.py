@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
@@ -21,7 +22,15 @@ from libre_claw.core.agent import (
     SkillProvider,
 )
 from libre_claw.core.permissions import PermissionManager
-from libre_claw.core.session import ChatMessage, Session, text_block, tool_result_block, tool_use_block
+from libre_claw.core.session import (
+    ChatMessage,
+    Session,
+    UserAttachment,
+    image_block,
+    text_block,
+    tool_result_block,
+    tool_use_block,
+)
 from libre_claw.core.tools import BaseTool, ToolCall, ToolContext, ToolRegistry, ToolResult
 from libre_claw.providers.base import (
     Done,
@@ -75,6 +84,22 @@ class AskTool(EchoTool):
     permission_level = "ask"
 
 
+class AttachmentTool(BaseTool):
+    name = "attachment"
+    description = "Return an image attachment."
+    parameters = {}
+    permission_level = "allow"
+
+    async def execute(self) -> ToolResult:
+        attachment = UserAttachment(
+            media_type="image/png",
+            data="aGVsbG8=",
+            filename="preview.png",
+            path="/tmp/preview.png",
+        )
+        return ToolResult(content="attached", attachments=(attachment,))
+
+
 class BarrierTool(BaseTool):
     name = "barrier"
     description = "Track concurrent execution."
@@ -92,6 +117,36 @@ class BarrierTool(BaseTool):
         return ToolResult(content=value)
 
 
+class DelayTool(BaseTool):
+    name = "delay"
+    description = "Return a value after a delay."
+    parameters = {
+        "value": {"type": "string"},
+        "delay": {"type": "number"},
+    }
+    required = ("value", "delay")
+    permission_level = "allow"
+
+    async def execute(self, *, value: str, delay: float) -> ToolResult:
+        await asyncio.sleep(delay)
+        return ToolResult(content=value)
+
+
+class BlockingProvider(LLMProvider):
+    async def complete(
+        self,
+        messages: Sequence[ChatMessage],
+        tools: Sequence[ToolSchema] | None = None,
+        system: str | None = None,
+        stream: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        del messages, tools, system, stream, temperature, max_tokens
+        await asyncio.sleep(60)
+        yield TextDelta("late")
+
+
 def make_agent(
     provider: LLMProvider,
     registry: ToolRegistry | None = None,
@@ -104,6 +159,11 @@ def make_agent(
     fallback_recheck_after_attempts: int = 3,
     provider_retry_attempts: int = 0,
     provider_retry_initial_delay: float = 0.0,
+    auto_compact_threshold: float = 0.8,
+    context_window_tokens: int = 200000,
+    compact_keep_last: int = 8,
+    deadline_monotonic: float | None = None,
+    deadline_reserve_seconds: float = 0.0,
 ) -> Agent:
     permissions = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=True))
     return Agent(
@@ -121,6 +181,11 @@ def make_agent(
         fallback_recheck_after_attempts=fallback_recheck_after_attempts,
         provider_retry_attempts=provider_retry_attempts,
         provider_retry_initial_delay=provider_retry_initial_delay,
+        auto_compact_threshold=auto_compact_threshold,
+        context_window_tokens=context_window_tokens,
+        compact_keep_last=compact_keep_last,
+        deadline_monotonic=deadline_monotonic,
+        deadline_reserve_seconds=deadline_reserve_seconds,
     )
 
 
@@ -235,6 +300,34 @@ async def test_agent_executes_tool_then_continues_to_final_answer() -> None:
     )
 
 
+async def test_agent_sends_tool_attachments_back_to_provider() -> None:
+    provider = ScriptedProvider(
+        [
+            [ToolCallReady("toolu_1", "attachment", {}), Done(stop_reason="tool_use")],
+            [TextDelta("seen"), Done()],
+        ]
+    )
+    registry = ToolRegistry([AttachmentTool(ToolContext(working_directory=Path.cwd()))])
+    agent = make_agent(provider, registry)
+
+    await collect_events(agent, "Inspect")
+
+    attachment = UserAttachment(
+        media_type="image/png",
+        data="aGVsbG8=",
+        filename="preview.png",
+        path="/tmp/preview.png",
+    )
+    assert agent.session.messages[2] == ChatMessage(
+        role="user",
+        content=[
+            tool_result_block("toolu_1", "attached"),
+            image_block(attachment),
+        ],
+    )
+    assert provider.received_messages[1][2] == agent.session.messages[2]
+
+
 async def test_agent_accumulates_usage_across_tool_loop() -> None:
     provider = ScriptedProvider(
         [
@@ -283,6 +376,32 @@ async def test_agent_executes_parallel_tool_calls_concurrently() -> None:
     await collect_events(agent, "Use two tools")
 
     assert BarrierTool.max_running == 2
+
+
+async def test_agent_preserves_completed_parallel_tools_at_deadline() -> None:
+    provider = ScriptedProvider(
+        [
+            [
+                ToolCallReady("toolu_fast", "delay", {"value": "fast", "delay": 0.01}),
+                ToolCallReady("toolu_slow", "delay", {"value": "slow", "delay": 1.0}),
+                Done(stop_reason="tool_use"),
+            ],
+            [TextDelta("done"), Done()],
+        ]
+    )
+    registry = ToolRegistry([DelayTool(ToolContext(working_directory=Path.cwd()))])
+    agent = make_agent(
+        provider,
+        registry,
+        deadline_monotonic=time.monotonic() + 0.2,
+        deadline_reserve_seconds=0.08,
+    )
+
+    events = await collect_events(agent, "Use two tools")
+
+    results = [event for event in events if isinstance(event, AgentToolResult)]
+    assert results[0].result == ToolResult(content="fast")
+    assert "stopped to preserve time" in (results[1].result.error or "")
 
 
 async def test_agent_sends_denied_tool_result_back_to_model() -> None:
@@ -345,7 +464,11 @@ async def test_agent_tries_multiple_fallbacks_in_order() -> None:
 
     assert events == [
         AgentFallback("openrouter:backup-1", "primary down"),
-        AgentFallback("ollama:backup-2", "backup 1 down"),
+        AgentFallback(
+            "ollama:backup-2",
+            "backup 1 down",
+            failed_provider_label="openrouter:backup-1",
+        ),
         AgentTextDelta("ok"),
         AgentDone(None),
     ]
@@ -402,6 +525,27 @@ async def test_agent_falls_back_when_primary_provider_returns_empty_output() -> 
     assert len(fallback.received_messages) == 1
 
 
+async def test_agent_retries_empty_provider_output_before_using_fallback() -> None:
+    primary = ScriptedProvider(
+        [
+            [Done(Usage(input_tokens=5, output_tokens=0))],
+            [TextDelta("recovered"), Done()],
+        ]
+    )
+    fallback = ScriptedProvider([[TextDelta("fallback"), Done()]])
+    agent = make_agent(
+        primary,
+        fallback_providers=(("openrouter:backup", fallback),),
+        provider_retry_attempts=1,
+    )
+
+    events = await collect_events(agent, "Hi")
+
+    assert events == [AgentTextDelta("recovered"), AgentDone(Usage(input_tokens=5))]
+    assert len(primary.received_messages) == 2
+    assert fallback.received_messages == []
+
+
 async def test_agent_does_not_fallback_after_partial_output() -> None:
     primary = ScriptedProvider([[TextDelta("partial"), ProviderError("down")]])
     fallback = ScriptedProvider([[TextDelta("ok"), Done()]])
@@ -409,7 +553,10 @@ async def test_agent_does_not_fallback_after_partial_output() -> None:
 
     events = await collect_events(agent, "Hi")
 
-    assert events == [AgentTextDelta("partial"), AgentError("down")]
+    assert events == [
+        AgentTextDelta("partial"),
+        AgentError("down", provider_label="primary"),
+    ]
     assert fallback.received_messages == []
 
 
@@ -442,3 +589,85 @@ async def test_agent_retries_empty_transient_provider_failure_after_tool_result(
     ]
     assert len(provider.received_messages) == 3
     assert provider.responses == []
+
+
+async def test_agent_prompt_describes_only_registered_tools() -> None:
+    provider = ScriptedProvider([[TextDelta("ok"), Done()]])
+    registry = ToolRegistry([EchoTool(ToolContext(working_directory=Path.cwd()))])
+    agent = make_agent(provider, registry)
+
+    await collect_events(agent, "Hi")
+
+    assert provider.received_system is not None
+    assert "Available tools for this run: echo." in provider.received_system
+    assert "skills add" not in provider.received_system.lower()
+    assert [schema["name"] for schema in provider.received_tools[0]] == ["echo"]
+
+
+async def test_agent_compacts_after_provider_reports_large_context_usage() -> None:
+    provider = ScriptedProvider(
+        [
+            [
+                ToolCallReady("toolu_1", "echo", {"value": "ids"}),
+                Done(Usage(input_tokens=90, output_tokens=2)),
+            ],
+            [TextDelta("final"), Done()],
+        ]
+    )
+    registry = ToolRegistry([EchoTool(ToolContext(working_directory=Path.cwd()))])
+    agent = make_agent(
+        provider,
+        registry,
+        auto_compact_threshold=0.8,
+        context_window_tokens=100,
+        compact_keep_last=2,
+    )
+
+    events = await collect_events(agent, "Fetch")
+
+    assert isinstance(events[-1], AgentDone)
+    assert agent.session.summary is not None
+    assert "user: Fetch" in agent.session.summary
+    assert len(provider.received_messages[1]) == 2
+
+
+async def test_agent_stops_before_provider_call_when_deadline_expired() -> None:
+    provider = ScriptedProvider([[TextDelta("too late"), Done()]])
+    agent = make_agent(provider, deadline_monotonic=time.monotonic() - 1)
+
+    events = await collect_events(agent, "Hi")
+
+    assert events == [AgentError("Run deadline reached before a final response was produced.")]
+    assert provider.received_messages == []
+
+
+async def test_agent_stops_blocked_provider_stream_before_outer_deadline() -> None:
+    agent = make_agent(
+        BlockingProvider(),
+        deadline_monotonic=time.monotonic() + 0.1,
+        deadline_reserve_seconds=0.02,
+    )
+
+    events = await asyncio.wait_for(collect_events(agent, "Hi"), timeout=0.5)
+
+    assert events == [AgentError("Run deadline reached before a final response was produced.")]
+
+
+async def test_agent_retry_backoff_does_not_outlive_deadline() -> None:
+    provider = ScriptedProvider(
+        [
+            [ProviderError("temporary network failure")],
+            [TextDelta("too late"), Done()],
+        ]
+    )
+    agent = make_agent(
+        provider,
+        provider_retry_attempts=1,
+        provider_retry_initial_delay=60,
+        deadline_monotonic=time.monotonic() + 0.1,
+    )
+
+    events = await asyncio.wait_for(collect_events(agent, "Hi"), timeout=0.5)
+
+    assert events == [AgentError("Run deadline reached before a final response was produced.")]
+    assert len(provider.received_messages) == 1
