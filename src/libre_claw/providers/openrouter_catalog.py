@@ -85,6 +85,11 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Primary high-capacity coding preset.",
     ),
     OpenRouterModelPreset(
+        "qwen/qwen3.7-flash",
+        "Qwen3.7 Flash",
+        "Million-token multimodal reasoning preset for coding, search, and computer interaction.",
+    ),
+    OpenRouterModelPreset(
         "qwen/qwen3.7-plus",
         "Qwen3.7 Plus",
         "Qwen plus-tier coding and agent preset through OpenRouter.",

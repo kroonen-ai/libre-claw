@@ -69,6 +69,8 @@ Initial shippable Libre Claw release.
   vision input, and private reasoning continuity across tool calls.
 - Added OpenRouter usage accounting and recommended model presets for TUI,
   Telegram, and usage reports.
+- Added the `qwen/qwen3.7-flash` OpenRouter preset for million-token
+  multimodal coding and agent workflows.
 - Added the `moonshotai/kimi-k3` OpenRouter preset to the shared TUI,
   Telegram, usage, documentation, and website model catalogues.
 - Cumulative session token tracking in the status bar, TUI `/cost`, and

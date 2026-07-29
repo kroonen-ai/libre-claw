@@ -128,6 +128,7 @@ First shippable Libre Claw release, built by Kroonen AI.
   catalog for TUI, Telegram, and usage reports, including
   `deepseek/deepseek-v4-flash`, `sakana/fugu-ultra`,
   `poolside/laguna-s-2.1`, `poolside/laguna-s-2.1:free`, `qwen/qwen3.7-max`,
+  `qwen/qwen3.7-flash`,
   `moonshotai/kimi-k3`, `moonshotai/kimi-k2.6`,
   `moonshotai/kimi-k2.7-code`, `z-ai/glm-5.2`,
   `minimax/minimax-m3`, `google/gemini-3.6-flash`,

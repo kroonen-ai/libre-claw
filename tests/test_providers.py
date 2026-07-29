@@ -145,6 +145,7 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "poolside/laguna-s-2.1",
         "poolside/laguna-s-2.1:free",
         "qwen/qwen3.7-max",
+        "qwen/qwen3.7-flash",
         "qwen/qwen3.7-plus",
         "deepseek/deepseek-v4-pro",
         "moonshotai/kimi-k3",
