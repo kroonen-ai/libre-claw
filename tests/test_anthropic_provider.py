@@ -6,9 +6,24 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from libre_claw.core.session import ChatMessage, UserAttachment, image_block, text_block
+from libre_claw.core.session import (
+    ChatMessage,
+    UserAttachment,
+    image_block,
+    provider_reasoning_block,
+    text_block,
+    tool_use_block,
+)
 from libre_claw.providers.anthropic import AnthropicProvider
-from libre_claw.providers.base import Done, TextDelta, ToolCallDelta, ToolCallReady, ToolCallStart, Usage
+from libre_claw.providers.base import (
+    Done,
+    ReasoningDelta,
+    TextDelta,
+    ToolCallDelta,
+    ToolCallReady,
+    ToolCallStart,
+    Usage,
+)
 
 
 class FakeMessages:
@@ -100,7 +115,7 @@ async def test_anthropic_provider_normalizes_text_streaming_events() -> None:
     assert manager.closed is True
 
 
-async def test_anthropic_provider_omits_temperature_for_opus_4_8() -> None:
+async def test_anthropic_provider_omits_temperature_for_opus_5() -> None:
     final_message = SimpleNamespace(
         usage=SimpleNamespace(input_tokens=1, output_tokens=1),
         stop_reason="end_turn",
@@ -114,7 +129,7 @@ async def test_anthropic_provider_omits_temperature_for_opus_4_8() -> None:
     )
     manager = FakeStreamManager(stream)
     client = FakeClient(manager)
-    provider = AnthropicProvider(api_key="test-key", model="claude-opus-4-8", max_tokens=99, client=client)
+    provider = AnthropicProvider(api_key="test-key", model="claude-opus-5", max_tokens=99, client=client)
 
     events = [
         event
@@ -128,7 +143,7 @@ async def test_anthropic_provider_omits_temperature_for_opus_4_8() -> None:
         Done(usage=Usage(input_tokens=1, output_tokens=1), stop_reason="end_turn"),
     ]
     assert client.messages.last_request is not None
-    assert client.messages.last_request["model"] == "claude-opus-4-8"
+    assert client.messages.last_request["model"] == "claude-opus-5"
     assert "temperature" not in client.messages.last_request
 
 
@@ -280,4 +295,71 @@ async def test_anthropic_provider_normalizes_streamed_tool_call() -> None:
         ToolCallDelta(tool_call_id="toolu_1", name="read_file", partial_json='"README.md"}'),
         ToolCallReady(tool_call_id="toolu_1", name="read_file", input={"path": "README.md"}),
         Done(usage=Usage(input_tokens=8, output_tokens=5), stop_reason="tool_use"),
+    ]
+
+
+async def test_anthropic_provider_round_trips_thinking_blocks_without_modification() -> None:
+    final_message = SimpleNamespace(
+        usage=SimpleNamespace(input_tokens=8, output_tokens=5),
+        stop_reason="tool_use",
+        content=[
+            SimpleNamespace(type="thinking", thinking="", signature="signed-thinking"),
+            SimpleNamespace(type="redacted_thinking", data="encrypted-thinking"),
+            SimpleNamespace(type="tool_use", id="toolu_1", name="read_file", input={"path": "README.md"}),
+        ],
+    )
+    stream = FakeStream(
+        events=[
+            SimpleNamespace(
+                type="content_block_start",
+                index=2,
+                content_block=SimpleNamespace(type="tool_use", id="toolu_1", name="read_file", input={}),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=2,
+                delta=SimpleNamespace(type="input_json_delta", partial_json='{"path":"README.md"}'),
+            ),
+            SimpleNamespace(type="content_block_stop", index=2),
+        ],
+        final_message=final_message,
+    )
+    provider = AnthropicProvider(
+        api_key="test-key",
+        model="claude-opus-5",
+        max_tokens=65_536,
+        client=FakeClient(FakeStreamManager(stream)),
+    )
+
+    events = [
+        event
+        async for event in provider.complete(
+            messages=[ChatMessage(role="user", content=[text_block("Read README")])],
+            tools=[{"name": "read_file", "description": "Read", "input_schema": {"type": "object"}}],
+        )
+    ]
+
+    reasoning = next(event for event in events if isinstance(event, ReasoningDelta))
+    replayed = provider._format_messages(
+        [
+            ChatMessage(
+                role="assistant",
+                content=[
+                    provider_reasoning_block(reasoning.text, "anthropic"),
+                    tool_use_block("toolu_1", "read_file", {"path": "README.md"}),
+                ],
+            )
+        ]
+    )
+
+    assert reasoning.provider == "anthropic"
+    assert replayed == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "signed-thinking"},
+                {"type": "redacted_thinking", "data": "encrypted-thinking"},
+                {"type": "tool_use", "id": "toolu_1", "name": "read_file", "input": {"path": "README.md"}},
+            ],
+        }
     ]

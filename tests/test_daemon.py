@@ -370,7 +370,7 @@ async def test_daemon_updates_runtime_model(monkeypatch, tmp_path: Path) -> None
     after = _response_payload(response)
 
     assert before["provider"] == "anthropic"
-    assert before["model"] == "claude-opus-4-8"
+    assert before["model"] == "claude-opus-5"
     assert response.status == 200
     assert after["provider"] == "openrouter"
     assert after["model"] == "deepseek/deepseek-v4-pro"
@@ -734,7 +734,7 @@ async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> Non
 
     assert health["ok"] is True
     assert model_before["provider"] == "anthropic"
-    assert model_before["model"] == "claude-opus-4-8"
+    assert model_before["model"] == "claude-opus-5"
     assert model_after["provider"] == "openrouter"
     assert model_after["model"] == "deepseek/deepseek-v4-pro"
     assert model_after["context_window_tokens"] == 524_288

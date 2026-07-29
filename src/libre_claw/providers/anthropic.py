@@ -16,6 +16,7 @@ from libre_claw.providers.base import (
     Done,
     LLMProvider,
     ProviderError,
+    ReasoningDelta,
     StreamEvent,
     TextDelta,
     ToolCallDelta,
@@ -150,6 +151,9 @@ class AnthropicProvider(LLMProvider):
                 if final_message is not None:
                     usage = _usage_from(getattr(final_message, "usage", None), usage)
                     stop_reason = getattr(final_message, "stop_reason", stop_reason)
+                    reasoning = _anthropic_reasoning_delta(final_message)
+                    if reasoning is not None:
+                        yield reasoning
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -160,17 +164,20 @@ class AnthropicProvider(LLMProvider):
         yield Done(usage=usage, stop_reason=stop_reason)
 
     def _format_messages(self, messages: Sequence[ChatMessage]) -> list[dict[str, Any]]:
-        return [
-            {
-                "role": message.role,
-                "content": [
-                    _format_anthropic_block(block)
-                    for block in message.content
-                    if block.get("type") != "provider_reasoning"
-                ],
-            }
-            for message in messages
-        ]
+        formatted: list[dict[str, Any]] = []
+        for message in messages:
+            preserved_content = (
+                _preserved_anthropic_content(message.content)
+                if message.role == "assistant"
+                else None
+            )
+            content = preserved_content or [
+                _format_anthropic_block(block)
+                for block in message.content
+                if block.get("type") != "provider_reasoning"
+            ]
+            formatted.append({"role": message.role, "content": content})
+        return formatted
 
     def _handle_content_block_start(
         self,
@@ -271,10 +278,11 @@ def _token_value(value: Any, fallback: int) -> int:
 def _supports_temperature(model: str) -> bool:
     # Recent Claude reasoning models reject non-default sampling parameters.
     return not (
-        model.startswith("claude-opus-4-7")
-        or model.startswith("claude-opus-4-8")
-        or model.startswith("claude-sonnet-4-6")
-        or model.startswith("claude-sonnet-5")
+        model.lower().startswith("claude-opus-4-7")
+        or model.lower().startswith("claude-opus-4-8")
+        or model.lower().startswith("claude-opus-5")
+        or model.lower().startswith("claude-sonnet-4-6")
+        or model.lower().startswith("claude-sonnet-5")
     )
 
 
@@ -296,3 +304,94 @@ def _format_anthropic_block(block: ContentBlock) -> dict[str, Any]:
             "data": str(block.get("data", "")),
         },
     }
+
+
+def _anthropic_reasoning_delta(final_message: Any) -> ReasoningDelta | None:
+    content = getattr(final_message, "content", None)
+    if not isinstance(content, Sequence) or isinstance(content, str | bytes):
+        return None
+
+    serialized_content: list[dict[str, Any]] = []
+    has_thinking = False
+    for block in content:
+        payload = _anthropic_response_block(block)
+        if payload is None:
+            continue
+        serialized_content.append(payload)
+        has_thinking = has_thinking or payload.get("type") in {"thinking", "redacted_thinking"}
+
+    if not has_thinking:
+        return None
+
+    envelope = {
+        "type": "anthropic_message_content",
+        "version": 1,
+        "content": serialized_content,
+    }
+    return ReasoningDelta(
+        text=json.dumps(envelope, ensure_ascii=False, separators=(",", ":")),
+        provider="anthropic",
+    )
+
+
+def _preserved_anthropic_content(blocks: Sequence[ContentBlock]) -> list[dict[str, Any]] | None:
+    for block in blocks:
+        if block.get("type") != "provider_reasoning" or block.get("provider") != "anthropic":
+            continue
+        try:
+            envelope = json.loads(str(block.get("text", "")))
+        except json.JSONDecodeError:
+            continue
+        if (
+            not isinstance(envelope, dict)
+            or envelope.get("type") != "anthropic_message_content"
+            or envelope.get("version") != 1
+        ):
+            continue
+        content = envelope.get("content")
+        if not isinstance(content, list):
+            continue
+        preserved = [dict(item) for item in content if isinstance(item, dict)]
+        if preserved and any(
+            item.get("type") in {"thinking", "redacted_thinking"}
+            for item in preserved
+        ):
+            return preserved
+    return None
+
+
+def _anthropic_response_block(block: Any) -> dict[str, Any] | None:
+    if isinstance(block, dict):
+        payload = dict(block)
+    else:
+        model_dump = getattr(block, "model_dump", None)
+        if callable(model_dump):
+            payload = model_dump(mode="json", exclude_none=True)
+        else:
+            payload = dict(vars(block)) if hasattr(block, "__dict__") else {}
+    if not isinstance(payload, dict):
+        return None
+
+    block_type = payload.get("type")
+    if block_type == "thinking":
+        return {
+            "type": "thinking",
+            "thinking": str(payload.get("thinking", "")),
+            "signature": str(payload.get("signature", "")),
+        }
+    if block_type == "redacted_thinking":
+        return {
+            "type": "redacted_thinking",
+            "data": str(payload.get("data", "")),
+        }
+    if block_type == "text":
+        return {"type": "text", "text": str(payload.get("text", ""))}
+    if block_type == "tool_use":
+        tool_input = payload.get("input")
+        return {
+            "type": "tool_use",
+            "id": str(payload.get("id", "")),
+            "name": str(payload.get("name", "")),
+            "input": dict(tool_input) if isinstance(tool_input, dict) else {},
+        }
+    return payload or None

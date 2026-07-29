@@ -274,9 +274,11 @@ def _format_assistant_message(
     blocks: Sequence[ContentBlock],
     *,
     reasoning_provider: str | None = None,
+    reasoning_details_provider: str | None = None,
 ) -> dict[str, Any]:
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
+    reasoning_details: list[dict[str, Any]] = []
     tool_calls: list[dict[str, Any]] = []
     for block in blocks:
         block_type = block.get("type")
@@ -284,6 +286,8 @@ def _format_assistant_message(
             text_parts.append(str(block.get("text", "")))
         if block_type == "provider_reasoning" and block.get("provider") == reasoning_provider:
             reasoning_parts.append(str(block.get("text", "")))
+        if block_type == "provider_reasoning" and block.get("provider") == reasoning_details_provider:
+            reasoning_details.extend(_decode_reasoning_details(str(block.get("text", ""))))
         if block_type == "tool_use":
             tool_calls.append(
                 {
@@ -299,9 +303,23 @@ def _format_assistant_message(
     message: dict[str, Any] = {"role": "assistant", "content": "\n".join(part for part in text_parts if part) or None}
     if reasoning_parts:
         message["reasoning_content"] = "".join(reasoning_parts)
+    if reasoning_details:
+        message["reasoning_details"] = reasoning_details
     if tool_calls:
         message["tool_calls"] = tool_calls
     return message
+
+
+def _decode_reasoning_details(value: str) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    for line in value.splitlines():
+        try:
+            detail = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(detail, dict):
+            details.append(detail)
+    return details
 
 
 def _format_user_or_tool_messages(blocks: Sequence[ContentBlock]) -> list[dict[str, Any]]:

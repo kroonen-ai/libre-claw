@@ -1558,7 +1558,7 @@ async def test_telegram_daemon_bridge_preserves_chat_session_between_messages(mo
     assert "- Provider:" in status
     assert "- Model:" in status
     assert "**Context**" in status
-    assert "- Window: 200k tokens" in status
+    assert "- Window: 1M tokens" in status
     assert "- Fill: `[" in status
     assert "10 total" in status
     assert "Last turn: 5 tokens (3 input, 2 output)" in status

@@ -75,6 +75,20 @@ This uses `KIMI_API_KEY` through the Kimi Code OpenAI-compatible API. See
 [MOONSHOT_KIMI.md](MOONSHOT_KIMI.md) for model, reasoning, tool, and vision
 details.
 
+For direct Claude Opus 5 access:
+
+```text
+/setup provider anthropic
+/setup key anthropic
+/model anthropic:claude-opus-5 --global
+```
+
+Claude Opus 5 is the default Anthropic route. Libre Claw configures its
+one-million-token context window, uses a 65,536-token output cap by default,
+and retains signed thinking blocks privately across tool calls. The equivalent
+OpenRouter routes are `anthropic/claude-opus-5` and
+`anthropic/claude-opus-5-fast`.
+
 Codex/ChatGPT auth is also available:
 
 ```text

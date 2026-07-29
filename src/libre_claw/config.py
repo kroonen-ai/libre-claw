@@ -539,7 +539,7 @@ def _load_default_config() -> ConfigTable:
     return {
         "general": {
             "default_provider": "anthropic",
-            "default_model": "claude-opus-4-8",
+            "default_model": "claude-opus-5",
             "working_directory": ".",
             "theme": "lobster",
             "log_level": "info",
@@ -547,7 +547,7 @@ def _load_default_config() -> ConfigTable:
         "agent": {
             "max_tool_calls_per_turn": 50,
             "auto_compact_threshold": 0.8,
-            "context_window_tokens": 200000,
+            "context_window_tokens": 1_000_000,
             "compact_keep_last": 8,
             "provider_retry_attempts": 2,
             "provider_retry_initial_delay": 1.0,
@@ -571,8 +571,8 @@ def _load_default_config() -> ConfigTable:
         "providers": {
             "anthropic": {
                 "api_key_env": "ANTHROPIC_API_KEY",
-                "default_model": "claude-opus-4-8",
-                "max_tokens": 16384,
+                "default_model": "claude-opus-5",
+                "max_tokens": 65_536,
             },
             "openai": {
                 "api_key_env": "OPENAI_API_KEY",
@@ -660,7 +660,7 @@ def _load_default_config() -> ConfigTable:
             "max_message_length": 4000,
             "stream_update_interval": 1.5,
             "default_provider": "anthropic",
-            "default_model": "claude-opus-4-8",
+            "default_model": "claude-opus-5",
         },
         "goal": {
             "max_turns": 20,

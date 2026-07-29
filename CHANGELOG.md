@@ -58,6 +58,11 @@ Initial shippable Libre Claw release.
   management commands, and relevant skill injection across TUI, Telegram, and
   daemon agent runs.
 - Anthropic, OpenAI, OpenRouter, Moonshot AI, Ollama, and Codex providers.
+  Claude Opus 5 is now the default direct Anthropic model and is available
+  through the `anthropic/claude-opus-5` and
+  `anthropic/claude-opus-5-fast` OpenRouter presets. Both routes preserve
+  provider-private thinking across tool calls, use the documented request
+  token field, and omit sampling parameters rejected by current Claude models.
   Direct Moonshot Platform support includes current `kimi-k3`,
   `kimi-k2.7-code`, `kimi-k2.7-code-highspeed`, and `kimi-k2.6` presets,
   Kimi-specific token/thinking parameters, static published context limits,

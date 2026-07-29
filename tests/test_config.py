@@ -28,7 +28,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     config = load_config()
 
     assert config.general.default_provider == "anthropic"
-    assert config.general.default_model == "claude-opus-4-8"
+    assert config.general.default_model == "claude-opus-5"
     assert config.general.working_directory == tmp_path.resolve()
     assert config.tui.show_status_bar is True
     assert config.tui.show_file_tree is False
@@ -38,7 +38,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.permissions.default_level == "ask"
     assert config.auth.keyring_service == "libre-claw"
     assert config.auth.token_ttl_seconds == 3600
-    assert config.agent.context_window_tokens == 200000
+    assert config.agent.context_window_tokens == 1_000_000
     assert config.agent.compact_keep_last == 8
     assert config.agent.provider_retry_attempts == 2
     assert config.agent.provider_retry_initial_delay == 1.0
@@ -49,6 +49,8 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.providers["moonshot"]["base_url"] == "https://api.kimi.com/coding/v1"
     assert config.providers["moonshot"]["default_model"] == "k3"
     assert config.providers["moonshot"]["reasoning_effort"] == "high"
+    assert config.providers["anthropic"]["default_model"] == "claude-opus-5"
+    assert config.providers["anthropic"]["max_tokens"] == 65_536
     assert config.fallback.recheck_after_attempts == 3
     assert config.goal.max_turns == 20
     assert config.goal.judge_provider == "current"

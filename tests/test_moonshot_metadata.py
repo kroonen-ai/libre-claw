@@ -46,7 +46,7 @@ def test_moonshot_metadata_uses_provider_default_after_provider_only_switch(
             [
                 "[general]",
                 'default_provider = "moonshot"',
-                'default_model = "claude-opus-4-8"',
+                'default_model = "claude-opus-5"',
             ]
         ),
         encoding="utf-8",
@@ -81,4 +81,4 @@ def test_moonshot_metadata_can_be_disabled(monkeypatch, tmp_path: Path) -> None:
     updated = apply_moonshot_model_limits(config)
 
     assert updated is config
-    assert updated.agent.context_window_tokens == 200_000
+    assert updated.agent.context_window_tokens == 1_000_000

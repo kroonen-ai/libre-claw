@@ -194,6 +194,8 @@ Key lookup order:
 /model openrouter:minimax/minimax-m3 --global
 /model openrouter:google/gemini-3.6-flash --global
 /model openrouter:google/gemini-3.5-flash-lite --global
+/model openrouter:anthropic/claude-opus-5 --global
+/model openrouter:anthropic/claude-opus-5-fast --global
 /model openrouter:anthropic/claude-sonnet-5 --global
 /model openrouter:nvidia/nemotron-3-ultra-550b-a55b:free --global
 /model moonshot:k3 --global
@@ -202,11 +204,21 @@ Key lookup order:
 /model ollama:glm-5.2:cloud --global
 /model ollama:minimax-m3:cloud --global
 /model ollama:kimi-k2.6:cloud --global
+/model anthropic:claude-opus-5 --global
 /model anthropic:claude-sonnet-5 --global
 /model anthropic:claude-opus-4-8 --global
 /model openai:gpt-5.5 --global
 /model codex:gpt-5.6-sol --global
 ```
+
+Claude Opus 5 is the default direct Anthropic model. Libre Claw uses its
+documented one-million-token context window with a conservative 65,536-token
+output cap (the model supports up to 128,000), leaves adaptive thinking at the
+provider default, omits unsupported sampling parameters, and privately
+round-trips signed thinking blocks across tool calls. The OpenRouter routes
+preserve the corresponding ordered `reasoning_details` blocks. See the
+[Anthropic model overview](https://platform.claude.com/docs/en/about-claude/models/overview)
+and [OpenRouter reasoning guide](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
 
 Fallback slots let Libre Claw keep working if the primary provider is rate-limited
 or down before it starts streaming. Configure up to three ordered backups:

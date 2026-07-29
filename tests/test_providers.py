@@ -119,6 +119,7 @@ def test_codex_oauth_presets_match_official_codex_model_guide() -> None:
 def test_anthropic_presets_include_current_api_model_names() -> None:
     preset_names = {preset.model for preset in ANTHROPIC_MODEL_PRESETS}
 
+    assert "claude-opus-5" in preset_names
     assert "claude-sonnet-5" in preset_names
     assert "claude-opus-4-8" in preset_names
     assert "claude-sonnet-4-6" in preset_names
@@ -154,6 +155,8 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "z-ai/glm-5.2",
         "xiaomi/mimo-v2.5-pro",
         "qwen/qwen3.6-plus",
+        "anthropic/claude-opus-5",
+        "anthropic/claude-opus-5-fast",
         "anthropic/claude-opus-4.8",
         "anthropic/claude-sonnet-4.6",
         "anthropic/claude-sonnet-5",
@@ -185,7 +188,7 @@ def test_moonshot_presets_match_official_kimi_code_model_ids() -> None:
 
 
 def test_provider_factory_fallback_models_match_public_defaults() -> None:
-    assert _fallback_model("anthropic") == "claude-opus-4-8"
+    assert _fallback_model("anthropic") == "claude-opus-5"
     assert _fallback_model("openrouter") == "openrouter/auto"
     assert _fallback_model("moonshot") == "k3"
     assert _fallback_model("codex") == "gpt-5.5"
