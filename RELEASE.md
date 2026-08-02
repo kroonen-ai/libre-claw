@@ -126,7 +126,8 @@ First shippable Libre Claw release, built by Kroonen AI.
   `gpt-5.4`, and `gpt-5.4-mini`; deprecated ChatGPT sign-in models are omitted.
 - OpenRouter support with usage accounting and a shared recommended model preset
   catalog for TUI, Telegram, and usage reports, including
-  `deepseek/deepseek-v4-flash`, `sakana/fugu-ultra`,
+  `deepseek/deepseek-v4-flash`, `deepseek/deepseek-v4-flash-0731`,
+  `~deepseek/deepseek-v4-flash-latest`, `sakana/fugu-ultra`,
   `poolside/laguna-s-2.1`, `poolside/laguna-s-2.1:free`, `qwen/qwen3.7-max`,
   `qwen/qwen3.7-flash`,
   `moonshotai/kimi-k3`, `moonshotai/kimi-k2.6`,

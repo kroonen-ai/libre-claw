@@ -70,6 +70,8 @@ def test_openrouter_attribution_and_presets_text_are_actionable() -> None:
     assert "Docs: https://libreclaw.sh/docs/" in attribution
     assert "OpenRouter app profile" in attribution
     assert "/model openrouter:deepseek/deepseek-v4-flash --global" in presets
+    assert "/model openrouter:deepseek/deepseek-v4-flash-0731 --global" in presets
+    assert "/model openrouter:~deepseek/deepseek-v4-flash-latest --global" in presets
     assert "/model openrouter:poolside/laguna-s-2.1 --global" in presets
     assert "/model openrouter:poolside/laguna-s-2.1:free --global" in presets
     assert "/model openrouter:qwen/qwen3.7-max --global" in presets

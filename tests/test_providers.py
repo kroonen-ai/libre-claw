@@ -132,6 +132,8 @@ def test_openrouter_presets_include_recommended_models() -> None:
     preset_names = {preset.model for preset in OPENROUTER_MODEL_PRESETS}
     expected_models = {
         "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-flash-0731",
+        "~deepseek/deepseek-v4-flash-latest",
         "tencent/hy3",
         "tencent/hy3:free",
         "x-ai/grok-4.5",

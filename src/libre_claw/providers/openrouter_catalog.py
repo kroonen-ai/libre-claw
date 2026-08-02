@@ -20,6 +20,16 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Fast DeepSeek V4 coding and agent preset.",
     ),
     OpenRouterModelPreset(
+        "deepseek/deepseek-v4-flash-0731",
+        "DeepSeek V4 Flash 0731",
+        "Pinned million-token DeepSeek V4 Flash revision for coding, reasoning, and agent workflows.",
+    ),
+    OpenRouterModelPreset(
+        "~deepseek/deepseek-v4-flash-latest",
+        "DeepSeek V4 Flash Latest",
+        "OpenRouter shortcut that resolves to the latest DeepSeek V4 Flash family release.",
+    ),
+    OpenRouterModelPreset(
         "tencent/hy3",
         "Tencent Hunyuan 3",
         "Tencent Hunyuan 3 general agent and coding preset through OpenRouter.",

@@ -69,6 +69,8 @@ Initial shippable Libre Claw release.
   vision input, and private reasoning continuity across tool calls.
 - Added OpenRouter usage accounting and recommended model presets for TUI,
   Telegram, and usage reports.
+- Added pinned `deepseek/deepseek-v4-flash-0731` and latest-family
+  `~deepseek/deepseek-v4-flash-latest` OpenRouter presets.
 - Added the `qwen/qwen3.7-flash` OpenRouter preset for million-token
   multimodal coding and agent workflows.
 - Added the `moonshotai/kimi-k3` OpenRouter preset to the shared TUI,

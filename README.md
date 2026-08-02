@@ -189,6 +189,8 @@ Key lookup order:
 /model openrouter:poolside/laguna-s-2.1 --global
 /model openrouter:poolside/laguna-s-2.1:free --global
 /model openrouter:deepseek/deepseek-v4-flash --global
+/model openrouter:deepseek/deepseek-v4-flash-0731 --global
+/model openrouter:~deepseek/deepseek-v4-flash-latest --global
 /model openrouter:moonshotai/kimi-k3 --global
 /model openrouter:moonshotai/kimi-k2.7-code --global
 /model openrouter:z-ai/glm-5.2 --global
