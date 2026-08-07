@@ -402,7 +402,8 @@ class TelegramBridge:
         try:
             payload = await self.daemon_client.usage(provider=provider)
         except Exception as exc:
-            return f"Could not load usage from daemon: {exc}"
+            detail = str(exc) or type(exc).__name__
+            return f"Could not load usage from daemon: {detail}"
         text = str(payload.get("text", "")).strip()
         if text:
             return text

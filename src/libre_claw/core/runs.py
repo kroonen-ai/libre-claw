@@ -179,15 +179,29 @@ class RunStore:
     def _list_runs_sync(self, limit: int) -> list[RunRecord]:
         if not self.root.exists():
             return []
+        limit = max(1, limit)
+        # meta.json is rewritten on every state update, so its mtime tracks
+        # updated_at. Stat every run dir (cheap) but only parse meta.json for
+        # the freshest candidates — parsing thousands of metas made listing
+        # take over a minute on large stores.
+        candidates: list[tuple[float, Path]] = []
+        for path in self.root.iterdir():
+            if not path.is_dir():
+                continue
+            try:
+                mtime = (path / "meta.json").stat().st_mtime
+            except OSError:
+                continue
+            candidates.append((mtime, path))
+        candidates.sort(key=lambda item: item[0], reverse=True)
         records = [
             record
-            for path in self.root.iterdir()
-            if path.is_dir()
+            for _, path in candidates[: limit + 25]
             for record in [_load_record(path)]
             if record is not None
         ]
         records.sort(key=lambda record: record.updated_at, reverse=True)
-        return records[: max(1, limit)]
+        return records[:limit]
 
     def _load_run_sync(self, run_id: str) -> RunRecord | None:
         if not _safe_run_id(run_id):
