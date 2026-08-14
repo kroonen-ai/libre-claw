@@ -17,6 +17,18 @@ class LlamaCppDiscoveryError(RuntimeError):
     """Raised when a llama.cpp / llama-swap endpoint cannot list its models."""
 
 
+def normalize_llamacpp_base_url(base_url: str) -> str:
+    """Normalize a llama.cpp endpoint URL.
+
+    Users paste both host roots and OpenAI paths ("http://stargate.local:8080/v1");
+    the provider always appends its own /v1 path, so a trailing /v1 is stripped.
+    """
+    cleaned = base_url.strip().rstrip("/")
+    if cleaned.lower().endswith("/v1"):
+        cleaned = cleaned[: -len("/v1")].rstrip("/")
+    return cleaned
+
+
 class LlamaCppProvider(LocalProvider):
     """llama.cpp provider for llama-server and llama-swap endpoints.
 
@@ -52,7 +64,7 @@ async def discover_llamacpp_models(
     Queries the OpenAI-compatible `/v1/models` route; llama-swap returns every
     model in its config, a bare llama-server returns the loaded one.
     """
-    url = f"{base_url.rstrip('/')}/v1/models"
+    url = f"{normalize_llamacpp_base_url(base_url)}/v1/models"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         if client is None:

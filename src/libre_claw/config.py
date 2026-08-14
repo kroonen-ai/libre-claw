@@ -390,6 +390,36 @@ def set_global_default_model(
     return path
 
 
+def set_global_provider_values(
+    provider: str,
+    values: Mapping[str, Any],
+    config_path: Path | str | None = None,
+) -> Path:
+    """Persist provider table values in the user-level config file."""
+    clean_provider = provider.strip().lower()
+    if not clean_provider:
+        raise ConfigError("Provider cannot be empty.")
+    clean_values = {key: value for key, value in values.items() if value is not None}
+    if not clean_values:
+        raise ConfigError("No provider values to persist.")
+
+    path = Path(config_path).expanduser() if config_path is not None else user_config_path()
+    updates = {f"providers.{clean_provider}": clean_values}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        updated = _update_toml_sections(existing, updates)
+        tomllib.loads(updated)
+        path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        msg = f"Could not write config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    except tomllib.TOMLDecodeError as exc:
+        msg = f"Could not update config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    return path
+
+
 def set_global_working_directory(
     working_directory: Path | str,
     config_path: Path | str | None = None,

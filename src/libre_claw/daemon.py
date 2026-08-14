@@ -26,6 +26,7 @@ from libre_claw.config import (
     global_config_path,
     set_global_fallback_config,
     set_global_default_model,
+    set_global_provider_values,
     set_global_theme,
 )
 from libre_claw.auth.api_keys import ApiKeyStore
@@ -75,6 +76,7 @@ from libre_claw.providers.llamacpp import (
     DEFAULT_LLAMACPP_BASE_URL,
     LlamaCppDiscoveryError,
     discover_llamacpp_models,
+    normalize_llamacpp_base_url,
 )
 from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
@@ -180,6 +182,8 @@ class DaemonServer:
                 web.get("/config/model", self.current_model),
                 web.patch("/config/model", self.update_model),
                 web.get("/models/llamacpp", self.list_llamacpp_models),
+                web.get("/config/llamacpp", self.current_llamacpp_config),
+                web.patch("/config/llamacpp", self.update_llamacpp_config),
                 web.get("/config/fallback", self.current_fallback),
                 web.patch("/config/fallback", self.update_fallback),
                 web.patch("/config/theme", self.update_theme),
@@ -328,11 +332,21 @@ class DaemonServer:
             }
         )
 
-    async def list_llamacpp_models(self, _request: web.Request) -> web.Response:
-        """List models the configured llama.cpp / llama-swap endpoint can serve."""
+    def _llamacpp_config(self) -> Mapping[str, Any]:
         provider_config = self.config.providers.get("llamacpp")
-        provider_mapping = provider_config if isinstance(provider_config, Mapping) else {}
-        base_url = str(provider_mapping.get("base_url") or DEFAULT_LLAMACPP_BASE_URL)
+        return provider_config if isinstance(provider_config, Mapping) else {}
+
+    async def list_llamacpp_models(self, request: web.Request) -> web.Response:
+        """List models a llama.cpp / llama-swap endpoint can serve.
+
+        Uses the configured endpoint by default; `?base_url=` probes another
+        endpoint before it is saved.
+        """
+        requested = str(request.query.get("base_url", "")).strip()
+        configured = str(self._llamacpp_config().get("base_url") or DEFAULT_LLAMACPP_BASE_URL)
+        base_url = normalize_llamacpp_base_url(requested or configured)
+        if not base_url.lower().startswith(("http://", "https://")):
+            return _json_error("Field 'base_url' must be an http(s) URL.")
         try:
             models = await discover_llamacpp_models(base_url)
         except LlamaCppDiscoveryError as exc:
@@ -341,6 +355,52 @@ class DaemonServer:
             {
                 "base_url": base_url,
                 "models": [{"model": item.model, "label": item.label} for item in models],
+            }
+        )
+
+    async def current_llamacpp_config(self, _request: web.Request) -> web.Response:
+        provider_config = self._llamacpp_config()
+        return web.json_response(
+            {
+                "base_url": str(provider_config.get("base_url") or DEFAULT_LLAMACPP_BASE_URL),
+                "default_model": str(provider_config.get("default_model") or ""),
+            }
+        )
+
+    async def update_llamacpp_config(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _json_error("Request body must be JSON.")
+        if not isinstance(payload, Mapping):
+            return _json_error("Request body must be a JSON object.")
+
+        base_url = normalize_llamacpp_base_url(str(payload.get("base_url", "")))
+        if not base_url.lower().startswith(("http://", "https://")):
+            return _json_error("Field 'base_url' must be an http(s) URL.")
+
+        persisted_path: str | None = None
+        if bool(payload.get("persist_global", False)):
+            try:
+                path = set_global_provider_values(
+                    "llamacpp",
+                    {"base_url": base_url},
+                    config_path=global_config_path(self.config),
+                )
+            except ConfigError as exc:
+                return _json_error(str(exc), status=400)
+            persisted_path = str(path)
+
+        providers = dict(self.config.providers)
+        provider_config = dict(self._llamacpp_config())
+        provider_config["base_url"] = base_url
+        providers["llamacpp"] = provider_config
+        self.config = replace(self.config, providers=providers)
+        return web.json_response(
+            {
+                "base_url": base_url,
+                "default_model": str(provider_config.get("default_model") or ""),
+                "persisted_path": persisted_path,
             }
         )
 

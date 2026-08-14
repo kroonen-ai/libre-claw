@@ -1161,6 +1161,105 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
     .status-strip .sep { opacity: .5; }
 
+    /* ------ Markdown rendering ------ */
+    .msg-md { line-height: 1.65; overflow-wrap: anywhere; }
+    .msg-md > :first-child { margin-top: 0; }
+    .msg-md > :last-child { margin-bottom: 0; }
+    .msg-md p { margin: 0 0 10px; }
+    .msg-md h3, .msg-md h4, .msg-md h5, .msg-md h6 { margin: 16px 0 8px; font-size: 15px; font-weight: 650; }
+    .msg-md h3 { font-size: 16px; }
+    .msg-md ul, .msg-md ol { margin: 0 0 10px; padding-inline-start: 22px; }
+    .msg-md li { margin: 2px 0; }
+    .msg-md a { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 3px; }
+    .msg-md a:hover { color: var(--text); }
+    .msg-md code {
+      padding: 1px 6px;
+      border-radius: 6px;
+      background: var(--surface-2);
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .msg-md blockquote {
+      margin: 0 0 10px;
+      padding: 2px 0 2px 12px;
+      border-inline-start: 3px solid var(--line-strong);
+      color: var(--soft);
+    }
+    .msg-md hr { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
+    .table-wrap { overflow-x: auto; margin: 0 0 10px; }
+    .msg-md table, .usage-table { border-collapse: collapse; font-size: 12.5px; min-width: 50%; }
+    .msg-md th, .msg-md td, .usage-table th, .usage-table td {
+      border: 1px solid var(--line);
+      padding: 6px 10px;
+      text-align: start;
+    }
+    .msg-md th, .usage-table th { background: var(--surface-2); font-weight: 600; }
+    .code-block {
+      margin: 0 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--surface);
+    }
+    .code-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 5px 6px 5px 12px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .code-copy {
+      height: 22px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: var(--panel-hover);
+      color: var(--soft);
+      font-size: 11px;
+      transition: background .16s ease;
+    }
+    .code-copy:hover { background: var(--line); color: var(--text); }
+    .code-block pre {
+      margin: 0;
+      padding: 10px 12px;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .streaming-caret { display: inline-block; width: 7px; height: 15px; margin-inline-start: 2px; vertical-align: -2px; background: var(--accent); border-radius: 2px; animation: pulse 1s ease-in-out infinite; }
+    .model-chip {
+      height: 28px;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      transition: background .16s ease, border-color .16s ease;
+    }
+    .model-chip:hover { background: var(--accent-soft); border-color: var(--accent); }
+    .endpoint-row { display: flex; gap: 8px; align-items: center; }
+    .endpoint-row input {
+      flex: 1;
+      min-width: 0;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+      padding: 0 10px;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      color: var(--text);
+      outline: none;
+    }
+    .endpoint-row input:focus { border-color: var(--accent); }
+    .usage-table-wrap { overflow-x: auto; margin-top: 10px; }
+    .usage-sub { margin: 16px 0 4px; font-size: 13px; font-weight: 600; color: var(--soft); }
+
     /* ------ Settings modal (DSH panel) ------ */
     .overlay {
       position: fixed;
@@ -1433,6 +1532,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         <button class="active" data-pane="general" type="button">General</button>
         <button data-pane="models" type="button">Models</button>
         <button data-pane="schedules" type="button">Schedules</button>
+        <button data-pane="usage" type="button">Usage</button>
         <button data-pane="about" type="button">About</button>
       </nav>
       <div class="settings-content">
@@ -1500,6 +1600,20 @@ _DASHBOARD_HTML = r"""<!doctype html>
               <button class="primary" type="submit">Save default</button>
             </div>
           </form>
+          <div class="setting-row" style="margin-top:8px;">
+            <div class="copy">
+              <strong>llama.cpp endpoint</strong>
+              <small>llama-server or llama-swap base URL; a trailing /v1 is fine.</small>
+            </div>
+          </div>
+          <form id="llamacppForm" class="stack">
+            <div class="endpoint-row">
+              <input id="llamacppBaseUrl" placeholder="http://localhost:8080" aria-label="llama.cpp base URL" spellcheck="false">
+              <button id="llamacppDiscover" type="button">Discover</button>
+              <button class="primary" type="submit">Save endpoint</button>
+            </div>
+            <div id="llamacppDiscovered" class="row"></div>
+          </form>
         </div>
         <div class="settings-body" id="paneSchedules" hidden>
           <h3 id="automationFormTitle">Create Schedule</h3>
@@ -1535,6 +1649,19 @@ _DASHBOARD_HTML = r"""<!doctype html>
           </form>
           <div id="automations" class="automation-list"></div>
         </div>
+        <div class="settings-body" id="paneUsage" hidden>
+          <h3>Usage</h3>
+          <p class="hint">Token consumption and cost across recorded runs.</p>
+          <div class="metric-grid">
+            <div class="metric"><span>Total tokens</span><strong id="usagePaneTokens">0</strong><small id="usagePaneTokensExact">0</small></div>
+            <div class="metric"><span>Requests</span><strong id="usagePaneRequests">0</strong><small id="usagePaneRuns">0 runs</small></div>
+            <div class="metric"><span>Cost</span><strong id="usagePaneCost">$0</strong><small>provider-reported</small></div>
+          </div>
+          <p class="usage-sub">By model</p>
+          <div class="usage-table-wrap"><table class="usage-table" id="usageByModel"></table></div>
+          <p class="usage-sub">Recent runs</p>
+          <div class="usage-table-wrap"><table class="usage-table" id="usageRecent"></table></div>
+        </div>
         <div class="settings-body" id="paneAbout" hidden>
           <h3>About</h3>
           <p class="hint">Libre Claw dashboard — local control plane for runs, approvals, schedules, and usage.</p>
@@ -1550,7 +1677,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     </div>
   </div>
   <script>
-    const state = { selectedRunId: "", runs: [], events: [], editingAutomationId: "", view: "chat" };
+    const state = { selectedRunId: "", runs: [], events: [], editingAutomationId: "", view: "chat", streaming: false };
     const $ = (id) => document.getElementById(id);
     const THEME_KEY = "libre-claw-dashboard-theme";
     const RAIL_KEY = "libre-claw-dashboard-rail";
@@ -1829,6 +1956,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function newSession() {
       state.selectedRunId = "";
+      state.streaming = false;
+      window.clearTimeout(streamTimer);
       clearSelectedRun();
       renderRuns();
       $("runMessage").focus();
@@ -1857,8 +1986,52 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("stripMeta").textContent = `${run.run_id} | ${run.provider}:${run.model}`;
       const events = await request(`/runs/${state.selectedRunId}/events?after=0`);
       state.events = events.events || [];
+      scheduleStream(run.state);
       renderEvents();
       renderPermissions(detail.pending_permissions || []);
+    }
+
+    /* Token streaming: while the selected run is live, new events are pulled
+       incrementally (`?after=<id>`) on a tight loop instead of the 3s refresh. */
+    let streamTimer = 0;
+    const STREAM_STATES = new Set(["queued", "running", "blocked"]);
+
+    function lastNumericEventId() {
+      let max = 0;
+      for (const event of state.events) {
+        const id = Number(event.event_id);
+        if (Number.isFinite(id) && id > max) max = id;
+      }
+      return max;
+    }
+
+    function scheduleStream(runState) {
+      window.clearTimeout(streamTimer);
+      state.streaming = STREAM_STATES.has(runState);
+      if (!state.streaming) { renderEvents(); return; }
+      streamTimer = window.setTimeout(() => { void pollRunEvents(); }, 600);
+    }
+
+    async function pollRunEvents() {
+      const runId = state.selectedRunId;
+      if (!runId || !state.streaming) return;
+      try {
+        const payload = await request(`/runs/${runId}/events?after=${lastNumericEventId()}`);
+        if (runId !== state.selectedRunId) return;
+        const fresh = payload.events || [];
+        if (fresh.length) {
+          state.events.push(...fresh);
+          renderEvents();
+          if (fresh.some((event) => event.type === "run_finished" || event.type === "permission_request")) {
+            await refreshRunDetail();
+            await refreshRuns();
+            return;
+          }
+        }
+      } catch (_error) {
+        /* transient poll errors: keep streaming */
+      }
+      streamTimer = window.setTimeout(() => { void pollRunEvents(); }, 600);
     }
 
     function setView(view) {
@@ -1890,6 +2063,191 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (stick) container.scrollTop = container.scrollHeight;
     }
 
+    /* Minimal safe markdown renderer: DOM-built (no innerHTML), http(s) links only. */
+    function mdInline(target, text) {
+      const pattern = /(`[^`]+`)|\[([^\]]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s<>()]+[^\s<>().,!?;:'"])|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(~~[^~]+~~)/g;
+      let last = 0;
+      let match;
+      while ((match = pattern.exec(text))) {
+        if (match.index > last) target.append(text.slice(last, match.index));
+        if (match[1]) {
+          const code = document.createElement("code");
+          code.textContent = match[1].slice(1, -1);
+          target.append(code);
+        } else if (match[2] !== undefined) {
+          if (/^https?:\/\//i.test(match[3])) {
+            const link = document.createElement("a");
+            link.href = match[3];
+            link.target = "_blank";
+            link.rel = "noreferrer noopener";
+            mdInline(link, match[2]);
+            target.append(link);
+          } else {
+            target.append(match[0]);
+          }
+        } else if (match[4]) {
+          const link = document.createElement("a");
+          link.href = match[4];
+          link.target = "_blank";
+          link.rel = "noreferrer noopener";
+          link.textContent = match[4];
+          target.append(link);
+        } else if (match[5]) {
+          const strong = document.createElement("strong");
+          mdInline(strong, match[5].slice(2, -2));
+          target.append(strong);
+        } else if (match[6]) {
+          const em = document.createElement("em");
+          mdInline(em, match[6].slice(1, -1));
+          target.append(em);
+        } else if (match[7]) {
+          const strike = document.createElement("s");
+          strike.textContent = match[7].slice(2, -2);
+          target.append(strike);
+        }
+        last = pattern.lastIndex;
+      }
+      if (last < text.length) target.append(text.slice(last));
+    }
+
+    function codeBlock(code, lang) {
+      const wrap = document.createElement("div");
+      wrap.className = "code-block";
+      const head = document.createElement("div");
+      head.className = "code-head";
+      const label = document.createElement("span");
+      label.textContent = lang || "code";
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "code-copy";
+      copy.textContent = "Copy";
+      copy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(code);
+          copy.textContent = "Copied";
+        } catch (_error) {
+          copy.textContent = "Failed";
+        }
+        window.setTimeout(() => { copy.textContent = "Copy"; }, 1600);
+      });
+      head.append(label, copy);
+      const pre = document.createElement("pre");
+      const codeNode = document.createElement("code");
+      codeNode.textContent = code;
+      pre.append(codeNode);
+      wrap.append(head, pre);
+      return wrap;
+    }
+
+    function renderMarkdown(text) {
+      const root = document.createElement("div");
+      root.className = "msg-md";
+      const lines = String(text || "").split("\n");
+      const para = [];
+      const flushPara = () => {
+        if (!para.length) return;
+        const p = document.createElement("p");
+        mdInline(p, para.join(" "));
+        root.append(p);
+        para.length = 0;
+      };
+      const rowCells = (raw) => raw.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((cell) => cell.trim());
+      let i = 0;
+      while (i < lines.length) {
+        const line = lines[i];
+        const fence = line.match(/^```(\S*)\s*$/);
+        if (fence) {
+          flushPara();
+          const body = [];
+          i += 1;
+          while (i < lines.length && !/^```\s*$/.test(lines[i])) { body.push(lines[i]); i += 1; }
+          i += 1;
+          root.append(codeBlock(body.join("\n"), fence[1] || ""));
+          continue;
+        }
+        if (/^\s*$/.test(line)) { flushPara(); i += 1; continue; }
+        const heading = line.match(/^(#{1,4})\s+(.*)$/);
+        if (heading) {
+          flushPara();
+          const level = Math.min(heading[1].length + 2, 6);
+          const node = document.createElement(`h${level}`);
+          mdInline(node, heading[2]);
+          root.append(node);
+          i += 1;
+          continue;
+        }
+        if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { flushPara(); root.append(document.createElement("hr")); i += 1; continue; }
+        const quote = line.match(/^>\s?(.*)$/);
+        if (quote) {
+          flushPara();
+          const buffer = [quote[1]];
+          i += 1;
+          while (i < lines.length) {
+            const next = lines[i].match(/^>\s?(.*)$/);
+            if (!next) break;
+            buffer.push(next[1]);
+            i += 1;
+          }
+          const blockquote = document.createElement("blockquote");
+          const p = document.createElement("p");
+          mdInline(p, buffer.join(" "));
+          blockquote.append(p);
+          root.append(blockquote);
+          continue;
+        }
+        const list = line.match(/^\s*([-*+]|\d+[.)])\s+(.*)$/);
+        if (list) {
+          flushPara();
+          const node = document.createElement(/^\d/.test(list[1]) ? "ol" : "ul");
+          while (i < lines.length) {
+            const item = lines[i].match(/^\s*([-*+]|\d+[.)])\s+(.*)$/);
+            if (!item) break;
+            const li = document.createElement("li");
+            mdInline(li, item[2]);
+            node.append(li);
+            i += 1;
+          }
+          root.append(node);
+          continue;
+        }
+        if (line.includes("|") && i + 1 < lines.length && /^\s*\|?[\s:|-]+$/.test(lines[i + 1]) && lines[i + 1].includes("-") && lines[i + 1].includes("|")) {
+          flushPara();
+          const table = document.createElement("table");
+          const thead = document.createElement("thead");
+          const headRow = document.createElement("tr");
+          for (const cell of rowCells(line)) {
+            const th = document.createElement("th");
+            mdInline(th, cell);
+            headRow.append(th);
+          }
+          thead.append(headRow);
+          table.append(thead);
+          const tbody = document.createElement("tbody");
+          i += 2;
+          while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
+            const tr = document.createElement("tr");
+            for (const cell of rowCells(lines[i])) {
+              const td = document.createElement("td");
+              mdInline(td, cell);
+              tr.append(td);
+            }
+            tbody.append(tr);
+            i += 1;
+          }
+          table.append(tbody);
+          const wrap = document.createElement("div");
+          wrap.className = "table-wrap";
+          wrap.append(table);
+          root.append(wrap);
+          continue;
+        }
+        para.push(line.trim());
+        i += 1;
+      }
+      flushPara();
+      return root;
+    }
+
     function renderChat(container, displayEvents) {
       for (const event of displayEvents) {
         const data = event.data || {};
@@ -1901,9 +2259,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
           wrap.append(bubble);
           container.append(wrap);
         } else if (event.type === "assistant_message" || event.type === "assistant_delta") {
-          const node = document.createElement("div");
-          node.className = "msg-assistant";
-          node.textContent = data.text || "";
+          const node = renderMarkdown(data.text || "");
+          if (state.streaming && event === displayEvents.at(-1)) {
+            const caret = document.createElement("span");
+            caret.className = "streaming-caret";
+            (node.lastElementChild || node).append(caret);
+          }
           container.append(node);
         } else if (event.type === "tool_call" || event.type === "tool_result") {
           const details = document.createElement("details");
@@ -2199,7 +2560,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     /* Settings modal */
-    const PANES = ["general", "models", "schedules", "about"];
+    const PANES = ["general", "models", "schedules", "usage", "about"];
     function openSettingsPane(pane) {
       $("settingsOverlay").classList.add("open");
       for (const id of PANES) {
@@ -2209,7 +2570,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
       document.querySelectorAll(".settings-nav button").forEach((button) => {
         button.classList.toggle("active", button.dataset.pane === pane);
       });
-      if (pane === "models") void loadModelConfig();
+      if (pane === "models") {
+        void loadModelConfig();
+        void loadLlamacppConfig();
+      }
+      if (pane === "usage") void loadUsagePane();
     }
     function closeSettingsPanel() {
       $("settingsOverlay").classList.remove("open");
@@ -2223,6 +2588,126 @@ _DASHBOARD_HTML = r"""<!doctype html>
         $("modelCurrent").textContent = `current: ${payload.provider || "?"}:${payload.model || "?"}`;
       } catch (error) {
         $("modelCurrent").textContent = String(error.message || error);
+      }
+    }
+
+    async function loadLlamacppConfig() {
+      try {
+        const payload = await request("/config/llamacpp");
+        $("llamacppBaseUrl").value = payload.base_url || "";
+      } catch (_error) {
+        /* endpoint config is optional */
+      }
+    }
+
+    function renderDiscoveredChips(models) {
+      const box = $("llamacppDiscovered");
+      box.replaceChildren();
+      if (!models.length) {
+        box.append(empty("No models reported by this endpoint."));
+        return;
+      }
+      for (const item of models) {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "model-chip";
+        chip.textContent = item.label;
+        chip.title = `Use ${item.model}`;
+        chip.addEventListener("click", () => {
+          $("configProvider").value = "llamacpp";
+          $("configModel").value = item.model;
+        });
+        box.append(chip);
+      }
+    }
+
+    $("llamacppDiscover").addEventListener("click", async () => {
+      const base = $("llamacppBaseUrl").value.trim();
+      const query = base ? `?base_url=${encodeURIComponent(base)}` : "";
+      try {
+        const payload = await request(`/models/llamacpp${query}`);
+        renderDiscoveredChips(payload.models || []);
+        const count = (payload.models || []).length;
+        setNotice(`${count} ${count === 1 ? "model" : "models"} discovered from ${payload.base_url}.`);
+      } catch (error) {
+        renderDiscoveredChips([]);
+        setNotice(String(error.message || error), true);
+      }
+    });
+
+    $("llamacppForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const payload = await request("/config/llamacpp", {
+          method: "PATCH",
+          body: JSON.stringify({ base_url: $("llamacppBaseUrl").value.trim(), persist_global: true }),
+        });
+        $("llamacppBaseUrl").value = payload.base_url;
+        llamacppModelsLoaded = false;
+        setNotice(`llama.cpp endpoint saved: ${payload.base_url}`);
+      } catch (error) {
+        setNotice(String(error.message || error), true);
+      }
+    });
+
+    function usageTable(table, headers, rows) {
+      table.replaceChildren();
+      const thead = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      for (const header of headers) {
+        const th = document.createElement("th");
+        th.textContent = header;
+        headRow.append(th);
+      }
+      thead.append(headRow);
+      table.append(thead);
+      const tbody = document.createElement("tbody");
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        for (const cell of row) {
+          const td = document.createElement("td");
+          td.textContent = cell;
+          tr.append(td);
+        }
+        tbody.append(tr);
+      }
+      table.append(tbody);
+    }
+
+    async function loadUsagePane() {
+      try {
+        const payload = await request("/usage?limit=250");
+        const summary = payload.summary || {};
+        $("usagePaneTokens").textContent = formatCompactNumber(summary.total_tokens);
+        $("usagePaneTokensExact").textContent = `${formatExactNumber(summary.total_tokens)} total`;
+        $("usagePaneRequests").textContent = formatExactNumber(summary.requests);
+        $("usagePaneRuns").textContent = `${formatExactNumber(summary.runs)} runs`;
+        $("usagePaneCost").textContent = `$${Number(summary.cost || 0).toFixed(4)}`;
+        usageTable(
+          $("usageByModel"),
+          ["Model", "Requests", "Input", "Output", "Total", "Cost"],
+          (summary.by_model || []).map((group) => [
+            group.name || "unknown",
+            formatExactNumber(group.requests),
+            formatCompactNumber(group.input_tokens),
+            formatCompactNumber(group.output_tokens),
+            formatCompactNumber(group.total_tokens),
+            `$${Number(group.cost || 0).toFixed(4)}`,
+          ]),
+        );
+        usageTable(
+          $("usageRecent"),
+          ["Run", "Model", "Tokens", "Cost", "When"],
+          (payload.records || []).slice(0, 12).map((record) => [
+            record.title || record.run_id,
+            `${record.provider}:${record.model}`,
+            formatCompactNumber(record.total_tokens),
+            `$${Number(record.cost || 0).toFixed(4)}`,
+            formatShortTime(record.timestamp),
+          ]),
+        );
+      } catch (error) {
+        setNotice(String(error.message || error), true);
       }
     }
 

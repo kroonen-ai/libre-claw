@@ -165,7 +165,7 @@ async def test_daemon_lists_llamacpp_models(monkeypatch, tmp_path: Path) -> None
     )
 
     class _Request:
-        pass
+        query: dict[str, str] = {}
 
     response = await server.list_llamacpp_models(_Request())  # type: ignore[arg-type]
 
@@ -173,3 +173,80 @@ async def test_daemon_lists_llamacpp_models(monkeypatch, tmp_path: Path) -> None
     payload = json.loads(response.body.decode("utf-8"))
     assert payload["base_url"] == DEFAULT_LLAMACPP_BASE_URL
     assert payload["models"] == [{"model": "qwen3-30b", "label": "qwen3-30b"}]
+
+
+def test_normalize_llamacpp_base_url_strips_v1() -> None:
+    from libre_claw.providers.llamacpp import normalize_llamacpp_base_url
+
+    assert normalize_llamacpp_base_url("http://stargate.local:8080/v1") == "http://stargate.local:8080"
+    assert normalize_llamacpp_base_url("http://stargate.local:8080/v1/") == "http://stargate.local:8080"
+    assert normalize_llamacpp_base_url("http://localhost:8080/") == "http://localhost:8080"
+    assert normalize_llamacpp_base_url(" https://swap.example/v1 ") == "https://swap.example"
+
+
+@pytest.mark.asyncio
+async def test_daemon_updates_llamacpp_endpoint(monkeypatch, tmp_path: Path) -> None:
+    from libre_claw.core.runs import RunStore
+    from libre_claw.core.tools import ToolRegistry
+    from libre_claw.daemon import DaemonServer
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: None,  # type: ignore[arg-type,return-value]
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    class _Request:
+        query: dict[str, str] = {}
+
+        async def json(self) -> dict[str, Any]:
+            return {"base_url": "http://stargate.local:8080/v1", "persist_global": True}
+
+    response = await server.update_llamacpp_config(_Request())  # type: ignore[arg-type]
+
+    assert response.status == 200
+    payload = json.loads(response.body.decode("utf-8"))
+    assert payload["base_url"] == "http://stargate.local:8080"
+    config_path = tmp_path / ".libre-claw" / "config.toml"
+    assert payload["persisted_path"] == str(config_path)
+    saved = config_path.read_text(encoding="utf-8")
+    assert 'base_url = "http://stargate.local:8080"' in saved
+    assert "[providers.llamacpp]" in saved
+    assert server.config.providers["llamacpp"]["base_url"] == "http://stargate.local:8080"
+
+    current = await server.current_llamacpp_config(_Request())  # type: ignore[arg-type]
+    assert json.loads(current.body.decode("utf-8"))["base_url"] == "http://stargate.local:8080"
+
+
+@pytest.mark.asyncio
+async def test_daemon_discovery_accepts_base_url_override(monkeypatch, tmp_path: Path) -> None:
+    from libre_claw.core.runs import RunStore
+    from libre_claw.core.tools import ToolRegistry
+    from libre_claw.daemon import DaemonServer
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    probed: list[str] = []
+
+    async def fake_discover(base_url: str, **_kwargs: Any) -> tuple[LlamaCppModel, ...]:
+        probed.append(base_url)
+        return ()
+
+    monkeypatch.setattr("libre_claw.daemon.discover_llamacpp_models", fake_discover)
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: None,  # type: ignore[arg-type,return-value]
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    class _Request:
+        query = {"base_url": "http://stargate.local:8080/v1"}
+
+    response = await server.list_llamacpp_models(_Request())  # type: ignore[arg-type]
+
+    assert response.status == 200
+    assert probed == ["http://stargate.local:8080"]
