@@ -307,7 +307,14 @@ class DaemonServer:
     ) -> None:
         if not _petdex_enabled_for_surface(self.config, surface):
             return
-        await self.petdex_client.send_state(state, message=message, details=details)
+        # Mascot updates are decorative; a broken petdex endpoint (or a broken
+        # local TLS/certifi setup) must never take an agent run down with it.
+        try:
+            await self.petdex_client.send_state(state, message=message, details=details)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.debug("petdex_state_failed", state=state, error=str(exc))
 
     async def _run_telegram_bridge_supervised(self) -> None:
         delay = 1.0
