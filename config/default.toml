@@ -83,6 +83,14 @@ supports_tools = true
 tool_mode = "auto" # auto | native | xml
 think = "auto" # false for normal models; low for GPT-OSS; or true | low | medium | high
 
+[providers.llamacpp]
+base_url = "http://localhost:8080" # llama-server or llama-swap endpoint
+default_model = "" # a model id from llama-swap's config; discovered via GET /v1/models
+api_key_env = "" # optional, for endpoints behind auth
+max_tokens = 16384
+supports_tools = true
+tool_mode = "auto" # auto | native | xml
+
 [permissions]
 default_level = "ask"
 auto_approve_read = true

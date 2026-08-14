@@ -20,6 +20,7 @@ from libre_claw.kimi import (
 from libre_claw.providers.anthropic import AnthropicProvider
 from libre_claw.providers.base import LLMProvider, ProviderConfigurationError
 from libre_claw.providers.codex import CodexProvider
+from libre_claw.providers.llamacpp import DEFAULT_LLAMACPP_BASE_URL, LlamaCppProvider
 from libre_claw.providers.local import OllamaThink
 from libre_claw.providers.moonshot import (
     MoonshotProvider,
@@ -61,11 +62,12 @@ def create_provider(
         "openrouter",
         "moonshot",
         "ollama",
+        "llamacpp",
         "codex",
     }:
         msg = (
             f"Provider '{resolved_provider_name}' is not supported. "
-            "Use 'anthropic', 'openai', 'openrouter', 'moonshot', 'ollama', or 'codex'."
+            "Use 'anthropic', 'openai', 'openrouter', 'moonshot', 'ollama', 'llamacpp', or 'codex'."
         )
         raise ProviderConfigurationError(msg)
     if provider_config is None:
@@ -76,6 +78,9 @@ def create_provider(
 
     if resolved_provider_name == "ollama":
         return _create_ollama_provider(config, provider_config, api_key_store)
+
+    if resolved_provider_name == "llamacpp":
+        return _create_llamacpp_provider(config, provider_config, api_key_store)
 
     resolved_model = model or _resolve_model(config, resolved_provider_name, provider_config)
     if resolved_provider_name == "moonshot":
@@ -264,10 +269,47 @@ def _create_ollama_provider(
     )
 
 
+def _create_llamacpp_provider(
+    config: LibreClawConfig,
+    provider_config: Mapping[str, Any],
+    api_key_store: ApiKeyStore | None,
+) -> LlamaCppProvider:
+    # llama-server and llama-swap run unauthenticated by default; a key is
+    # only sent when one is configured (llama-swap behind a reverse proxy).
+    api_key_env = _str_provider_value(provider_config, "api_key_env", "")
+    store = api_key_store or ApiKeyStore.from_config(config.auth)
+    api_key_lookup = store.get_api_key(
+        "llamacpp",
+        api_key_env or None,
+        aliases=("llama-cpp", "llama-swap"),
+    )
+    tool_mode = _str_provider_value(provider_config, "tool_mode", "auto").lower()
+    if tool_mode not in {"auto", "native", "xml"}:
+        raise ProviderConfigurationError("[providers.llamacpp].tool_mode must be 'auto', 'native', or 'xml'.")
+
+    resolved_model = _resolve_model(config, "llamacpp", provider_config)
+    if not resolved_model:
+        raise ProviderConfigurationError(
+            "Missing llama.cpp model. Set [providers.llamacpp].default_model to a model id "
+            "your llama-swap config serves (see `GET /v1/models`)."
+        )
+    return LlamaCppProvider(
+        base_url=_str_provider_value(provider_config, "base_url", DEFAULT_LLAMACPP_BASE_URL),
+        model=resolved_model,
+        max_tokens=_int_provider_value(provider_config, "max_tokens", 16384),
+        api_format="openai",
+        api_key=api_key_lookup.value or "llama-cpp",
+        supports_tools=_bool_provider_value(provider_config, "supports_tools", True),
+        tool_mode=tool_mode,  # type: ignore[arg-type]
+    )
+
+
 def _canonical_provider_name(provider_name: str) -> str:
     normalized = provider_name.lower()
     if normalized == "local":
         return "ollama"
+    if normalized in {"llama-cpp", "llama_cpp", "llama.cpp", "llama-swap", "llamaswap"}:
+        return "llamacpp"
     return normalized
 
 
@@ -350,6 +392,7 @@ def _provider_label(provider_name: str) -> str:
         "openai": "OpenAI",
         "openrouter": "OpenRouter",
         "moonshot": "Moonshot AI",
+        "llamacpp": "llama.cpp",
         "codex": "Codex",
     }
     return labels.get(provider_name, provider_name)
@@ -383,6 +426,8 @@ def _fallback_model(provider_name: str) -> str:
         return "gpt-5.5"
     if provider_name == "ollama":
         return "qwen3.6:27b"
+    if provider_name == "llamacpp":
+        return ""
     return "claude-opus-5"
 
 

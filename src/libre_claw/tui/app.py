@@ -318,7 +318,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
 )
 SLASH_COMMAND_NAMES = frozenset(command.name for command in SLASH_COMMANDS)
 
-SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "moonshot", "ollama", "codex")
+SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "moonshot", "ollama", "llamacpp", "codex")
 MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
     "anthropic": (
         *((preset.model, preset.label) for preset in ANTHROPIC_MODEL_PRESETS),
@@ -346,6 +346,9 @@ MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
     "ollama": (
         *((preset.model, preset.label) for preset in OLLAMA_MODEL_PRESETS),
     ),
+    # llama.cpp ids come from the llama-swap config; discover them live with
+    # `curl <base_url>/v1/models` (or the daemon's /models/llamacpp route).
+    "llamacpp": (),
 }
 
 
@@ -2811,9 +2814,7 @@ class LibreClawApp(App[None]):
         if not provider:
             self._append_system(_provider_help_text(self.config))
             return
-        provider = provider.strip().lower()
-        if provider == "local":
-            provider = "ollama"
+        provider = _canonical_tui_provider(provider)
         if provider not in SUPPORTED_PROVIDERS:
             self._append_system(_provider_help_text(self.config))
             return
@@ -5212,6 +5213,8 @@ def _canonical_tui_provider(provider: str) -> str:
     normalized = provider.strip().lower()
     if normalized == "local":
         return "ollama"
+    if normalized in {"llama-cpp", "llama_cpp", "llama.cpp", "llama-swap", "llamaswap"}:
+        return "llamacpp"
     return normalized
 
 
@@ -5282,7 +5285,7 @@ def _provider_help_text(config: LibreClawConfig) -> str:
     lines = [
         f"Current provider: {provider}",
         (
-            "Use `/provider anthropic|openai|openrouter|moonshot|ollama|codex`, "
+            "Use `/provider anthropic|openai|openrouter|moonshot|ollama|llamacpp|codex`, "
             + "or use `/model <provider>:<name>` to switch both."
         ),
         "For Codex/ChatGPT auth, run `/codex login` then `/provider codex`.",

@@ -71,6 +71,11 @@ from libre_claw.core.session import ChatMessage, UserAttachment, session_from_pa
 from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
 from libre_claw.kimi import normalize_moonshot_selection
 from libre_claw.providers import Done, LLMProvider, ProviderError, TextDelta, Usage, create_fallback_providers, create_provider
+from libre_claw.providers.llamacpp import (
+    DEFAULT_LLAMACPP_BASE_URL,
+    LlamaCppDiscoveryError,
+    discover_llamacpp_models,
+)
 from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.telegram.formatting import clean_final_answer_for_telegram, plain_text_chunks, telegram_html_chunks
@@ -174,6 +179,7 @@ class DaemonServer:
                 web.get("/health", self.health),
                 web.get("/config/model", self.current_model),
                 web.patch("/config/model", self.update_model),
+                web.get("/models/llamacpp", self.list_llamacpp_models),
                 web.get("/config/fallback", self.current_fallback),
                 web.patch("/config/fallback", self.update_fallback),
                 web.patch("/config/theme", self.update_theme),
@@ -319,6 +325,22 @@ class DaemonServer:
                 "host": self.config.daemon.host,
                 "port": self.config.daemon.port,
                 "telegram_bridge": self._telegram_bridge_status(),
+            }
+        )
+
+    async def list_llamacpp_models(self, _request: web.Request) -> web.Response:
+        """List models the configured llama.cpp / llama-swap endpoint can serve."""
+        provider_config = self.config.providers.get("llamacpp")
+        provider_mapping = provider_config if isinstance(provider_config, Mapping) else {}
+        base_url = str(provider_mapping.get("base_url") or DEFAULT_LLAMACPP_BASE_URL)
+        try:
+            models = await discover_llamacpp_models(base_url)
+        except LlamaCppDiscoveryError as exc:
+            return _json_error(str(exc), status=502)
+        return web.json_response(
+            {
+                "base_url": base_url,
+                "models": [{"model": item.model, "label": item.label} for item in models],
             }
         )
 

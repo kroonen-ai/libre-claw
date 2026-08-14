@@ -1403,9 +1403,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
               <option value="openrouter">OpenRouter</option>
               <option value="moonshot">Kimi Code / Moonshot</option>
               <option value="ollama">Ollama Cloud/Local</option>
+              <option value="llamacpp">llama.cpp (llama-swap)</option>
               <option value="codex">OpenAI Codex</option>
             </select>
             <input id="runModel" placeholder="default model" aria-label="Model">
+            <datalist id="llamacppModels"></datalist>
             <span class="spacer"></span>
             <button class="send-btn" type="submit" aria-label="Start run" title="Start run">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
@@ -1488,6 +1490,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
                 <option value="openrouter">OpenRouter</option>
                 <option value="moonshot">Kimi Code / Moonshot</option>
                 <option value="ollama">Ollama Cloud/Local</option>
+              <option value="llamacpp">llama.cpp (llama-swap)</option>
                 <option value="codex">OpenAI Codex</option>
               </select></label>
               <label>Model<input id="configModel" placeholder="model id"></label>
@@ -1520,6 +1523,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
                 <option value="openrouter">OpenRouter</option>
                 <option value="moonshot">Kimi Code / Moonshot</option>
                 <option value="ollama">Ollama Cloud/Local</option>
+              <option value="llamacpp">llama.cpp (llama-swap)</option>
                 <option value="codex">OpenAI Codex</option>
               </select></label>
             </div>
@@ -2239,6 +2243,47 @@ _DASHBOARD_HTML = r"""<!doctype html>
         setNotice(String(error.message || error), true);
       }
     });
+
+    /* llama.cpp model discovery via llama-swap `/v1/models` */
+    let llamacppModelsLoaded = false;
+    async function loadLlamacppModels() {
+      if (llamacppModelsLoaded) return;
+      try {
+        const payload = await request("/models/llamacpp");
+        const list = $("llamacppModels");
+        list.replaceChildren();
+        for (const item of payload.models || []) {
+          const option = document.createElement("option");
+          option.value = item.model;
+          option.label = item.label;
+          list.append(option);
+        }
+        llamacppModelsLoaded = true;
+        const count = (payload.models || []).length;
+        setNotice(count
+          ? `${count} llama.cpp ${count === 1 ? "model" : "models"} discovered from ${payload.base_url}.`
+          : `No llama.cpp models reported by ${payload.base_url}.`);
+      } catch (error) {
+        setNotice(String(error.message || error), true);
+      }
+    }
+
+    function syncModelDatalist(select, input) {
+      const update = () => {
+        if (select.value === "llamacpp") {
+          input.setAttribute("list", "llamacppModels");
+          void loadLlamacppModels();
+        } else if (input.getAttribute("list") === "llamacppModels") {
+          input.removeAttribute("list");
+        }
+      };
+      select.addEventListener("change", update);
+      update();
+    }
+
+    syncModelDatalist($("runProvider"), $("runModel"));
+    syncModelDatalist($("configProvider"), $("configModel"));
+    syncModelDatalist($("automationProvider"), $("automationModel"));
 
     $("runForm").addEventListener("submit", async (event) => {
       event.preventDefault();

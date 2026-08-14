@@ -23,7 +23,7 @@ Current release: Version `0.1.0`.
 | Local dashboard | Start, inspect, cancel, and approve daemon-owned runs from a browser on localhost. |
 | Memory and skills | Local persistent memory, `SOUL.md` persona files, user/project `SKILL.md` workflows, and optional Vercel Skills discovery. |
 | Real tools | File edits, shell, code search, web search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
-| Provider routing | Kimi Code/Moonshot, OpenRouter, Ollama/Ollama Cloud, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
+| Provider routing | Kimi Code/Moonshot, OpenRouter, Ollama/Ollama Cloud, llama.cpp/llama-swap, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
 | Reproducible evals | A Harbor adapter runs the real Libre Claw loop against Terminal-Bench 2.1. |
 | Petdex companion | Optional local state updates for the Petdex desktop companion app. |
 | Safe defaults | API keys stay out of project config, dangerous commands are blocked, and writes require approval. |
@@ -237,6 +237,36 @@ or down before it starts streaming. Configure up to three ordered backups:
 
 While running on a fallback, Libre Claw retries the primary after the configured
 number of fallback provider calls. The default is `3`.
+
+### llama.cpp And llama-swap
+
+Local llama.cpp endpoints work through the `llamacpp` provider. It targets the
+OpenAI-compatible API that both `llama-server` and [llama-swap](https://github.com/mostlygeek/llama-swap)
+expose, so llama-swap can hot-swap between every model in its config:
+
+```toml
+[providers.llamacpp]
+base_url = "http://localhost:8080"
+default_model = "qwen3-30b" # a model id from your llama-swap config
+```
+
+Discover which model ids the endpoint can serve:
+
+```bash
+curl http://localhost:8080/v1/models        # straight from llama-swap
+curl http://127.0.0.1:8766/models/llamacpp  # through the Libre Claw daemon
+```
+
+The dashboard composer also lists discovered models as suggestions when the
+`llama.cpp (llama-swap)` provider is selected. Switch with:
+
+```text
+/provider llamacpp
+/model llamacpp:qwen3-30b --global
+```
+
+No API key is needed for local endpoints; set `api_key_env` only when the
+server sits behind an authenticating proxy.
 
 ## Local Web Search
 
