@@ -1500,6 +1500,11 @@ async def test_daemon_continues_run_as_conversation_thread(monkeypatch, tmp_path
     assert _response_payload(follow_up)["run"]["run_id"] == run_id
 
     await _wait_for_state(server, run_id, "done")
+    lingering = server.active_runs.get(run_id)
+    if lingering is not None:
+        # State flips to done before the task's finally block finishes writing
+        # run_finished and the session snapshot; wait for full teardown.
+        await lingering.task
     events = _response_payload(
         await server.get_events(RequestStub(match_info={"run_id": run_id}))  # type: ignore[arg-type]
     )
