@@ -1964,6 +1964,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     function clearSelectedRun() {
+      state.selectedRunState = "";
+      syncComposerMode();
       $("selectedTitle").textContent = "New session";
       $("selectedState").textContent = "idle";
       $("selectedState").className = "pill";
@@ -1982,7 +1984,9 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("selectedTitle").title = `${run.run_id} | updated ${formatTime(run.updated_at)}`;
       $("selectedState").textContent = run.state;
       $("selectedState").className = `pill ${run.state}`;
+      state.selectedRunState = run.state;
       $("cancelRun").disabled = !["queued", "running", "blocked"].includes(run.state);
+      syncComposerMode();
       $("stripMeta").textContent = `${run.run_id} | ${run.provider}:${run.model}`;
       const events = await request(`/runs/${state.selectedRunId}/events?after=0`);
       state.events = events.events || [];
@@ -2287,7 +2291,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           node.className = "msg-error";
           node.textContent = data.message || eventText(event);
           container.append(node);
-        } else if (event.type === "permission_request" || event.type === "permission_result" || event.type === "run_started" || event.type === "run_finished" || event.type === "usage") {
+        } else if (event.type === "permission_request" || event.type === "permission_result") {
           const node = document.createElement("div");
           node.className = "msg-note";
           const text = eventText(event);
@@ -2371,6 +2375,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (event.type === "permission_result") return `Approval: ${data.resolution || "resolved"}`;
       if (event.type === "usage") return "Usage";
       if (event.type === "run_started") return "Run started";
+      if (event.type === "run_continued") return "Session continued";
       if (event.type === "run_finished") return `Run finished${data.state ? `: ${data.state}` : ""}`;
       if (event.type === "error") return "Error";
       return event.type.replaceAll("_", " ");
@@ -2770,20 +2775,44 @@ _DASHBOARD_HTML = r"""<!doctype html>
     syncModelDatalist($("configProvider"), $("configModel"));
     syncModelDatalist($("automationProvider"), $("automationModel"));
 
+    /* The composer continues the selected session; New Session starts a thread. */
+    function composerMode() {
+      if (!state.selectedRunId) return "new";
+      if (STREAM_STATES.has(state.selectedRunState)) return "busy";
+      return "reply";
+    }
+
+    function syncComposerMode() {
+      const mode = composerMode();
+      $("runMessage").placeholder = mode === "reply"
+        ? "Reply to this session"
+        : "Describe what you want Libre Claw to do";
+    }
+
     $("runForm").addEventListener("submit", async (event) => {
       event.preventDefault();
+      const mode = composerMode();
+      if (mode === "busy") {
+        setNotice("This session is still working - wait for it to finish or cancel it.", true);
+        return;
+      }
       const body = {
         message: $("runMessage").value,
         surface: "dashboard",
       };
       if ($("runProvider").value.trim()) body.provider = $("runProvider").value.trim();
       if ($("runModel").value.trim()) body.model = $("runModel").value.trim();
-      const payload = await request("/runs", { method: "POST", body: JSON.stringify(body) });
-      $("runMessage").value = "";
-      autoGrow();
-      setNotice(`Run ${payload.run.run_id} started.`);
-      await refreshRuns();
-      await selectRun(payload.run.run_id);
+      try {
+        const path = mode === "reply" ? `/runs/${state.selectedRunId}/messages` : "/runs";
+        const payload = await request(path, { method: "POST", body: JSON.stringify(body) });
+        $("runMessage").value = "";
+        autoGrow();
+        setNotice(mode === "reply" ? "Reply sent." : `Run ${payload.run.run_id} started.`);
+        await refreshRuns();
+        await selectRun(payload.run.run_id);
+      } catch (error) {
+        setNotice(String(error.message || error), true);
+      }
     });
 
     $("automationForm").addEventListener("submit", async (event) => {

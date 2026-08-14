@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import time
@@ -68,7 +69,7 @@ from libre_claw.core.usage import (
     usage_report_text,
     usage_summary_payload,
 )
-from libre_claw.core.session import ChatMessage, UserAttachment, session_from_payload, text_block
+from libre_claw.core.session import ChatMessage, UserAttachment, session_from_payload, session_to_payload, text_block
 from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
 from libre_claw.kimi import normalize_moonshot_selection
 from libre_claw.providers import Done, LLMProvider, ProviderError, TextDelta, Usage, create_fallback_providers, create_provider
@@ -190,6 +191,7 @@ class DaemonServer:
                 web.post("/shutdown", self.shutdown),
                 web.get("/runs", self.list_runs),
                 web.post("/runs", self.start_run),
+                web.post("/runs/{run_id}/messages", self.continue_run),
                 web.get("/runs/{run_id}", self.get_run),
                 web.get("/runs/{run_id}/events", self.get_events),
                 web.post("/runs/{run_id}/cancel", self.cancel_run),
@@ -600,6 +602,62 @@ class DaemonServer:
         task.add_done_callback(lambda _task, run_id=run.run_id: self.active_runs.pop(run_id, None))
         return web.json_response({"run": _run_payload(run)}, status=202)
 
+    async def continue_run(self, request: web.Request) -> web.Response:
+        """Continue a finished run's conversation with a follow-up message."""
+        run_id = request.match_info["run_id"]
+        run = await self.run_store.load_run(run_id)
+        if run is None:
+            return _json_error("Unknown run.", status=404)
+        active = self.active_runs.get(run_id)
+        if active is not None and not active.task.done():
+            if run.state in {"queued", "running", "blocked"}:
+                return _json_error("Run is still active; wait for it to finish or cancel it.", status=409)
+            # Terminal state but the task is mid-teardown (snapshot write); give it a moment.
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(asyncio.shield(active.task), timeout=2.0)
+            if not active.task.done():
+                return _json_error("Run is still active; wait for it to finish or cancel it.", status=409)
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _json_error("Request body must be JSON.")
+        if not isinstance(payload, Mapping):
+            return _json_error("Request body must be a JSON object.")
+        message = str(payload.get("message", "")).strip()
+        if not message:
+            return _json_error("Field 'message' is required.")
+
+        # Follow-ups stay on the run's recorded model unless explicitly overridden.
+        merged = dict(payload)
+        merged.setdefault("provider", run.provider)
+        merged.setdefault("model", run.model)
+        try:
+            run_config = await self._config_for_payload(merged)
+        except ValueError as exc:
+            return _json_error(str(exc), status=403)
+
+        session = await asyncio.to_thread(_load_session_snapshot, run)
+        if session is None:
+            session = _session_from_events(await self.run_store.load_events(run_id))
+        surface = str(payload.get("surface", "daemon")).strip() or "daemon"
+        attachments = _attachments_from_payload(payload.get("attachments"))
+        run = await self.run_store.update_state(run_id, "queued")
+        task = asyncio.create_task(
+            self._run_agent(
+                run,
+                message,
+                run_config,
+                surface=surface,
+                session=session,
+                attachments=attachments,
+                continuation=True,
+            )
+        )
+        active = ActiveRun(run_id=run.run_id, task=task, surface=surface)
+        self.active_runs[run.run_id] = active
+        task.add_done_callback(lambda _task, active_run_id=run.run_id: self.active_runs.pop(active_run_id, None))
+        return web.json_response({"run": _run_payload(run)}, status=202)
+
     async def cancel_run(self, request: web.Request) -> web.Response:
         run_id = request.match_info["run_id"]
         run = await self.run_store.load_run(run_id)
@@ -818,7 +876,11 @@ class DaemonServer:
         telegram_chat_id: int | None = None,
         deadline_monotonic: float | None = None,
         deadline_reserve_seconds: float = 0.0,
+        continuation: bool = False,
     ) -> RunState:
+        # The agent mutates this session in place; holding the reference lets the
+        # daemon snapshot the full conversation for follow-up turns.
+        session = session if session is not None else Session()
         assistant_chunks: list[str] = []
         state: RunState = "done"
         primary_rate_limited = False
@@ -832,7 +894,7 @@ class DaemonServer:
             )
             await self.run_store.append_event(
                 run.run_id,
-                "run_started",
+                "run_continued" if continuation else "run_started",
                 {
                     "kind": run.kind,
                     "provider": run.provider,
@@ -1047,6 +1109,10 @@ class DaemonServer:
             )
             if not hold_final_state:
                 await self.run_store.append_event(run.run_id, "run_finished", {"state": state})
+            try:
+                await asyncio.to_thread(_write_session_snapshot, run, session)
+            except OSError:
+                LOGGER.warning("session_snapshot_failed", run_id=run.run_id)
             await self._send_petdex_state(
                 _petdex_final_state(state),
                 message=f"Run {state}",
@@ -2138,6 +2204,50 @@ def _artifact_payload(run: RunRecord) -> dict[str, dict[str, Any]]:
         else:
             payload[name] = {"exists": True, "size": stat.st_size}
     return payload
+
+
+_SESSION_SNAPSHOT_NAME = "session.json"
+
+
+def _write_session_snapshot(run: RunRecord, session: Session) -> None:
+    path = run.path / _SESSION_SNAPSHOT_NAME
+    path.write_text(json.dumps(session_to_payload(session)), encoding="utf-8")
+
+
+def _load_session_snapshot(run: RunRecord) -> Session | None:
+    path = run.path / _SESSION_SNAPSHOT_NAME
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return session_from_payload(payload)
+
+
+def _session_from_events(events: list[RunEvent]) -> Session:
+    """Rebuild a best-effort conversation for runs without a session snapshot.
+
+    Only the user/assistant text survives; tool exchanges are summarized away,
+    which is enough context for a follow-up turn on older runs.
+    """
+    session = Session()
+    assistant_chunks: list[str] = []
+
+    def flush_assistant() -> None:
+        text = "".join(assistant_chunks).strip()
+        if text:
+            session.add_assistant_message(text)
+        assistant_chunks.clear()
+
+    for event in events:
+        if event.type == "user_message":
+            flush_assistant()
+            content = str(event.data.get("content", ""))
+            if content:
+                session.add_user_message(content)
+        elif event.type == "assistant_delta":
+            assistant_chunks.append(str(event.data.get("text", "")))
+    flush_assistant()
+    return session
 
 
 def _read_artifact(run: RunRecord, name: str) -> str:

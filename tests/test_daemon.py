@@ -1456,3 +1456,103 @@ async def test_daemon_usage_endpoint_reports_provider_rollups(monkeypatch, tmp_p
     assert payload["attribution"]["docs_url"] == "https://libreclaw.sh/docs/"
     assert payload["attribution"]["ranking_targets"] == "Productivity, Coding Agents, Personal Agents, CLI Agents"
     assert "OpenRouter usage" in payload["text"]
+
+
+async def test_daemon_continues_run_as_conversation_thread(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    provider = ScriptedProvider(
+        [
+            [TextDelta("first answer"), Done(Usage(input_tokens=1, output_tokens=2))],
+            # Post-run memory extraction makes its own provider call per turn.
+            [TextDelta("[]"), Done()],
+            [TextDelta("second answer"), Done(Usage(input_tokens=3, output_tokens=4))],
+            [TextDelta("[]"), Done()],
+        ]
+    )
+    config = load_config()
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    start = await server.start_run(RequestStub(body={"message": "hello there"}))  # type: ignore[arg-type]
+    run_id = _response_payload(start)["run"]["run_id"]
+    await _wait_for_state(server, run_id, "done")
+    await _wait_for_event(server, run_id, "run_finished")
+
+    lingering = server.active_runs.get(run_id)
+    if lingering is not None:
+        await lingering.task
+
+    # The finished turn snapshots the full session next to the run artifacts.
+    run = await server.run_store.load_run(run_id)
+    assert run is not None
+    snapshot_path = run.path / "session.json"
+    assert snapshot_path.exists()
+
+    follow_up = await server.continue_run(
+        RequestStub(body={"message": "and a follow-up"}, match_info={"run_id": run_id})  # type: ignore[arg-type]
+    )
+    assert follow_up.status == 202
+    assert _response_payload(follow_up)["run"]["run_id"] == run_id
+
+    await _wait_for_state(server, run_id, "done")
+    events = _response_payload(
+        await server.get_events(RequestStub(match_info={"run_id": run_id}))  # type: ignore[arg-type]
+    )
+    types = [event["type"] for event in events["events"]]
+    assert types.count("user_message") == 2
+    assert "run_continued" in types
+    assert types.count("run_finished") == 2
+
+    # The follow-up turn's provider call saw the whole thread, not just the
+    # new message. (The first matching batch is the agent turn; memory
+    # extraction calls come after it.)
+    threaded = [batch for batch in provider.message_batches if "and a follow-up" in str(batch)]
+    assert threaded, "no provider call saw the follow-up message"
+    combined = str(threaded[0])
+    assert "hello there" in combined
+    assert "first answer" in combined
+
+    # The snapshot now carries both turns for the next continuation.
+    saved = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert len(saved.get("messages", [])) >= 4
+
+
+async def test_daemon_continue_run_rejects_active_run(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    class HangingProvider(ScriptedProvider):
+        async def complete(self, messages, tools=None, system=None, max_tokens=None):  # type: ignore[override]
+            yield TextDelta("thinking")
+            await asyncio.sleep(30)
+
+    provider = HangingProvider([])
+    config = load_config()
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    start = await server.start_run(RequestStub(body={"message": "hi"}))  # type: ignore[arg-type]
+    run_id = _response_payload(start)["run"]["run_id"]
+    await _wait_for_event(server, run_id, "assistant_delta")
+
+    response = await server.continue_run(
+        RequestStub(body={"message": "follow-up"}, match_info={"run_id": run_id})  # type: ignore[arg-type]
+    )
+    assert response.status == 409
+
+    active = server.active_runs.get(run_id)
+    if active is not None:
+        active.task.cancel()
+        try:
+            await active.task
+        except asyncio.CancelledError:
+            pass
