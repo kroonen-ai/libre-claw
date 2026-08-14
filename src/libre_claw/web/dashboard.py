@@ -1677,7 +1677,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     </div>
   </div>
   <script>
-    const state = { selectedRunId: "", runs: [], events: [], editingAutomationId: "", view: "chat", streaming: false };
+    const state = { selectedRunId: "", runs: [], events: [], editingAutomationId: "", view: "chat", streaming: false, composing: false };
     const $ = (id) => document.getElementById(id);
     const THEME_KEY = "libre-claw-dashboard-theme";
     const RAIL_KEY = "libre-claw-dashboard-rail";
@@ -1906,7 +1906,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         state.selectedRunId = "";
         clearSelectedRun();
       }
-      if (!state.selectedRunId && state.runs[0]) await selectRun(state.runs[0].run_id);
+      if (!state.selectedRunId && !state.composing && state.runs[0]) await selectRun(state.runs[0].run_id);
     }
 
     function renderRuns() {
@@ -1950,14 +1950,17 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     async function selectRun(runId) {
       state.selectedRunId = runId;
+      state.composing = false;
       renderRuns();
       await refreshRunDetail();
     }
 
     function newSession() {
       state.selectedRunId = "";
+      state.composing = true;
       state.streaming = false;
       window.clearTimeout(streamTimer);
+      resetStreamNode();
       clearSelectedRun();
       renderRuns();
       $("runMessage").focus();
@@ -1996,9 +1999,13 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     /* Token streaming: while the selected run is live, new events are pulled
-       incrementally (`?after=<id>`) on a tight loop instead of the 3s refresh. */
+       incrementally (`?after=<id>`) on an adaptive loop. Pure-delta batches
+       update only the live assistant node, and a requestAnimationFrame
+       typewriter smooths each chunk into a per-character reveal instead of a
+       block repaint. */
     let streamTimer = 0;
     const STREAM_STATES = new Set(["queued", "running", "blocked"]);
+    const stream = { node: null, text: "", shown: 0, raf: 0 };
 
     function lastNumericEventId() {
       let max = 0;
@@ -2009,33 +2016,108 @@ _DASHBOARD_HTML = r"""<!doctype html>
       return max;
     }
 
+    function resetStreamNode() {
+      window.cancelAnimationFrame(stream.raf);
+      stream.node = null;
+      stream.text = "";
+      stream.shown = 0;
+      stream.raf = 0;
+    }
+
     function scheduleStream(runState) {
       window.clearTimeout(streamTimer);
       state.streaming = STREAM_STATES.has(runState);
-      if (!state.streaming) { renderEvents(); return; }
-      streamTimer = window.setTimeout(() => { void pollRunEvents(); }, 600);
+      if (!state.streaming) {
+        resetStreamNode();
+        renderEvents();
+        return;
+      }
+      streamTimer = window.setTimeout(() => { void pollRunEvents(); }, 300);
+    }
+
+    function nearBottom(container) {
+      return container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    }
+
+    function paintStreamNode() {
+      const shownText = stream.text.slice(0, stream.shown);
+      const replacement = renderMarkdown(shownText);
+      const caret = document.createElement("span");
+      caret.className = "streaming-caret";
+      (replacement.lastElementChild || replacement).append(caret);
+      stream.node.replaceWith(replacement);
+      stream.node = replacement;
+    }
+
+    function pumpStream() {
+      stream.raf = 0;
+      if (!stream.node || !state.streaming) return;
+      const backlog = stream.text.length - stream.shown;
+      if (backlog <= 0) return;
+      // Catch-up curve: reveal faster the further behind the display is, so
+      // bursts stay smooth without ever lagging the model.
+      const step = Math.max(2, Math.ceil(backlog / 16));
+      stream.shown = Math.min(stream.text.length, stream.shown + step);
+      const container = $("timeline");
+      const stick = nearBottom(container);
+      paintStreamNode();
+      if (stick) container.scrollTop = container.scrollHeight;
+      if (stream.shown < stream.text.length) {
+        stream.raf = requestAnimationFrame(pumpStream);
+      }
+    }
+
+    /* Append pure assistant-delta batches to the live node; anything else
+       falls back to a full re-render. Returns true when handled in place. */
+    function tryAppendStream(fresh) {
+      if (state.view !== "chat") return false;
+      if (!fresh.every((event) => event.type === "assistant_delta" || event.type === "usage")) return false;
+      const text = fresh
+        .filter((event) => event.type === "assistant_delta")
+        .map((event) => event.data?.text || "")
+        .join("");
+      if (!text) return true;
+      const container = $("timeline");
+      if (!stream.node || !container.contains(stream.node)) {
+        container.querySelector(".empty")?.remove();
+        const node = document.createElement("div");
+        node.className = "msg-md";
+        container.append(node);
+        stream.node = node;
+        stream.text = "";
+        stream.shown = 0;
+      }
+      stream.text += text;
+      if (!stream.raf) stream.raf = requestAnimationFrame(pumpStream);
+      return true;
     }
 
     async function pollRunEvents() {
       const runId = state.selectedRunId;
       if (!runId || !state.streaming) return;
+      let sawDelta = false;
       try {
         const payload = await request(`/runs/${runId}/events?after=${lastNumericEventId()}`);
         if (runId !== state.selectedRunId) return;
         const fresh = payload.events || [];
         if (fresh.length) {
           state.events.push(...fresh);
-          renderEvents();
           if (fresh.some((event) => event.type === "run_finished" || event.type === "permission_request")) {
+            resetStreamNode();
             await refreshRunDetail();
             await refreshRuns();
             return;
+          }
+          sawDelta = fresh.some((event) => event.type === "assistant_delta");
+          if (!tryAppendStream(fresh)) {
+            resetStreamNode();
+            renderEvents();
           }
         }
       } catch (_error) {
         /* transient poll errors: keep streaming */
       }
-      streamTimer = window.setTimeout(() => { void pollRunEvents(); }, 600);
+      streamTimer = window.setTimeout(() => { void pollRunEvents(); }, sawDelta ? 250 : 900);
     }
 
     function setView(view) {
@@ -2268,6 +2350,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
             const caret = document.createElement("span");
             caret.className = "streaming-caret";
             (node.lastElementChild || node).append(caret);
+            // Incremental delta batches continue from this node without a
+            // full re-render; the already-visible text never re-animates.
+            stream.node = node;
+            stream.text = data.text || "";
+            stream.shown = stream.text.length;
           }
           container.append(node);
         } else if (event.type === "tool_call" || event.type === "tool_result") {
@@ -2869,7 +2956,9 @@ _DASHBOARD_HTML = r"""<!doctype html>
       try {
         await Promise.all([refreshHealth(), refreshUsage(), refreshAutomations()]);
         await refreshRuns();
-        if (state.selectedRunId) await refreshRunDetail();
+        // While streaming, the incremental poll owns the conversation pane; a
+        // full detail refresh here would repaint mid-token.
+        if (state.selectedRunId && !state.streaming) await refreshRunDetail();
         $("lastRefresh").textContent = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date());
       } catch (error) {
         $("healthDot").className = "status-dot offline";
