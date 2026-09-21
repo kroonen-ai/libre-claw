@@ -86,10 +86,11 @@ from libre_claw.core.memory import (
     summarize_session_for_memory,
 )
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
+from libre_claw.core.runs import settle_finalization
 from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, pending_approvals, run_changes_text, run_plan_text
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.agent import AgentSubagentUpdate
-from libre_claw.core.task_control import update_plan, plan_text
+from libre_claw.core.task_control import update_plan, plan_text, request_subagent_resume, saved_subagent_snapshots
 from libre_claw.core.session import session_from_payload
 from libre_claw.core.session import ChatMessage, UserAttachment, estimate_context_tokens, session_to_payload
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
@@ -298,7 +299,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/goal", "/goal <objective>|status|stop|max N", "Run a judged multi-turn goal loop"),
     SlashCommand("/runs", "/runs [N]", "List durable agent runs"),
     SlashCommand("/run", "/run <id>", "Inspect a durable run"),
-    SlashCommand("/agents", "/agents [cancel <id>]", "Inspect and cancel subagents"),
+    SlashCommand("/agents", "/agents [cancel|resume <id>]", "Inspect, resume, or cancel subagents"),
     SlashCommand("/worktree", "/worktree create|list|use|preview|apply|setup|remove", "Manage isolated task workspaces"),
     SlashCommand("/plan", "/plan on|off|show|set|add|edit|done", "Plan without changing files"),
     SlashCommand("/queue", "/queue <message>", "Queue a follow-up for this task"),
@@ -975,7 +976,7 @@ class LibreClawApp(App[None]):
         self.session_archive_id = new_session_archive_id("tui")
         self.agent: Agent | None = None
         self.provider_error: str | None = None
-        self.usage = Usage()
+        self.usage = Usage(cost=0.0)
         self.transcript: list[TranscriptEntry] = []
         self.sidebar_visible = False
         self.startup_expanded = False
@@ -1096,6 +1097,9 @@ class LibreClawApp(App[None]):
             self._start_tui_heartbeat(self._heartbeat_interval_minutes)
 
     async def on_unmount(self) -> None:
+        self._local_queue_closed = True
+        for task in getattr(self, "_local_queue_wakeups", {}).values():
+            task.cancel()
         if self._active_task is not None and not self._active_task.done():
             self._active_task.cancel()
         if self._heartbeat_task is not None and not self._heartbeat_task.done():
@@ -1291,8 +1295,10 @@ class LibreClawApp(App[None]):
             metadata={"path": str(path), "truncated": len(content.splitlines()) > 120},
         )
 
-    async def handle_user_input(self, text: str) -> None:
+    async def handle_user_input(self, text: str, *, _owned_task: asyncio.Task[None] | None = None) -> None:
         """Handle a message, slash command, permission response, or palette query."""
+        if _owned_task is not None and (self._active_task is not _owned_task or asyncio.current_task() is not _owned_task):
+            raise RuntimeError("The previous turn no longer owns this queued follow-up.")
         if self.palette_open:
             await self._handle_palette_input(text)
             return
@@ -1320,7 +1326,7 @@ class LibreClawApp(App[None]):
         if parsed is None:
             parsed = _parse_tui_image_input(text, self.config.general.working_directory)
 
-        if self._active_task is not None and not self._active_task.done():
+        if self._active_task is not None and not self._active_task.done() and self._active_task is not _owned_task:
             self._append_system("A response is already streaming. Use /cancel to stop it.")
             return
 
@@ -1384,7 +1390,7 @@ class LibreClawApp(App[None]):
             return
         if command == "/agents":
             tokens = argument.split(maxsplit=1)
-            action = "agent_cancel" if tokens and tokens[0] == "cancel" else "agents"
+            action = {"cancel": "agent_cancel", "resume": "agent_resume"}.get(tokens[0], "agents") if tokens else "agents"
             await self._handle_task_control(action, tokens[1] if len(tokens) > 1 else "")
             return
         if command in {"/plan", "/queue"}:
@@ -1613,20 +1619,35 @@ class LibreClawApp(App[None]):
                 if result.get("session"):
                     self.session = session_from_payload(result["session"])
                 self._append_system(str(result.get("text", "Task updated.")))
-            elif action in {"agents", "agent_cancel"}:
+            elif action in {"agents", "agent_cancel", "agent_resume"}:
                 manager = self.agent.subagents if self.agent is not None else None
-                if manager is None:
-                    self._append_system("No subagents for this task.")
+                if action == "agent_resume":
+                    if not run_id:
+                        raise ValueError("Resume the parent task first.")
+                    agent_id = argument.split(maxsplit=1)[0] if argument else ""
+                    if manager and any(item["id"] == agent_id and item["status"] in {"running", "blocked"} for item in manager.snapshots()):
+                        raise ValueError("This worker is already running.")
+                    agent_id, _ = request_subagent_resume(self.session, argument)
+                    await self._save_current_session(self.session)
+                    self._append_system(f"Worker {agent_id} resume queued.")
+                    if self._active_task is None or self._active_task.done() or (self.agent is not None and not self.agent.accepting_control):
+                        await self.run_store.queue_message(run_id, f"Resume saved worker {agent_id}, wait for its result, and report the outcome.")
+                        self._start_local_queue(run_id)
                 else:
                     if action == "agent_cancel":
+                        if manager is None:
+                            raise ValueError("No active subagents for this task.")
                         await manager.cancel(argument)
-                    self._append_system("\n".join(f"{item['id']}: {item['status']} - {item['task']}\n{item.get('output', '')[:1000]}" for item in manager.snapshots()) or "No subagents for this task.")
+                        await self._save_current_session(self.session)
+                    snapshots = manager.snapshots() if manager else saved_subagent_snapshots(self.session)
+                    self._append_system("\n".join(f"{item['id']}: {item['status']} - {item['task']}\n{item.get('output', '')[:1000]}" for item in snapshots) or "No subagents for this task.")
             elif action == "plan":
                 self._append_system(update_plan(self.session, argument))
                 await self._save_current_session(self.session)
             elif run_id:
                 await self.run_store.queue_message(run_id, argument)
                 self._append_system("Follow-up queued. It will run after the current turn completes.")
+                self._start_local_queue(run_id)
             else:
                 self._append_system("Start or resume a task before queuing a follow-up.")
         except (ValueError, RuntimeError) as exc:
@@ -1640,6 +1661,8 @@ class LibreClawApp(App[None]):
         label = "Side note" if kind == "btw" else "Steering instruction"
         self.session.summary = _append_session_note(self.session.summary, f"{label}: {note}")
         self.session.queue_steering(note)
+        if self.agent is not None and self.agent.subagents is not None:
+            self.agent.subagents.steer(note)
         run_id = self._active_run_id or self._resumed_run_id
         if self.daemon_client is not None and run_id:
             self._track_run_background_task(self._handle_task_control("steer", note))
@@ -1795,11 +1818,77 @@ class LibreClawApp(App[None]):
                 run_summary = self.transcript[assistant_index].content
             self._pending_permission = None
             self._hide_permission_prompt()
-            self._active_task = None
-            queued = await self._finish_active_run(run_state, summary=run_summary)
-            if queued is not None:
-                self.call_later(self.handle_user_input, queued["message"])
+            owner = asyncio.current_task()
+            try:
+                run_id = self._active_run_id
+                queued = await self._finish_local_turn(run_state, summary=run_summary)
+                if queued is not None:
+                    await self._dispatch_queued_followup(run_id, queued, owner)
+            finally:
+                if self._active_task is owner:
+                    self._active_task = None
             self.query_one("#input", Input).focus()
+
+    async def _finish_local_turn(self, state: str, *, summary: str = "") -> dict[str, Any] | None:
+        run_id = self._active_run_id
+        finishing = asyncio.create_task(self._finish_active_run(state, summary=summary))
+        queued, cancelled = await settle_finalization(finishing)
+        if cancelled and run_id is not None:
+            await settle_finalization(asyncio.create_task(self.run_store.release_queued_message(run_id, queued, cancelled=True)))
+            return None
+        return queued
+
+    async def _dispatch_queued_followup(self, run_id: str, queued: dict[str, Any], owner: asyncio.Task[None]) -> None:
+        try:
+            await self.handle_user_input(queued["message"], _owned_task=owner)
+        except asyncio.CancelledError:
+            # Startup has not registered the next streaming task yet, so no
+            # agent side effect has run for this claimed message.
+            await settle_finalization(asyncio.create_task(self.run_store.release_queued_message(run_id, queued, cancelled=True)))
+
+    def _start_local_queue(self, run_id: str) -> None:
+        """Reserve idle local execution before any queue claim or startup await."""
+        if getattr(self, "_local_queue_closed", False):
+            return
+        if self._active_task is not None and not self._active_task.done():
+            wakeups = getattr(self, "_local_queue_wakeups", None)
+            if wakeups is None:
+                wakeups = self._local_queue_wakeups = {}
+            if run_id not in wakeups or wakeups[run_id].done():
+                task = asyncio.create_task(self._wake_local_queue(run_id))
+                wakeups[run_id] = task
+                task.add_done_callback(lambda done: wakeups.pop(run_id, None) if wakeups.get(run_id) is done else None)
+            return
+        self._active_task = asyncio.create_task(self._drain_local_queue(run_id))
+
+    async def _wake_local_queue(self, run_id: str) -> None:
+        try:
+            while self._active_task is not None and not self._active_task.done():
+                active = self._active_task
+                await asyncio.shield(active)
+                if active.cancelling():
+                    return
+            if (self._active_run_id or self._resumed_run_id) != run_id:
+                return
+            record = await self.run_store.load_run(run_id)
+            if record is not None and record.state == "done" and await self.run_store.queued_messages(run_id):
+                self._start_local_queue(run_id)
+        except asyncio.CancelledError:
+            return
+        except (ValueError, OSError) as exc:
+            self._append_system(f"Queued follow-up could not start: {exc}")
+
+    async def _drain_local_queue(self, run_id: str) -> None:
+        owner = asyncio.current_task()
+        try:
+            queued, cancelled = await settle_finalization(asyncio.create_task(self.run_store.take_queued_message(run_id)))
+            if cancelled:
+                await settle_finalization(asyncio.create_task(self.run_store.release_queued_message(run_id, queued, cancelled=True)))
+            elif queued is not None:
+                await self._dispatch_queued_followup(run_id, queued, owner)
+        finally:
+            if self._active_task is owner:
+                self._active_task = None
 
     async def _stream_daemon_response(
         self,
@@ -1815,6 +1904,7 @@ class LibreClawApp(App[None]):
             start = self.daemon_client.start_run
             if self._resumed_run_id and hasattr(self.daemon_client, "continue_run"):
                 async def start(message: str, **payload: Any) -> dict[str, Any]:
+                    payload.pop("session", None)
                     return await self.daemon_client.continue_run(self._resumed_run_id, message, **payload)
             started = await start(
                 user_message,
@@ -2070,13 +2160,18 @@ class LibreClawApp(App[None]):
                 run_summary = self.transcript[current_assistant_index].content
             self._pending_permission = None
             self._hide_permission_prompt()
-            self._active_task = None
             self._goal_description = None
             self._goal_turn = 0
             self._update_status()
-            queued = await self._finish_active_run(run_state, summary=run_summary)
-            if queued is not None:
-                self.call_later(self.handle_user_input, queued["message"])
+            owner = asyncio.current_task()
+            try:
+                run_id = self._active_run_id
+                queued = await self._finish_local_turn(run_state, summary=run_summary)
+                if queued is not None:
+                    await self._dispatch_queued_followup(run_id, queued, owner)
+            finally:
+                if self._active_task is owner:
+                    self._active_task = None
             self.query_one("#input", Input).focus()
 
     def _handle_agent_stream_event(
@@ -6242,7 +6337,9 @@ def _usage_requires_argument(usage: str) -> bool:
 
 
 def _format_usage_cost(usage: Usage) -> str:
-    if usage.cost is None or usage.cost == 0:
+    if usage.cost is None:
+        return "unknown"
+    if usage.cost == 0:
         return "$0.00"
     if usage.cost < 0.01:
         return f"${usage.cost:.6f}"

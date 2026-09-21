@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 import shutil
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
@@ -89,6 +91,7 @@ async def stream_codex_command(
         stdin=asyncio.subprocess.PIPE if input_text is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=os.name == "posix",
     )
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
@@ -98,43 +101,67 @@ async def stream_codex_command(
         if reader is None:
             await queue.put(None)
             return
-        while True:
-            chunk = await reader.readline()
-            if not chunk:
-                await queue.put(None)
-                return
-            text = chunk.decode("utf-8", "replace")
-            if stream == "stdout":
-                stdout_chunks.append(text)
-            else:
-                stderr_chunks.append(text)
-            await queue.put(CodexCommandEvent(stream=stream, text=text))
+        try:
+            while True:
+                chunk = await reader.readline()
+                if not chunk:
+                    return
+                text = chunk.decode("utf-8", "replace")
+                if stream == "stdout":
+                    stdout_chunks.append(text)
+                else:
+                    stderr_chunks.append(text)
+                await queue.put(CodexCommandEvent(stream=stream, text=text))
+        finally:
+            await queue.put(None)
 
     readers = [
         asyncio.create_task(read_stream(process.stdout, "stdout")),
         asyncio.create_task(read_stream(process.stderr, "stderr")),
     ]
-    if input_text is not None and process.stdin is not None:
-        process.stdin.write(input_text.encode("utf-8"))
-        await process.stdin.drain()
-        process.stdin.close()
+    finished = False
+    try:
+        if input_text is not None and process.stdin is not None:
+            process.stdin.write(input_text.encode("utf-8"))
+            await process.stdin.drain()
+            process.stdin.close()
 
-    completed_readers = 0
-    while completed_readers < len(readers):
-        event = await queue.get()
-        if event is None:
-            completed_readers += 1
-            continue
-        yield event
+        completed_readers = 0
+        while completed_readers < len(readers):
+            event = await queue.get()
+            if event is None:
+                completed_readers += 1
+                continue
+            yield event
 
-    await asyncio.gather(*readers)
-    exit_code = await process.wait()
-    yield CodexCommandResult(
-        args=tuple(args),
-        exit_code=exit_code,
-        stdout="".join(stdout_chunks),
-        stderr="".join(stderr_chunks),
-    )
+        await asyncio.gather(*readers)
+        exit_code = await process.wait()
+        finished = True
+        yield CodexCommandResult(
+            args=tuple(args),
+            exit_code=exit_code,
+            stdout="".join(stdout_chunks),
+            stderr="".join(stderr_chunks),
+        )
+    finally:
+        if not finished:
+            await _stop_codex_process(process)
+        for reader in readers:
+            if not reader.done():
+                reader.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
+
+
+async def _stop_codex_process(process: asyncio.subprocess.Process) -> None:
+    # Each invocation owns its process group, including shell commands started by the CLI.
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        elif process.returncode is None:
+            process.kill()
+    except ProcessLookupError:
+        pass
+    await process.wait()
 
 
 async def run_codex_command(
@@ -155,21 +182,25 @@ async def run_codex_command(
         stdin=asyncio.subprocess.PIPE if input_text is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=os.name == "posix",
     )
+    completed = False
     try:
         stdout, stderr = await asyncio.wait_for(
             process.communicate(input_text.encode("utf-8") if input_text is not None else None),
             timeout=timeout,
         )
+        completed = True
     except TimeoutError:
-        process.kill()
-        await process.wait()
         return CodexCommandResult(
             args=tuple(args),
             exit_code=124,
             stdout="",
             stderr=f"Codex command timed out after {timeout} seconds.",
         )
+    finally:
+        if not completed:
+            await _stop_codex_process(process)
 
     return CodexCommandResult(
         args=tuple(args),

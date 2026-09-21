@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from libre_claw.core.runs import RunStore
+from libre_claw.providers.base import Usage, combine_usage
 from libre_claw.core.usage import (
     OPENROUTER_ANALYTICS_URL,
     load_usage_records,
@@ -73,3 +74,28 @@ def test_openrouter_attribution_and_presets_text_are_actionable() -> None:
     assert "--refresh" in presets
     assert "/model openrouter:<model-id> --global" in presets
     assert "/usage openrouter" in presets
+
+
+def test_combined_usage_keeps_unreported_cost_unknown() -> None:
+    known = Usage(input_tokens=5, output_tokens=2, cost=0.01)
+    unknown = Usage(input_tokens=7, output_tokens=3)
+    for left, right in ((known, unknown), (unknown, known)):
+        combined = combine_usage(left, right)
+        assert combined.total_tokens == 17
+        assert combined.cost is None
+    assert combine_usage(Usage(cost=0.0), known).cost == 0.01
+    assert combine_usage(known, known).cost == 0.02
+    assert combine_usage(None, known) is known
+
+
+async def test_cost_rollups_do_not_present_partial_cost_as_total(tmp_path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run = await store.create_run("Mixed accounting", kind="chat", provider="openrouter", model="lab/model")
+    await store.append_event(run.run_id, "usage", {"input_tokens": 10, "output_tokens": 2, "cost": 0.02})
+    await store.append_event(run.run_id, "usage", {"input_tokens": 20, "output_tokens": 4})
+    records = await load_usage_records(store)
+    payload = usage_summary_payload(records)
+    assert payload["total_tokens"] == 36
+    assert payload["cost"] is None
+    assert payload["by_model"][0]["cost"] is None
+    assert "Cost: unknown" in usage_report_text(records)

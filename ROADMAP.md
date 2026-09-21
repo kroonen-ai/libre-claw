@@ -28,8 +28,10 @@ its existing features from additions available on the main branch.
 - Plan-only execution, editable steps, queued follow-ups, and live steering.
 - Scoped subagents with separate sessions, inherited permissions, bounded work,
   cancellation, and coordinated file ownership.
-- Fixed coding fixtures, offline harness checks in CI, and an initial two-task
-  live smoke test with separate scripted recovery validation.
+- Fixed coding and review fixtures, offline harness checks in CI, and a bounded
+  two-provider comparison with immutable source/fixture hashes and durable
+  recovery validation.
+- Explicit recovery of saved subagents with retained budgets and ownership checks.
 
 Command syntax and current limits are in the [coding workflow guide](docs/CODING_WORKFLOWS.md).
 The [implementation checklist](docs/CODING_WORKFLOW_CHECKLIST.md) records final
@@ -39,8 +41,8 @@ integration verification. These additions have not been published as a new relea
 
 - Run broader repeated coding evaluations across configured providers; the small
   smoke suite does not establish comparative model quality.
-- Extend delegated execution beyond scoped file tools while preserving ownership
-  and permission guarantees, and recover interrupted worker processes.
+- Extend delegated execution beyond scoped file tools while preserving ownership,
+  permission, and exact budget guarantees for native provider runtimes.
 - Harden daemon authentication for remote deployments.
 - Add packaged releases and signed binaries.
 - Expand MCP interoperability tests with common local servers.

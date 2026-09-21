@@ -386,3 +386,214 @@ async def test_done_worktree_placeholder_does_not_block_launch(harness, tmp_path
     assert (await server.run_store.load_run(run_id)).working_directory == worktree.path
     controller.release("isolated")
     await wait_idle(server, run_id)
+
+
+async def saved_worktree_task(server: DaemonServer, worktree, *, nested: bool = False):
+    workspace = Path(worktree.path)
+    if nested:
+        workspace = workspace / "component"
+        workspace.mkdir(exist_ok=True)
+    run = await server.run_store.create_run(
+        "Older task in this checkout", kind="chat", provider="openai", model="test-model",
+        working_directory=workspace, state="done",
+    )
+    await server.run_store.save_session(run.run_id, Session())
+    return run
+
+
+async def test_older_task_continuation_rejects_checkout_owned_by_new_task(harness, tmp_path: Path) -> None:
+    server, controller = harness
+    worktree = await managed_checkout(server, tmp_path)
+    old = await saved_worktree_task(server, worktree, nested=True)
+    response = await server.start_run(Request({"message": "new owner", "worktree_id": worktree.worktree_id}))
+    assert response.status == 202
+    owner_id = json.loads(response.text)["run"]["run_id"]
+    await controller.wait_started("new owner")
+    response = await server.continue_run(Request({"message": "old continuation"}, old.run_id))
+    assert response.status == 409
+    assert owner_id in json.loads(response.text)["error"]
+    assert controller.calls == ["new owner"]
+    assert (await server.run_store.load_run(old.run_id)).state == "done"
+    controller.release("new owner")
+    await wait_idle(server, owner_id)
+
+
+async def test_old_task_queue_waits_without_claim_until_checkout_owner_finishes(harness, tmp_path: Path, monkeypatch) -> None:
+    from libre_claw.web.workflow_api import WorkspaceBusyError
+    server, controller = harness
+    worktree = await managed_checkout(server, tmp_path)
+    old = await saved_worktree_task(server, worktree, nested=True)
+    response = await server.start_run(Request({"message": "new owner", "worktree_id": worktree.worktree_id}))
+    owner_id = json.loads(response.text)["run"]["run_id"]
+    await controller.wait_started("new owner")
+    busy = asyncio.Event()
+    original = server.workflows.assert_idle
+    async def observe_busy(*paths, **kwargs):
+        try:
+            await original(*paths, **kwargs)
+        except WorkspaceBusyError:
+            busy.set()
+            raise
+    monkeypatch.setattr(server.workflows, "assert_idle", observe_busy)
+    await queue(server, old.run_id, "queued old task")
+    await asyncio.wait_for(busy.wait(), 5)
+    assert [item["message"] for item in await server.run_store.queued_messages(old.run_id)] == ["queued old task"]
+    assert not any(event.type == "queued_message_started" for event in await server.run_store.load_events(old.run_id))
+    assert (await server.run_store.load_run(old.run_id)).state == "done"
+    assert controller.calls == ["new owner"]
+    controller.release("new owner")
+    await controller.wait_started("queued old task")
+    assert not await server.run_store.queued_messages(old.run_id)
+    assert controller.max_active == 1
+    controller.release("queued old task")
+    await wait_idle(server, old.run_id)
+    await wait_idle(server, owner_id)
+
+
+@pytest.mark.parametrize("winner", ["continue", "new"])
+async def test_continuation_and_new_worktree_launch_share_one_checkout_claim(harness, tmp_path: Path, monkeypatch, winner: str) -> None:
+    server, controller = harness
+    worktree = await managed_checkout(server, tmp_path)
+    old = await saved_worktree_task(server, worktree)
+    entered, proceed, competitor_waiting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original_lock = server._run_start_lock
+    class ObservedLock:
+        def __init__(self):
+            self.lock = asyncio.Lock()
+            self.attempts = 0
+        async def __aenter__(self):
+            self.attempts += 1
+            if self.attempts == 2:
+                competitor_waiting.set()
+            await self.lock.acquire()
+        async def __aexit__(self, *args):
+            self.lock.release()
+    checkout_lock = ObservedLock()
+    monkeypatch.setattr(server, "_run_start_lock", lambda key: checkout_lock if key == f"worktree:{worktree.worktree_id}" else original_lock(key))
+    if winner == "continue":
+        original = server.run_store.set_runtime
+        async def hold_runtime(*args, **kwargs):
+            entered.set()
+            await proceed.wait()
+            return await original(*args, **kwargs)
+        monkeypatch.setattr(server.run_store, "set_runtime", hold_runtime)
+    else:
+        original = server.run_store.create_run
+        async def hold_creation(*args, **kwargs):
+            entered.set()
+            await proceed.wait()
+            return await original(*args, **kwargs)
+        monkeypatch.setattr(server.run_store, "create_run", hold_creation)
+    def launch(kind: str):
+        if kind == "continue":
+            return server.continue_run(Request({"message": "continued work"}, old.run_id))
+        return server.start_run(Request({"message": "new work", "worktree_id": worktree.worktree_id}))
+    first = asyncio.create_task(launch(winner))
+    await asyncio.wait_for(entered.wait(), 5)
+    second = asyncio.create_task(launch("new" if winner == "continue" else "continue"))
+    await asyncio.wait_for(competitor_waiting.wait(), 5)
+    proceed.set()
+    responses = await asyncio.wait_for(asyncio.gather(first, second), 5)
+    assert [response.status for response in responses] == [202, 409]
+    message = "continued work" if winner == "continue" else "new work"
+    await controller.wait_started(message)
+    assert controller.calls == [message]
+    controller.release(message)
+    await wait_idle(server, json.loads(responses[0].text)["run"]["run_id"])
+
+
+@pytest.mark.parametrize("state", ["queued", "running", "blocked"])
+async def test_managed_resume_and_queue_respect_durable_local_tui_owner(harness, tmp_path: Path, monkeypatch, state: str) -> None:
+    from libre_claw.web.workflow_api import WorkspaceBusyError
+    server, controller = harness
+    worktree = await managed_checkout(server, tmp_path)
+    old = await saved_worktree_task(server, worktree)
+    nested = Path(worktree.path) / "local-component"
+    nested.mkdir()
+    local = await server.run_store.create_run(
+        "Local TUI owner", kind="chat", provider="openai", model="test-model", working_directory=nested, state=state,
+    )
+    response = await server.continue_run(Request({"message": "conflicting continuation"}, old.run_id))
+    assert response.status == 409
+    assert local.run_id in json.loads(response.text)["error"]
+    busy = asyncio.Event()
+    original = server.workflows.assert_idle
+    async def observe_busy(*paths, **kwargs):
+        try:
+            await original(*paths, **kwargs)
+        except WorkspaceBusyError:
+            busy.set()
+            raise
+    monkeypatch.setattr(server.workflows, "assert_idle", observe_busy)
+    await queue(server, old.run_id, "wait for local owner")
+    await asyncio.wait_for(busy.wait(), 5)
+    assert controller.calls == []
+    assert len(await server.run_store.queued_messages(old.run_id)) == 1
+    await server.run_store.update_state(local.run_id, "done")
+    await controller.wait_started("wait for local owner")
+    assert controller.max_active == 1
+    controller.release("wait for local owner")
+    await wait_idle(server, old.run_id)
+
+
+async def test_cancel_waiting_checkout_queue_is_responsive_and_preserves_message(harness, tmp_path: Path, monkeypatch) -> None:
+    from libre_claw.web.workflow_api import WorkspaceBusyError
+    server, controller = harness
+    worktree = await managed_checkout(server, tmp_path)
+    old = await saved_worktree_task(server, worktree)
+    local = await server.run_store.create_run("Local owner", kind="chat", provider="openai", model="test-model", working_directory=worktree.path, state="running")
+    busy = asyncio.Event()
+    original = server.workflows.assert_idle
+    async def observe_busy(*paths, **kwargs):
+        try:
+            await original(*paths, **kwargs)
+        except WorkspaceBusyError:
+            busy.set()
+            raise
+    monkeypatch.setattr(server.workflows, "assert_idle", observe_busy)
+    await queue(server, old.run_id, "keep queued")
+    await asyncio.wait_for(busy.wait(), 5)
+    wakeup = server._queue_wakeups[old.run_id]
+    response = await asyncio.wait_for(server.cancel_run(Request({}, old.run_id)), 1)
+    assert response.status == 200
+    await asyncio.gather(wakeup, return_exceptions=True)
+    await server.run_store.update_state(local.run_id, "done")
+    assert [item["message"] for item in await server.run_store.queued_messages(old.run_id)] == ["keep queued"]
+    assert controller.calls == []
+    assert (await server.run_store.load_run(old.run_id)).state == "cancelled"
+
+
+async def test_unmanaged_workspace_still_allows_independent_concurrent_tasks(harness) -> None:
+    server, controller = harness
+    first = await start(server, "first independent task")
+    second = await start(server, "second independent task")
+    await controller.wait_started("first independent task")
+    await controller.wait_started("second independent task")
+    assert controller.max_active == 2
+    controller.release("first independent task")
+    controller.release("second independent task")
+    await wait_idle(server, first)
+    await wait_idle(server, second)
+
+
+async def test_shutdown_does_not_wait_for_external_owner_or_claim_waiting_queue(harness, tmp_path: Path, monkeypatch) -> None:
+    from libre_claw.web.workflow_api import WorkspaceBusyError
+    server, controller = harness
+    worktree = await managed_checkout(server, tmp_path)
+    old = await saved_worktree_task(server, worktree)
+    await server.run_store.create_run("Local owner", kind="chat", provider="openai", model="test-model", working_directory=worktree.path, state="running")
+    busy = asyncio.Event()
+    original = server.workflows.assert_idle
+    async def observe_busy(*paths, **kwargs):
+        try:
+            await original(*paths, **kwargs)
+        except WorkspaceBusyError:
+            busy.set()
+            raise
+    monkeypatch.setattr(server.workflows, "assert_idle", observe_busy)
+    await queue(server, old.run_id, "still queued after shutdown")
+    await asyncio.wait_for(busy.wait(), 5)
+    await asyncio.wait_for(server._on_cleanup(None), 1)
+    assert [item["message"] for item in await server.run_store.queued_messages(old.run_id)] == ["still queued after shutdown"]
+    assert controller.calls == []
+    assert server._queue_wakeups == {}

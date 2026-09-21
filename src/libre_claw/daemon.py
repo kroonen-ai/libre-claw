@@ -8,7 +8,7 @@ import contextlib
 import json
 import re
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from importlib.resources import files
 from pathlib import Path
@@ -70,7 +70,7 @@ from libre_claw.core.usage import (
     usage_summary_payload,
 )
 from libre_claw.core.agent import AgentSubagentUpdate
-from libre_claw.core.task_control import update_plan, plan_text
+from libre_claw.core.task_control import update_plan, plan_text, request_subagent_resume, saved_subagent_snapshots
 from libre_claw.core.session import ChatMessage, UserAttachment, session_from_payload, session_to_payload, text_block
 from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
 from libre_claw.kimi import normalize_moonshot_selection
@@ -87,7 +87,8 @@ from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limi
 from libre_claw.telegram.formatting import clean_final_answer_for_telegram, plain_text_chunks, telegram_html_chunks
 from libre_claw.tools_builtin import create_builtin_registry
 from libre_claw.web import dashboard_html
-from libre_claw.web.workflow_api import WorkflowAPI
+from libre_claw.core.worktrees import ManagedWorktree
+from libre_claw.web.workflow_api import WorkflowAPI, WorkspaceBusyError
 
 
 ProviderFactory = Callable[[LibreClawConfig], LLMProvider]
@@ -617,31 +618,38 @@ class DaemonServer:
             run_config = await self._config_for_payload(payload)
         except ValueError as exc:
             return _json_error(str(exc), status=403)
-        if payload.get("worktree_id"):
-            # The owner changes when a new run is attached, so a per-run lock
-            # cannot serialize two simultaneous launches into this checkout.
-            async with self._run_start_lock(f"worktree:{payload['worktree_id']}"):
-                return await self._start_run_in_workspace(payload, message, kind, run_config)
-        return await self._start_run_in_workspace(payload, message, kind, run_config)
+        try:
+            worktree = None
+            if payload.get("worktree_id"):
+                worktree = await self.workflows.worktrees.get(str(payload["worktree_id"]))
+                run_config = replace(run_config, general=replace(run_config.general, working_directory=Path(worktree.path)))
+            async with self._claim_managed_workspace(run_config.general.working_directory, worktree=worktree) as managed:
+                return await self._start_run_in_workspace(payload, message, kind, run_config, worktree=managed)
+        except (ValueError, OSError) as exc:
+            return _json_error(str(exc), status=409)
+
+    @contextlib.asynccontextmanager
+    async def _claim_managed_workspace(
+        self, workspace: Path, *, exclude_run_id: str | None = None, worktree: ManagedWorktree | None = None,
+    ) -> AsyncIterator[ManagedWorktree | None]:
+        directory = Path(workspace).expanduser().resolve()
+        if worktree is None:
+            worktree = next((record for record in await self.workflows.worktrees.list() if directory.is_relative_to(Path(record.path).resolve())), None)
+        if worktree is None:
+            yield None
+            return
+        # The checkout is the shared resource: older tasks retain this path
+        # even after a new task becomes the worktree record's current owner.
+        async with self._run_start_lock(f"worktree:{worktree.worktree_id}"):
+            await self.workflows.assert_idle(Path(worktree.path), exclude_run_id=exclude_run_id)
+            yield worktree
 
     async def _start_run_in_workspace(
         self, payload: Mapping[str, Any], message: str, kind: str, run_config: LibreClawConfig,
+        *, worktree: ManagedWorktree | None = None,
     ) -> web.Response:
         if self._closing:
             return _json_error("The daemon is shutting down.", status=503)
-        worktree = None
-        if payload.get("worktree_id"):
-            try:
-                worktree = await self.workflows.worktrees.get(str(payload["worktree_id"]))
-                existing = self.active_runs.get(worktree.run_id)
-                if existing and not existing.task.done():
-                    raise ValueError("The worktree is already in use by an active task.")
-                # Include durable tasks owned by the local TUI or another
-                # surface, including tasks rooted below the Git checkout.
-                await self.workflows.assert_idle(Path(worktree.path))
-                run_config = replace(run_config, general=replace(run_config.general, working_directory=Path(worktree.path)))
-            except (ValueError, OSError) as exc:
-                return _json_error(str(exc), status=409)
         run = await self.run_store.create_run(
             message,
             kind=cast(RunKind, kind),
@@ -704,6 +712,7 @@ class DaemonServer:
         """Catch queue additions after a turn's final claim and start explicitly queued idle work."""
         try:
             while not self._closing:
+                workspace_busy = False
                 async with self._run_start_lock(run_id):
                     active = self.active_runs.get(run_id)
                     if active is None or active.task.done():
@@ -718,15 +727,28 @@ class DaemonServer:
                             if not workspace.is_dir():
                                 raise ValueError("The saved task workspace no longer exists.")
                             config = replace(config, general=replace(config.general, working_directory=workspace))
-                        session = await self.run_store.load_session(run_id, recover=True)
-                        queued = await self.run_store.take_queued_message(run_id)
-                        if queued is None or self._closing:
-                            return
-                        run = await self.run_store.update_state(run_id, "queued")
-                        self._active_sessions[run_id] = session
-                        task = asyncio.create_task(self._run_agent(run, queued["message"], config, surface="daemon:queue", session=session, continuation=True))
-                        active = self._register_active(run_id, task, "daemon:queue")
-                    task = active.task
+                        try:
+                            async with self._claim_managed_workspace(config.general.working_directory, exclude_run_id=run_id):
+                                if self._closing:
+                                    return
+                                session = await self.run_store.load_session(run_id, recover=True)
+                                queued = await self.run_store.take_queued_message(run_id)
+                                if queued is None:
+                                    return
+                                run = await self.run_store.update_state(run_id, "queued")
+                                self._active_sessions[run_id] = session
+                                task = asyncio.create_task(self._run_agent(run, queued["message"], config, surface="daemon:queue", session=session, continuation=True))
+                                active = self._register_active(run_id, task, "daemon:queue")
+                        except WorkspaceBusyError:
+                            workspace_busy = True
+                    task = active.task if active is not None else None
+                if workspace_busy:
+                    # Neither the task lock nor the checkout lock is held while
+                    # waiting; cancellation and durable local-TUI owners remain responsive.
+                    await asyncio.sleep(0.1)
+                    continue
+                if task is None:
+                    return
                 # An explicit cancellation must leave untouched follow-ups queued for later resume.
                 await asyncio.shield(task)
                 run = await self.run_store.load_run(run_id)
@@ -746,7 +768,22 @@ class DaemonServer:
         session = self._active_sessions.get(run_id)
         if session is None:
             session = await self.run_store.load_session(run_id)
-        return web.json_response({"run": _run_payload(run), "session": session_to_payload(session), "queued": await self.run_store.queued_messages(run_id)})
+        active_agent = self._active_agents.get(run_id)
+        manager = active_agent.subagents if active_agent is not None else None
+        workers = manager.snapshots() if manager is not None else saved_subagent_snapshots(session)
+        pending = {item["id"] for item in session.pending_subagent_resumes}
+        active = self.active_runs.get(run_id)
+        wakeup = self._queue_wakeups.get(run_id)
+        processing = (active is not None and not active.task.done()) or (wakeup is not None and not wakeup.done())
+        for worker in workers:
+            worker["resume_pending"] = worker["id"] in pending and processing
+        queued = await self.run_store.queued_messages(run_id)
+        if getattr(request, "query", {}).get("controls") in {"1", "true"}:
+            session_payload = {"mode": session.mode, "plan_steps": session.plan_steps}
+            queued = [{**item, "message": item["message"][:1000], "truncated": len(item["message"]) > 1000} for item in queued]
+        else:
+            session_payload = session_to_payload(session)
+        return web.json_response({"run": _run_payload(run), "session": session_payload, "queued": queued, "subagents": workers})
 
     async def control_run(self, request: web.Request) -> web.Response:
         async with self._run_start_lock(request.match_info["run_id"]):
@@ -763,18 +800,36 @@ class DaemonServer:
                 raise ValueError("Request body must be a JSON object.")
             action = str(payload.get("action", ""))
             value = str(payload.get("text", "")).strip()
-            if action in {"agents", "agent_cancel"}:
+            if action in {"agents", "agent_cancel", "agent_resume"}:
                 agent = self._active_agents.get(run_id)
                 manager = agent.subagents if agent is not None else None
+                session = self._active_sessions.get(run_id)
+                if session is None:
+                    session = await self.run_store.load_session(run_id)
                 if action == "agent_cancel":
                     if manager is None:
                         raise ValueError("No active subagents for this task.")
                     await manager.cancel(value)
+                    await self.run_store.save_session(run_id, session)
+                elif action == "agent_resume":
+                    agent_id = value.split(maxsplit=1)[0] if value else ""
+                    if manager is not None and any(item["id"] == agent_id and item["status"] in {"running", "blocked"} for item in manager.snapshots()):
+                        raise ValueError("This worker is already running.")
+                    agent_id, guidance = request_subagent_resume(session, value)
+                    await self.run_store.save_session(run_id, session)
+                    await self.run_store.append_event(run_id, "subagent_resume_requested", {"id": agent_id, "guidance": guidance})
+                    active = self.active_runs.get(run_id)
+                    if active is None or active.task.done() or (agent is not None and not getattr(agent, "accepting_control", False)):
+                        await self.run_store.queue_message(run_id, f"Resume saved worker {agent_id}, wait for its result, and report the outcome.")
+                        self._schedule_queue_wakeup(run_id)
+                    return web.json_response({"text": f"Worker {agent_id} resume queued for the next safe boundary.", "subagents": manager.snapshots() if manager else saved_subagent_snapshots(session)})
                 if manager is not None:
                     snapshots = manager.snapshots()
                 else:
-                    latest = {event.data.get("id"): event.data for event in await self.run_store.load_events(run_id) if event.type == "subagent_update"}
-                    snapshots = list(latest.values())
+                    snapshots = saved_subagent_snapshots(session)
+                    if not snapshots:
+                        latest = {event.data.get("id"): event.data for event in await self.run_store.load_events(run_id) if event.type == "subagent_update"}
+                        snapshots = list(latest.values())
                 text = "\n".join(f"{item['id']}: {item['status']} - {item['task']}\n{item.get('output', '')[:1000]}" for item in snapshots) or "No subagents for this task."
                 return web.json_response({"text": text, "subagents": snapshots})
             if action == "queue":
@@ -791,6 +846,9 @@ class DaemonServer:
                 if not value:
                     raise ValueError("A steering instruction is required.")
                 session.queue_steering(value)
+                active_agent = self._active_agents.get(run_id)
+                if active_agent is not None and active_agent.subagents is not None:
+                    active_agent.subagents.steer(value)
                 response = "Steering queued for the next safe boundary."
             elif action == "plan":
                 response = update_plan(session, value)
@@ -848,24 +906,31 @@ class DaemonServer:
             if not workspace.is_dir():
                 return _json_error("The saved task workspace no longer exists.", status=409)
             run_config = replace(run_config, general=replace(run_config.general, working_directory=workspace))
-        surface = str(payload.get("surface", "daemon")).strip() or "daemon"
-        attachments = _attachments_from_payload(payload.get("attachments"))
-        run = await self.run_store.set_runtime(run_id, provider=run_config.general.default_provider, model=run_config.general.default_model)
-        run = await self.run_store.update_state(run_id, "queued")
-        task = asyncio.create_task(
-            self._run_agent(
-                run,
-                message,
-                run_config,
-                surface=surface,
-                session=session,
-                attachments=attachments,
-                continuation=True,
-            )
-        )
-        self._active_sessions[run.run_id] = session
-        self._register_active(run.run_id, task, surface)
-        return web.json_response({"run": _run_payload(run)}, status=202)
+        try:
+            async with self._claim_managed_workspace(run_config.general.working_directory, exclude_run_id=run_id):
+                if self._closing:
+                    return _json_error("The daemon is shutting down.", status=503)
+                surface = str(payload.get("surface", "daemon")).strip() or "daemon"
+                attachments = _attachments_from_payload(payload.get("attachments"))
+                run = await self.run_store.set_runtime(run_id, provider=run_config.general.default_provider, model=run_config.general.default_model)
+                run = await self.run_store.update_state(run_id, "queued")
+                task = asyncio.create_task(
+                    self._run_agent(
+                        run,
+                        message,
+                        run_config,
+                        surface=surface,
+                        session=session,
+                        attachments=attachments,
+                        continuation=True,
+                    )
+                )
+                self._active_sessions[run.run_id] = session
+                self._register_active(run.run_id, task, surface)
+                return web.json_response({"run": _run_payload(run)}, status=202)
+
+        except (ValueError, OSError) as exc:
+            return _json_error(str(exc), status=409)
 
     async def cancel_run(self, request: web.Request) -> web.Response:
         async with self._run_start_lock(request.match_info["run_id"]):

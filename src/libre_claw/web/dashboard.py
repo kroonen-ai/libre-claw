@@ -1422,6 +1422,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
     .workflow-panel button:disabled { opacity: .5; cursor: default; }
     .workflow-card { padding: 14px; border: 1px solid var(--line); border-radius: 12px; margin: 12px 0; overflow: hidden; }
     .workflow-card p, .workflow-card .hint { overflow-wrap: anywhere; }
+    .worker-results { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto; font-size: 12px; }
+    .worker-meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 12px; margin: 12px 0; font-size: 12px; }
+    .worker-meta dt { color: var(--muted); }
+    .worker-meta dd { margin: 0; overflow-wrap: anywhere; }
+    .worker-error { color: var(--danger); }
     .workflow-panel .hint { color: var(--muted); font-size: 12px; margin: 10px 0; }
     .plan-steps { padding-left: 24px; }
     .plan-steps li { margin: 10px 0; }
@@ -1534,6 +1539,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         <form id="planForm" class="workflow-row"><input id="planNewStep" aria-label="New plan step" placeholder="Add a step" required><button type="submit">Add step</button></form>
         <ol id="planSteps" class="plan-steps"></ol>
         <h3>Queued follow-ups</h3><div id="queuedMessages"></div>
+        <h3>Workers</h3><p class="hint" id="workerStatus">Select a task to inspect its workers.</p><div id="taskWorkers" aria-label="Task workers"></div>
       </section>
       <section class="workflow-panel" id="changesPanel" aria-label="Code changes" hidden>
         <div class="workflow-row"><h2>Changes</h2><select id="reviewScope" aria-label="Review scope"><option value="unstaged">Unstaged</option><option value="staged">Staged</option><option value="branch">Branch</option><option value="last-turn">Last turn</option></select><input id="reviewBase" aria-label="Base branch or commit" placeholder="Base branch or commit" hidden><button id="refreshReview" type="button">Refresh</button><button id="analyzeReview" type="button">Independent review</button></div>
@@ -1923,6 +1929,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
         notation: "compact",
         maximumFractionDigits: number >= 1000000 ? 1 : 0,
       }).format(number);
+    }
+
+    function formatCost(value, digits = 4) {
+      if (value == null || value === "" || !Number.isFinite(Number(value))) return "unknown";
+      return `$${Number(value).toFixed(digits)}`;
     }
 
     function formatExactNumber(value) {
@@ -2559,8 +2570,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (event.type === "usage") {
         const input = data.usage?.input_tokens ?? data.input_tokens ?? 0;
         const output = data.usage?.output_tokens ?? data.output_tokens ?? 0;
-        const cost = data.cost_usd ?? data.cost ?? 0;
-        return `input: ${formatExactNumber(input)}\noutput: ${formatExactNumber(output)}\ncost: $${Number(cost || 0).toFixed(6)}`;
+        const cost = data.cost_usd ?? data.cost;
+        return `input: ${formatExactNumber(input)}\noutput: ${formatExactNumber(output)}\ncost: ${formatCost(cost, 6)}`;
       }
       if (event.type === "run_started") return data.title || data.message || "";
       if (event.type === "run_finished") return data.summary || data.state || "";
@@ -2858,7 +2869,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         $("usagePaneTokensExact").textContent = `${formatExactNumber(summary.total_tokens)} total`;
         $("usagePaneRequests").textContent = formatExactNumber(summary.requests);
         $("usagePaneRuns").textContent = `${formatExactNumber(summary.runs)} runs`;
-        $("usagePaneCost").textContent = `$${Number(summary.cost || 0).toFixed(4)}`;
+        $("usagePaneCost").textContent = formatCost(summary.cost);
         usageTable(
           $("usageByModel"),
           ["Model", "Requests", "Input", "Output", "Total", "Cost"],
@@ -2868,7 +2879,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
             formatCompactNumber(group.input_tokens),
             formatCompactNumber(group.output_tokens),
             formatCompactNumber(group.total_tokens),
-            `$${Number(group.cost || 0).toFixed(4)}`,
+            formatCost(group.cost),
           ]),
         );
         usageTable(
@@ -2878,7 +2889,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
             record.title || record.run_id,
             `${record.provider}:${record.model}`,
             formatCompactNumber(record.total_tokens),
-            `$${Number(record.cost || 0).toFixed(4)}`,
+            formatCost(record.cost),
             formatShortTime(record.timestamp),
           ]),
         );
@@ -2955,7 +2966,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     syncModelDatalist($("configProvider"), $("configModel"));
     syncModelDatalist($("automationProvider"), $("automationModel"));
 
-    const workflow = { review: null, reviewContext: {}, comments: [], reviewGeneration: 0, planGeneration: 0, planSignature: "", worktrees: [], transfer: null };
+    const workflow = { review: null, reviewContext: {}, comments: [], reviewGeneration: 0, planGeneration: 0, planSignature: "", workerSignature: "", workers: [], workerDrafts: new Map(), workerPending: new Set(), worktrees: [], transfer: null };
 
     function workflowButton(label, action, className = "") {
       const button = document.createElement("button");
@@ -3115,14 +3126,82 @@ _DASHBOARD_HTML = r"""<!doctype html>
       } catch (error) { setNotice(error.message || String(error), true); return false; }
     }
 
+    function workerControls(worker) {
+      const remaining = (maximum, used) => typeof maximum === "number" && Number.isFinite(maximum) && typeof used === "number" && Number.isFinite(used) ? Math.max(0, maximum - used) : null;
+      const tools = remaining(worker.max_tool_calls, worker.tool_calls), seconds = remaining(worker.max_seconds, worker.elapsed_seconds);
+      const active = ["running", "blocked"].includes(worker.status), recoverable = ["interrupted", "failed", "cancelled"].includes(worker.status);
+      const pending = Boolean(worker.resume_pending);
+      return { tools, seconds, active, pending, canResume: recoverable && !pending && tools !== null && tools > 0 && seconds !== null && seconds > 0 };
+    }
+
+    async function sendWorkerControl(runId, worker, action, guidance = "") {
+      if (runId !== state.selectedRunId) return;
+      const key = `${runId}/${worker.id}`;
+      if (workflow.workerPending.has(key)) return;
+      workflow.workerPending.add(key); renderWorkers(workflow.workers, true);
+      try {
+        const text = action === "agent_resume" ? `${worker.id} ${guidance.trim()}`.trim() : worker.id;
+        const payload = await request(`/runs/${runId}/control`, { method: "POST", body: JSON.stringify({action, text}) });
+        if (runId !== state.selectedRunId) return;
+        if (action === "agent_resume") { workflow.workerDrafts.delete(key); worker.resume_pending = true; }
+        setNotice(payload.text || "Worker updated.");
+        if (Array.isArray(payload.subagents)) workflow.workers = payload.subagents.map(item => action === "agent_resume" && item.id === worker.id && !["running", "blocked", "done"].includes(item.status) ? {...item, resume_pending: true} : item);
+        await loadPlan(true);
+      } catch (error) { setNotice(error.message || String(error), true); }
+      finally { workflow.workerPending.delete(key); if (runId === state.selectedRunId) renderWorkers(workflow.workers, true); }
+    }
+
+    function renderWorkers(workers, force = false) {
+      const runId = state.selectedRunId, signature = JSON.stringify([runId, workers, [...workflow.workerPending]]);
+      if (!force && signature === workflow.workerSignature) return;
+      workflow.workerSignature = signature; workflow.workers = workers;
+      const focused = document.activeElement, focusedKey = focused?.dataset?.workerGuidance;
+      const selection = focusedKey ? [focused.selectionStart, focused.selectionEnd] : null;
+      const container = $("taskWorkers"); container.replaceChildren();
+      $("workerStatus").textContent = workers.length ? "Resume continues a saved worker with its remaining budget." : "No workers for this task.";
+      let restoreFocus = null;
+      for (const worker of workers) {
+        const key = `${runId}/${worker.id}`, controls = workerControls(worker), pending = workflow.workerPending.has(key);
+        const card = document.createElement("article"); card.className = "workflow-card"; card.dataset.workerId = worker.id;
+        const head = document.createElement("div"); head.className = "workflow-row";
+        const title = document.createElement("strong"); title.textContent = worker.task || "Saved worker";
+        const status = document.createElement("span"); status.className = "pill"; status.textContent = controls.pending ? "resume pending" : worker.status || "unknown";
+        head.append(title, status); card.append(head);
+        const meta = document.createElement("dl"); meta.className = "worker-meta";
+        const details = [["Worker", worker.id], ["Provider / model", `${worker.provider || "Unknown"} / ${worker.model || "Unknown"}`], ["Scope", worker.scope || "Unknown"], ["Access", worker.read_only ? "Read only" : "Writes within declared paths"], ["Tools remaining", controls.tools === null ? "Unknown" : String(Math.floor(controls.tools))], ["Time remaining", controls.seconds === null ? "Unknown" : `${Math.ceil(controls.seconds)} seconds`]];
+        if (worker.write_paths?.length) details.push(["Write paths", worker.write_paths.join(", ")]);
+        for (const [label, value] of details) { const term = document.createElement("dt"), detail = document.createElement("dd"); term.textContent = label; detail.textContent = value; meta.append(term, detail); }
+        card.append(meta);
+        if (worker.error) { const error = document.createElement("p"); error.className = "hint worker-error"; error.textContent = worker.error; card.append(error); }
+        if (worker.output) { const result = document.createElement("pre"); result.className = "worker-results"; result.setAttribute("aria-label", `Result from worker ${worker.id}`); result.textContent = worker.output; card.append(result); }
+        if (["interrupted", "failed", "cancelled"].includes(worker.status) || controls.pending) {
+          const input = document.createElement("textarea"); input.rows = 2; input.placeholder = "Optional guidance before resuming"; input.setAttribute("aria-label", `Resume guidance for ${worker.id}`); input.dataset.workerGuidance = key; input.value = workflow.workerDrafts.get(key) || "";
+          input.disabled = pending || controls.pending || !controls.canResume;
+          input.addEventListener("input", () => workflow.workerDrafts.set(key, input.value));
+          const resume = document.createElement("button"); resume.type = "button"; resume.textContent = controls.pending ? "Resume queued" : pending ? "Requesting resume..." : "Resume worker"; resume.disabled = pending || !controls.canResume;
+          resume.addEventListener("click", () => sendWorkerControl(runId, worker, "agent_resume", input.value));
+          card.append(input, resume);
+          if (!controls.canResume && !controls.pending) { const reason = document.createElement("p"); reason.className = "hint"; reason.textContent = controls.tools === null || controls.seconds === null ? "Saved budget is unavailable." : "This worker has used its tool or time budget."; card.append(reason); }
+          if (key === focusedKey && !input.disabled) restoreFocus = input;
+        }
+        if (controls.active) {
+          const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "danger"; cancel.textContent = pending ? "Cancelling..." : "Cancel worker"; cancel.disabled = pending;
+          cancel.addEventListener("click", () => sendWorkerControl(runId, worker, "agent_cancel")); card.append(cancel);
+        }
+        container.append(card);
+      }
+      if (restoreFocus) { restoreFocus.focus({preventScroll: true}); if (selection) restoreFocus.setSelectionRange(...selection); }
+    }
+
     async function loadPlan(force = false) {
       const runId = state.selectedRunId, generation = ++workflow.planGeneration;
       $("planForm").hidden = !runId; $("planMode").disabled = !runId;
-      if (!runId) { workflow.planSignature = ""; $("planStatus").textContent = "Select a task to edit its plan."; $("planSteps").replaceChildren(); $("queuedMessages").replaceChildren(); return; }
+      if (!runId) { workflow.planSignature = ""; $("planStatus").textContent = "Select a task to edit its plan."; $("planSteps").replaceChildren(); $("queuedMessages").replaceChildren(); renderWorkers([], true); $("workerStatus").textContent = "Select a task to inspect its workers."; return; }
       try {
-        const payload = await request(`/runs/${runId}/session`);
+        const payload = await request(`/runs/${runId}/session?controls=1`);
         if (runId !== state.selectedRunId || generation !== workflow.planGeneration) return;
         const session = payload.session || {}, queued = payload.queued || [];
+        renderWorkers(Array.isArray(payload.subagents) ? payload.subagents : [], force);
         const signature = JSON.stringify([runId, session.mode, session.plan_steps, queued]);
         if (!force && signature === workflow.planSignature) return;
         if (!force && $("planSteps").contains(document.activeElement)) return;
@@ -3338,6 +3417,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         // While streaming, the incremental poll owns the conversation pane; a
         // full detail refresh here would repaint mid-token.
         if (state.selectedRunId && !state.streaming) await refreshRunDetail();
+        else if (state.selectedRunId && state.view === "plan") await loadPlan();
         $("lastRefresh").textContent = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date());
       } catch (error) {
         $("healthDot").className = "status-dot offline";

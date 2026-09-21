@@ -9,6 +9,7 @@ import binascii
 import tempfile
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any
 
@@ -103,8 +104,8 @@ class CodexProvider(LLMProvider):
             emitted = False
             usage: Usage | None = None
             result: CodexCommandResult | None = None
-            async with asyncio.timeout(self.timeout):
-                async for event in stream_codex_command(args, input_text=prompt):
+            async with asyncio.timeout(self.timeout), aclosing(stream_codex_command(args, input_text=prompt)) as command:
+                async for event in command:
                     if isinstance(event, CodexCommandResult):
                         result = event
                         continue

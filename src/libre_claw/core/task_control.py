@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from libre_claw.core.session import Session
 
 
@@ -55,3 +57,42 @@ def plan_text(session: Session) -> str:
     if not session.plan_steps:
         lines.append("No plan steps. Use /plan set first step; second step.")
     return "\n".join(lines)
+
+
+def request_subagent_resume(session: Session, argument: str) -> tuple[str, str]:
+    """Persist an explicit worker continuation for the parent's next safe boundary."""
+    agent_id, _, guidance = argument.strip().partition(" ")
+    if not agent_id or agent_id not in session.subagents:
+        raise ValueError("Use /agents resume <saved-worker-id> [guidance].")
+    state = session.subagents[agent_id]
+    if state.get("status") == "done":
+        raise ValueError("This worker has already completed; create a new worker for new work.")
+    if session.mode == "plan" and state.get("read_only") is False:
+        raise ValueError("Plan mode cannot resume a writing worker. Switch to Build or use /plan off first.")
+    if isinstance(state.get("tool_calls"), int) and isinstance(state.get("max_tool_calls"), int) and state["tool_calls"] >= state["max_tool_calls"]:
+        raise ValueError("The saved worker has exhausted its tool-call budget.")
+    if isinstance(state.get("elapsed_seconds"), (int, float)) and isinstance(state.get("max_seconds"), (int, float)) and state["elapsed_seconds"] >= state["max_seconds"]:
+        raise ValueError("The saved worker has exhausted its time budget.")
+    for item in session.pending_subagent_resumes:
+        if item["id"] == agent_id:
+            if guidance.strip():
+                item["guidance"] = guidance.strip()
+            return agent_id, item.get("guidance", "")
+    session.pending_subagent_resumes.append({"id": agent_id, "guidance": guidance.strip()})
+    return agent_id, guidance.strip()
+
+
+def saved_subagent_snapshots(session: Session) -> list[dict[str, Any]]:
+    """Render saved worker status without exposing raw child sessions or reasoning."""
+    fields = {"id", "task", "scope", "read_only", "write_paths", "provider", "model", "status", "output", "error", "tool_calls", "max_tool_calls", "max_seconds", "created_at", "usage", "elapsed_seconds", "resume_count"}
+    snapshots = []
+    pending = {item["id"] for item in session.pending_subagent_resumes}
+    for agent_id, value in session.subagents.items():
+        item = {key: value[key] for key in fields if key in value}
+        item.setdefault("id", agent_id)
+        item.setdefault("task", "Saved worker")
+        if item.get("status") in {"running", "blocked"}:
+            item["status"] = "interrupted"
+        item["resume_pending"] = agent_id in pending
+        snapshots.append(item)
+    return snapshots

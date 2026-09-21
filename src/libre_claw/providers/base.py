@@ -41,10 +41,10 @@ def combine_usage(left: Usage | None, right: Usage | None) -> Usage | None:
         return left
 
     cost: float | None
-    if left.cost is None and right.cost is None:
+    if left.cost is None or right.cost is None:
         cost = None
     else:
-        cost = (left.cost or 0.0) + (right.cost or 0.0)
+        cost = left.cost + right.cost
 
     return Usage(
         input_tokens=left.input_tokens + right.input_tokens,

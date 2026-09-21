@@ -142,6 +142,7 @@ class TelegramHandlers:
         self.bridge = bridge
         self.auth = auth
         self._heartbeat_tasks: dict[int, asyncio.Task[None]] = {}
+        self._queue_wakeups: dict[int, asyncio.Task[None]] = {}
         self._heartbeat_intervals: dict[int, int] = {}
         self._permission_callback_ids: dict[str, str] = {}
         self._permission_callback_counter = 0
@@ -300,9 +301,18 @@ class TelegramHandlers:
         if not await self._authorized(update):
             return
         tokens = context.args or []
-        action = "agent_cancel" if tokens and tokens[0] == "cancel" else "agents"
+        action = {"cancel": "agent_cancel", "resume": "agent_resume"}.get(tokens[0], "agents") if tokens else "agents"
         response = await self.bridge.task_control_text(update.effective_chat.id, action, " ".join(tokens[1:]))
         await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
+        state = self.bridge.state_for(update.effective_chat.id)
+        if action == "agent_resume" and response.startswith("Worker ") and "resume queued" in response and (state.task is None or state.task.done()):
+            if self.bridge.daemon_client is not None:
+                state.daemon_run_id = state.run_id
+                await self.message(update, context, resume_only=True)
+            else:
+                await self.message(update, context, queued_only=True)
+        elif action == "agent_resume" and response.startswith("Worker ") and "resume queued" in response and self.bridge.daemon_client is None:
+            self._schedule_queued_chat(update, context)
 
     async def plan(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -315,6 +325,40 @@ class TelegramHandlers:
             return
         response = await self.bridge.task_control_text(update.effective_chat.id, "queue", " ".join(context.args or []))
         await update.effective_message.reply_text(response)
+        state = self.bridge.state_for(update.effective_chat.id)
+        if response.startswith("Follow-up queued") and self.bridge.daemon_client is None and (state.task is None or state.task.done()):
+            await self.message(update, context, queued_only=True)
+        elif response.startswith("Follow-up queued") and self.bridge.daemon_client is None:
+            self._schedule_queued_chat(update, context)
+
+    def _schedule_queued_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if self.bridge.daemon_client is not None:
+            return
+        chat_id = update.effective_chat.id
+        existing = self._queue_wakeups.get(chat_id)
+        if existing is not None and not existing.done():
+            return
+        run_id = self.bridge.state_for(chat_id).run_id
+
+        async def wake() -> None:
+            try:
+                state = self.bridge.state_for(chat_id)
+                while state.task is not None and not state.task.done():
+                    active = state.task
+                    await asyncio.shield(active)
+                    if active.cancelling():
+                        return
+                if state.run_id != run_id or run_id is None:
+                    return
+                run = await self.bridge.run_store.load_run(run_id)
+                if run is not None and run.state == "done" and await self.bridge.run_store.queued_messages(run_id):
+                    await self.message(update, context, queued_only=True)
+            except asyncio.CancelledError:
+                return
+
+        task = asyncio.create_task(wake())
+        self._queue_wakeups[chat_id] = task
+        task.add_done_callback(lambda done: self._queue_wakeups.pop(chat_id, None) if self._queue_wakeups.get(chat_id) is done else None)
 
     async def resume(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -496,34 +540,47 @@ class TelegramHandlers:
 
         await update.effective_message.reply_text("Usage: /heartbeat status|once|start [every 30 minutes|1h]|stop")
 
-    async def message(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *, resume_only: bool = False) -> None:
+    async def message(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *, resume_only: bool = False, queued_only: bool = False) -> None:
         if not await self._authorized(update):
             return
-        attachments, attachment_warnings = await _telegram_image_attachments(update.effective_message, update.effective_chat.id)
+        attachments, attachment_warnings = ((), []) if queued_only else await _telegram_image_attachments(update.effective_message, update.effective_chat.id)
         for warning in attachment_warnings:
             await update.effective_message.reply_text(warning)
         text = update.effective_message.text or update.effective_message.caption or ""
         if attachments and not text.strip():
             text = "Please inspect the attached image."
-        if not text.strip() and not attachments:
+        if not text.strip() and not attachments and not queued_only:
             await update.effective_message.reply_text("Send a message or a supported image attachment.")
             return
-        if text.strip() == "/" and not attachments:
+        if text.strip() == "/" and not attachments and not queued_only:
             await _reply_text_chunks(update.effective_message, _telegram_help_text(), self.bridge.config.telegram.max_message_length)
             return
         chat_id = update.effective_chat.id
-        if _looks_like_file_send_request(text) and not attachments:
+        if _looks_like_file_send_request(text) and not attachments and not queued_only:
             sent = await self._send_remembered_documents(update.effective_message, chat_id)
             if sent:
                 return
         state = self.bridge.state_for(chat_id)
         if state.task is not None and not state.task.done():
+            if queued_only:
+                return
             if attachments:
                 await update.effective_message.reply_text("Wait for this turn to finish before sending another image, or use /stop.")
             else:
-                await update.effective_message.reply_text(await self.bridge.task_control_text(chat_id, "queue", text))
+                response = await self.bridge.task_control_text(chat_id, "queue", text)
+                await update.effective_message.reply_text(response)
+                if response.startswith("Follow-up queued"):
+                    self._schedule_queued_chat(update, context)
             return
-        placeholder = await update.effective_message.reply_text("Libre Claw is thinking...")
+        owner = asyncio.current_task()
+        if queued_only:
+            state.task = owner
+        try:
+            placeholder = await update.effective_message.reply_text("Libre Claw is thinking...")
+        except BaseException:
+            if queued_only and state.task is owner:
+                state.task = None
+            raise
         accumulated = ""
         last_update = time.monotonic()
         saw_tool_notice = False
@@ -552,6 +609,8 @@ class TelegramHandlers:
                 )
                 if resume_only:
                     stream = self.bridge._stream_daemon_message(chat_id, "", resume_existing=True)
+                elif queued_only:
+                    stream = self.bridge.stream_queued_messages(chat_id)
                 async for event in stream:
                     if isinstance(event, TelegramText):
                         accumulated += event.text
@@ -1051,10 +1110,12 @@ class TelegramHandlers:
             await self._deny_unrenderable_permission(event.prompt_id, exc, bot=bot, chat_id=chat_id)
 
     async def _send_remembered_documents(self, message: Any, chat_id: int) -> bool:
+        runtime = getattr(self.bridge.state_for(chat_id), "runtime_config", None) or self.bridge.config
+        workspace = runtime.general.working_directory
         paths = [
             path
             for path in self._recent_document_paths.get(chat_id, [])
-            if _telegram_document_path_is_sendable(path, self.bridge.config.general.working_directory)
+            if _telegram_document_path_is_sendable(path, workspace)
         ]
         if not paths:
             return False
@@ -1066,7 +1127,8 @@ class TelegramHandlers:
         return True
 
     async def _send_documents_from_text(self, message: Any, chat_id: int, text: str) -> None:
-        paths = _telegram_document_paths_from_text(text, self.bridge.config.general.working_directory)
+        runtime = getattr(self.bridge.state_for(chat_id), "runtime_config", None) or self.bridge.config
+        paths = _telegram_document_paths_from_text(text, runtime.general.working_directory)
         if not paths:
             return
         self._remember_document_paths(chat_id, paths)

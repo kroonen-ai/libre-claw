@@ -248,7 +248,8 @@ async def review_between(repository: Path, base: str, target: str, *, scope: Rev
             continue
         path = encoded.decode("utf-8", "surrogateescape")
         patch = (await git_bytes(repository, "diff", *flags, base, target, "--", path)).decode("utf-8", "surrogateescape")
-        status = "added" if "\nnew file mode " in patch else "deleted" if "\ndeleted file mode " in patch else "modified"
+        added, deleted = "\nnew file mode " in patch, "\ndeleted file mode " in patch
+        status = "added" if added and not deleted else "deleted" if deleted and not added else "modified"
         binary = "\nGIT binary patch\n" in patch or "\nBinary files " in patch
         files.append(ReviewFile(path, status, binary, patch, _parse_hunks(patch)))
     revision = hashlib.sha256(f"{repository}\0{scope}\0{base}\0{target}".encode()).hexdigest()
@@ -256,18 +257,22 @@ async def review_between(repository: Path, base: str, target: str, *, scope: Rev
 
 
 def _parse_hunks(patch: str) -> tuple[ReviewHunk, ...]:
-    matches = list(_HUNK.finditer(patch))
-    if not matches:
-        return ()
-    prefix = patch[:matches[0].start()]
     result: list[ReviewHunk] = []
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(patch)
-        body = patch[match.start():end]
-        result.append(ReviewHunk(
-            hashlib.sha256(body.encode("utf-8", "surrogateescape")).hexdigest(), match.group(0),
-            int(match.group(1)), int(match.group(3)), int(match.group(2) or "1"), int(match.group(4) or "1"), prefix + body,
-        ))
+    # Git represents a file-type change as deletion and addition under separate
+    # headers even for a single path. Never attach the next component's header
+    # to a hunk: Git can otherwise accept it as an unintended empty-file action.
+    for component in re.split(r"(?=^diff --git )", patch, flags=re.MULTILINE):
+        matches = list(_HUNK.finditer(component))
+        if not matches:
+            continue
+        prefix = component[:matches[0].start()]
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(component)
+            body = component[match.start():end]
+            result.append(ReviewHunk(
+                hashlib.sha256(body.encode("utf-8", "surrogateescape")).hexdigest(), match.group(0),
+                int(match.group(1)), int(match.group(3)), int(match.group(2) or "1"), int(match.group(4) or "1"), prefix + body,
+            ))
     return tuple(result)
 
 
@@ -293,12 +298,22 @@ async def mutate_review(
             raise ReviewError("The selected file is not present in this diff.")
         patch = selected.patch
         if hunk_id is not None:
-            if selected.binary or selected.status != "modified" or "\nold mode " in patch:
-                raise ReviewError("Binary, added, deleted, and mode-changing files require a whole-file action.")
+            if selected.binary:
+                raise ReviewError("Binary files require a whole-file action.")
             hunk = next((item for item in selected.hunks if item.hunk_id == hunk_id), None)
             if hunk is None:
                 raise ReviewError("The selected hunk is not present in this diff.")
             patch = hunk.patch
+            if selected.status == "modified":
+                # A content hunk must not also stage/revert a separate executable-bit
+                # change. Addition/deletion headers are retained: their single
+                # hunk creates/removes the file, including its recorded mode.
+                start = _HUNK.search(patch)
+                assert start is not None  # Parsed hunks always contain a hunk header.
+                header, body = patch[:start.start()], patch[start.start():]
+                header = "".join(line for line in header.splitlines(keepends=True)
+                                 if not line.startswith(("old mode ", "new mode ")))
+                patch = header + body
         options = ["--cached"] if action in {"stage", "unstage"} else []
         if action in {"unstage", "revert"}:
             options.append("--reverse")

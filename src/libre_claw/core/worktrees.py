@@ -223,6 +223,11 @@ class WorktreeManager:
                 if not permission_manager.apply_resolution(call, resolution):
                     raise WorktreeError("Setup command was not approved.")
             result = await tool.execute(command=command)
+            if not result.is_error and result.metadata.get("exit_code", 0) != 0:
+                # Bash reports process exits as metadata so the agent can inspect
+                # them. Setup is sequential: a failed prerequisite must stop the
+                # remaining commands and be surfaced as a failure to every UI.
+                result = replace(result, error=result.as_text())
             results.append(result)
             if result.is_error:
                 break

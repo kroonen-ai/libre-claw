@@ -91,6 +91,31 @@ class SubagentCancelTool(SubagentTool):
 
 
 @register_tool
+class SubagentResumeTool(SubagentTool):
+    name = "subagent_resume"
+    description = (
+        "Explicitly resume an interrupted worker from its durable conversation and remaining budgets. "
+        "Inspect unknown side effects before retrying. Completed, failed and cancelled workers cannot resume. "
+        "Wait for the resumed worker before finishing the parent turn."
+    )
+    parameters = {
+        "id": {"type": "string"},
+        "guidance": {"type": "string", "description": "Optional current user guidance for the resumed worker."},
+    }
+    required = ("id",)
+    permission_level = "allow"
+
+    def is_read_only(self, arguments: Mapping[str, Any]) -> bool:
+        try:
+            return self.manager._state(str(arguments.get("id", ""))).read_only
+        except ValueError:
+            return False
+
+    async def execute(self, id: str, guidance: str = "") -> ToolResult:
+        return self.result(await self.manager.resume(id, guidance))
+
+
+@register_tool
 class TaskCheckpointTool(BaseTool):
     name = "task_checkpoint"
     description = (
