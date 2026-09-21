@@ -13,6 +13,7 @@ from libre_claw.config import load_config
 from libre_claw.providers import ProviderConfigurationError, create_fallback_providers, create_provider
 from libre_claw.providers.factory import _fallback_model
 from libre_claw.providers.codex import CodexProvider
+from libre_claw.providers.deepseek import DeepSeekProvider
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.moonshot import MoonshotProvider
 from libre_claw.providers.openai import OpenAIProvider
@@ -39,12 +40,13 @@ class FakeApiKeyStore:
 def test_provider_factory_fallback_models_match_public_defaults() -> None:
     assert _fallback_model("anthropic") == "claude-opus-5"
     assert _fallback_model("openrouter") == "openrouter/auto"
+    assert _fallback_model("deepseek") == "deepseek-flash"
     assert _fallback_model("moonshot") == "k3"
     assert _fallback_model("codex") == "gpt-5.5"
     assert _fallback_model("ollama") == "qwen3.6:27b"
 
 
-@pytest.mark.parametrize("provider_name", ["openai", "anthropic"])
+@pytest.mark.parametrize("provider_name", ["openai", "anthropic", "deepseek"])
 def test_factory_inference_honors_custom_base_url(monkeypatch, tmp_path, provider_name):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -56,6 +58,93 @@ def test_factory_inference_honors_custom_base_url(monkeypatch, tmp_path, provide
     provider = create_provider(config, provider_name=provider_name, api_key_store=FakeApiKeyStore("key"))
     assert provider.base_url == "https://proxy.test/v1"
     assert str(provider._client.base_url).rstrip("/") == "https://proxy.test/v1"
+
+
+def test_deepseek_factory_uses_provider_defaults_and_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test-key")
+    config = load_config()
+    provider = create_provider(config, provider_name="deepseek")
+    assert isinstance(provider, DeepSeekProvider)
+    assert provider.api_key == "deepseek-test-key"
+    assert provider.model == "deepseek-flash"
+    assert provider.base_url == "https://api.deepseek.com"
+    assert provider.max_tokens == 65536
+    assert provider.thinking == "enabled"
+    assert provider.reasoning_effort == "high"
+
+
+def test_deepseek_factory_missing_key_has_setup_guidance(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ProviderConfigurationError, match="DEEPSEEK_API_KEY.*auth set-key deepseek"):
+        create_provider(load_config(), provider_name="deepseek", api_key_store=FakeApiKeyStore(None))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("thinking", "auto"), ("thinking", True), ("reasoning_effort", "unlimited"),
+    ("reasoning_effort", 123),
+    ("max_tokens", 0), ("max_tokens", -1), ("max_tokens", True), ("max_tokens", "4096"),
+])
+def test_deepseek_factory_rejects_invalid_controls(monkeypatch, tmp_path, field, value):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = replace(config, providers={
+        **config.providers, "deepseek": {**config.providers["deepseek"], field: value},
+    })
+    with pytest.raises(ProviderConfigurationError, match=field):
+        create_provider(config, provider_name="deepseek", api_key_store=FakeApiKeyStore("key"))
+
+
+def test_deepseek_fallback_preserves_custom_key_model_and_controls(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DEEPSEEK_BACKUP_KEY", "backup-test-key")
+    path = tmp_path / "config.toml"
+    path.write_text('''[providers.deepseek]
+base_url = "https://proxy.test/v1"
+thinking = "disabled"
+reasoning_effort = "max"
+max_tokens = 4096
+[fallback]
+enabled = true
+[[fallback.routes]]
+provider = "deepseek"
+model = "new-model-from-the-api"
+api_key_env = "DEEPSEEK_BACKUP_KEY"
+''', encoding="utf-8")
+    fallback, = create_fallback_providers(load_config(path))
+    assert fallback.label == "deepseek:new-model-from-the-api via DEEPSEEK_BACKUP_KEY"
+    provider = fallback.provider
+    assert isinstance(provider, DeepSeekProvider)
+    assert provider.model == "new-model-from-the-api"
+    assert provider.api_key == "backup-test-key"
+    assert provider.base_url == "https://proxy.test/v1"
+    assert provider.thinking == "disabled"
+    assert provider.reasoning_effort == "max"
+    assert provider.max_tokens == 4096
+    assert provider._capability_config.providers["deepseek"]["api_key_env"] == "DEEPSEEK_BACKUP_KEY"
+
+
+def test_deepseek_factory_normalizes_controls_before_capability_validation(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = replace(config, providers={
+        **config.providers, "deepseek": {
+            **config.providers["deepseek"], "thinking": "ENABLED", "reasoning_effort": "HIGH",
+            "model_capabilities": {"deepseek-flash": {
+                "supports_reasoning": True, "supported_reasoning_efforts": ["low", "high", "max"],
+            }},
+        },
+    })
+    provider = create_provider(config, provider_name="deepseek", api_key_store=FakeApiKeyStore("key"))
+    from libre_claw.providers.capabilities import configured_reasoning_effort
+
+    assert configured_reasoning_effort(provider) == "high"
+    assert provider.thinking == "enabled"
 
 
 def test_factory_accepts_new_kimi_code_ids_without_allowlist(monkeypatch, tmp_path):

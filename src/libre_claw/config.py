@@ -615,6 +615,15 @@ def _load_default_config() -> ConfigTable:
                 "default_model": "openrouter/auto",
                 "max_tokens": 16384,
             },
+            "deepseek": {
+                "api_key_env": "DEEPSEEK_API_KEY",
+                "base_url": "https://api.deepseek.com",
+                "default_model": "deepseek-flash",
+                "max_tokens": 65536,
+                "thinking": "enabled",
+                "reasoning_effort": "high",
+                "auto_context_window": True,
+            },
             "moonshot": {
                 "service": "kimi_code",
                 "api_key_env": "KIMI_API_KEY",

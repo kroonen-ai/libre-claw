@@ -849,6 +849,7 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
     assert provider_keyboard.inline_keyboard
     assert any("OpenRouter" in button.text for row in provider_keyboard.inline_keyboard for button in row)
     assert any("Kimi Code / Moonshot" in button.text for row in provider_keyboard.inline_keyboard for button in row)
+    assert any("DeepSeek" in button.text for row in provider_keyboard.inline_keyboard for button in row)
     assert not any("(" in button.text for row in provider_keyboard.inline_keyboard for button in row)
 
 
@@ -1017,7 +1018,7 @@ class ModelQuery:
         await handlers.callback(SimpleNamespace(callback_query=self), object())
 
 
-@pytest.mark.parametrize("provider", ["openrouter", "openai", "anthropic", "moonshot", "ollama", "llamacpp", "codex"])
+@pytest.mark.parametrize("provider", ["openrouter", "openai", "anthropic", "deepseek", "moonshot", "ollama", "llamacpp", "codex"])
 async def test_telegram_model_callback_discovers_future_model(monkeypatch, tmp_path: Path, provider: str) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

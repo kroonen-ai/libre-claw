@@ -468,6 +468,8 @@ def test_model_argument_parses_provider_and_colon_model() -> None:
     assert _parse_model_argument("kimi-k2.6:cloud", "ollama") == ("ollama", "kimi-k2.6:cloud")
     assert _parse_model_argument("openrouter:openai/gpt-4o", "ollama") == ("openrouter", "openai/gpt-4o")
     assert _parse_model_argument("openrouter openai/gpt-4o", "ollama") == ("openrouter", "openai/gpt-4o")
+    assert _parse_model_argument("deepseek:future-model", "ollama") == ("deepseek", "future-model")
+    assert _parse_model_argument("deepseek future-model", "ollama") == ("deepseek", "future-model")
     assert _parse_model_argument("list", "ollama") is None
 
 
@@ -505,7 +507,8 @@ def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_pat
     assert app._slash_suggestion_matches("/model custom-local")[0].name == "/model ollama:custom-local:latest"
 
 
-async def test_models_discovers_filters_refreshes_and_accepts_unlisted_ids(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("provider", ["openrouter", "deepseek"])
+async def test_models_discovers_filters_refreshes_and_accepts_unlisted_ids(monkeypatch, tmp_path: Path, provider: str) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     app = LibreClawApp(config=load_config())
@@ -517,16 +520,17 @@ async def test_models_discovers_filters_refreshes_and_accepts_unlisted_ids(monke
 
     monkeypatch.setattr("libre_claw.tui.app.discover_models", discover)
     async with app.run_test():
-        await app._handle_command("/models openrouter --refresh")
+        await app._handle_command(f"/models {provider} --refresh")
         await app.workers.wait_for_complete(worker for worker in app.workers if worker.group == "model-catalog")
         assert "Showing 40 of 80 models" in app.transcript[-1].content
-        await app._handle_command("/model list openrouter model-079")
+        await app._handle_command(f"/model list {provider} model-079")
         await app.workers.wait_for_complete(worker for worker in app.workers if worker.group == "model-catalog")
         text = app.transcript[-1].content
-        assert "/model openrouter:lab/model-079 --global" in text
+        assert f"/model {provider}:lab/model-079 --global" in text
         assert "lab/model-000" not in text
-        await app._handle_command("/model openai:unlisted-future-model")
-    assert calls[:2] == [("openrouter", True), ("openrouter", False)]
+        await app._handle_command(f"/model {provider}:unlisted-future-model")
+    assert calls[:2] == [(provider, True), (provider, False)]
+    assert app.config.general.default_provider == provider
     assert app.config.general.default_model == "unlisted-future-model"
 
 
@@ -1192,20 +1196,60 @@ async def test_setup_key_flow_hides_and_stores_provider_key(monkeypatch, tmp_pat
     assert "sk-or-secret" not in system_text
 
 
-async def test_setup_key_flow_supports_moonshot(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("provider", ["moonshot", "deepseek"])
+async def test_setup_key_flow_supports_provider(monkeypatch, tmp_path: Path, provider: str) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     fake_store = FakeApiKeyStore()
     monkeypatch.setattr("libre_claw.tui.app.ApiKeyStore.from_config", lambda _auth: fake_store)
+    monkeypatch.setattr(
+        "libre_claw.tui.app.codex_status",
+        lambda: asyncio.sleep(0, result=CodexStatus(available=True, logged_in=False, detail="missing")),
+    )
     app = LibreClawApp(config=load_config())
 
     async with app.run_test():
-        await app._handle_command("/setup key moonshot")
+        await app._handle_command(f"/setup key {provider}")
         input_widget = app.query_one("#input")
         assert input_widget.password is True
-        await app.handle_user_input("sk-moonshot-secret")
+        await app.handle_user_input(f"sk-{provider}-secret")
+        assert input_widget.password is False
+        await app._handle_command("/setup status")
 
-    assert fake_store.keys == {"moonshot": "sk-moonshot-secret"}
+    assert fake_store.keys == {provider: f"sk-{provider}-secret"}
+    system_text = "\n".join(entry.content for entry in app.transcript if entry.role == "system")
+    assert f"{provider}: encrypted_file" in system_text
+    assert f"sk-{provider}-secret" not in system_text
+
+
+async def test_deepseek_setup_uses_configured_model_and_supports_fallback_and_judge(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = replace(config, providers={
+        **config.providers,
+        "deepseek": {**config.providers["deepseek"], "default_model": "future-deepseek-model"},
+    })
+    app = LibreClawApp(config=config)
+
+    async with app.run_test():
+        assert app._slash_suggestion_matches("/provider deep")[0].name == "/provider deepseek"
+        assert app._slash_suggestion_matches("/setup key deep")[0].name == "/setup key deepseek"
+        await app._handle_command("/setup deepseek")
+        assert app.config.general.default_provider == "deepseek"
+        assert app.config.general.default_model == "future-deepseek-model"
+        saved = load_config()
+        assert saved.general.default_provider == "deepseek"
+        assert saved.general.default_model == "future-deepseek-model"
+        await app._handle_command("/fallback set 1 deepseek:another-future-model")
+        assert app.config.fallback.routes[0].provider == "deepseek"
+        assert app.config.fallback.routes[0].model == "another-future-model"
+        app.config = replace(app.config, goal=replace(app.config.goal, judge_provider="deepseek"))
+        captured = []
+        monkeypatch.setattr("libre_claw.tui.app.create_provider", lambda selected: captured.append(selected) or object())
+        _, label = app._create_goal_judge_provider()
+        assert label == "deepseek:future-deepseek-model"
+        assert captured[0].general.default_provider == "deepseek"
 
 
 async def test_transcript_from_run_events_reconstructs_tool_entries(tmp_path: Path) -> None:

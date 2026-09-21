@@ -56,6 +56,15 @@ default_model = "openrouter/auto"
 max_tokens = 16384
 auto_context_window = true
 
+[providers.deepseek]
+api_key_env = "DEEPSEEK_API_KEY"
+base_url = "https://api.deepseek.com"
+default_model = "deepseek-flash"
+max_tokens = 65536
+thinking = "enabled" # enabled | disabled
+reasoning_effort = "high" # low | high | max
+auto_context_window = true
+
 [providers.moonshot]
 service = "kimi_code" # kimi_code | platform
 api_key_env = "KIMI_API_KEY"
@@ -143,7 +152,7 @@ default_model = "claude-opus-5"
 
 [goal]
 max_turns = 20
-judge_provider = "current" # current | anthropic | openai | openrouter | moonshot | ollama | codex
+judge_provider = "current" # current | anthropic | openai | openrouter | deepseek | moonshot | ollama | llamacpp | codex
 judge_model = "" # empty means use the selected judge provider default/current model
 judge_temperature = 0.0
 judge_max_tokens = 1024

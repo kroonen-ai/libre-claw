@@ -308,7 +308,8 @@ class Agent:
                                 provider_error = event.message
                                 break
                 except _AgentDeadlineReached:
-                    self._save_assistant_text(assistant_chunks)
+                    if assistant_chunks:
+                        self._save_assistant_text(assistant_chunks, reasoning_chunks)
                     yield AgentError(
                         "Run deadline reached before a final response was produced."
                     )
@@ -351,7 +352,8 @@ class Agent:
 
                 next_provider_index = provider_index + 1
                 if assistant_chunks or tool_calls or next_provider_index >= len(provider_chain):
-                    self._save_assistant_text(assistant_chunks)
+                    if assistant_chunks:
+                        self._save_assistant_text(assistant_chunks, reasoning_chunks)
                     yield AgentError(
                         provider_error,
                         provider_label=provider_chain[provider_index][0],
@@ -809,7 +811,6 @@ def _provider_reasoning_blocks(chunks: Sequence[ReasoningDelta]) -> list[Content
     return [
         provider_reasoning_block("".join(parts), provider)
         for provider, parts in grouped.items()
-        if any(parts)
     ]
 
 

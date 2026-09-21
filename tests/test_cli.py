@@ -814,10 +814,32 @@ def test_cli_auth_status_does_not_print_keys(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "secret-anthropic-key")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-deepseek-key")
 
     result = runner.invoke(main, ["auth", "status"])
 
     assert result.exit_code == 0
     assert "anthropic: environment" in result.output
+    assert "deepseek: environment" in result.output
     assert "openrouter: missing" in result.output
     assert "secret-anthropic-key" not in result.output
+    assert "secret-deepseek-key" not in result.output
+
+
+def test_cli_deepseek_key_can_be_stored_and_reported(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(FakeKeyStore, "stored", {})
+    monkeypatch.setattr("libre_claw.cli.ApiKeyStore.from_config", lambda _auth: FakeKeyStore())
+
+    result = runner.invoke(main, ["auth", "set-key", "deepseek"], input="test-deepseek-secret\ntest-deepseek-secret\n")
+    assert result.exit_code == 0
+    assert "Stored deepseek API key in encrypted file" in result.output
+    assert "test-deepseek-secret" not in result.output
+    assert FakeKeyStore.stored == {"deepseek": "test-deepseek-secret"}
+
+    status = runner.invoke(main, ["auth", "status"])
+    assert status.exit_code == 0
+    assert "deepseek: encrypted_file" in status.output
+    assert "test-deepseek-secret" not in status.output

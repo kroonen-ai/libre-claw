@@ -122,6 +122,7 @@ TELEGRAM_PROVIDER_LABELS: dict[str, str] = {
     "anthropic": "Anthropic",
     "openai": "OpenAI API",
     "openrouter": "OpenRouter",
+    "deepseek": "DeepSeek",
     "moonshot": "Kimi Code / Moonshot",
     "ollama": "Ollama Cloud/Local",
     "llamacpp": "llama.cpp",

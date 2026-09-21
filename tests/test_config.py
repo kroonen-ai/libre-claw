@@ -531,3 +531,42 @@ def test_global_config_path_prefers_active_user_config(monkeypatch, tmp_path: Pa
 
 def test_packaged_default_config_matches_repo_default() -> None:
     assert packaged_default_config_text() == default_config_path().read_text(encoding="utf-8")
+
+
+def test_deepseek_defaults_survive_missing_default_resources(monkeypatch, tmp_path):
+    from libre_claw import config as config_module
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    expected = load_config().providers["deepseek"]
+    monkeypatch.setattr(config_module, "default_config_path", lambda: tmp_path / "absent.toml")
+
+    def missing_package():
+        raise FileNotFoundError
+
+    monkeypatch.setattr(config_module, "packaged_default_config_text", missing_package)
+    assert load_config().providers["deepseek"] == expected
+
+
+def test_deepseek_global_selection_preserves_controls_and_capabilities(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    path = user_config_path()
+    path.parent.mkdir(parents=True)
+    path.write_text('''[providers.deepseek]
+thinking = "disabled"
+reasoning_effort = "low"
+base_url = "https://proxy.test/v1"
+[providers.deepseek.model_capabilities.future-model]
+supports_vision = false
+context_window_tokens = 128000
+''', encoding="utf-8")
+    set_global_default_model("deepseek", "future-model")
+    config = load_config()
+    assert config.general.default_provider == "deepseek"
+    assert config.general.default_model == "future-model"
+    settings = config.providers["deepseek"]
+    assert settings["thinking"] == "disabled"
+    assert settings["reasoning_effort"] == "low"
+    assert settings["base_url"] == "https://proxy.test/v1"
+    assert settings["model_capabilities"]["future-model"]["context_window_tokens"] == 128000

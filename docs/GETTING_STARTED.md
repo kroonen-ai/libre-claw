@@ -64,6 +64,17 @@ Inside the TUI:
 /model openrouter:qwen/qwen3.7-max --global
 ```
 
+For direct DeepSeek access:
+
+```text
+/setup key deepseek
+/setup deepseek
+/models deepseek
+```
+
+This saves your configured DeepSeek model as the global default; new installs use
+`deepseek-flash`. See [DEEPSEEK.md](DEEPSEEK.md) for thinking and capability settings.
+
 For direct Kimi Code access:
 
 ```text

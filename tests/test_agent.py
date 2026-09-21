@@ -608,6 +608,44 @@ async def test_agent_retries_empty_provider_output_before_using_fallback() -> No
     assert fallback.received_messages == []
 
 
+async def test_agent_retains_reasoning_when_partial_text_fails() -> None:
+    provider = ScriptedProvider([
+        [ReasoningDelta("saved reasoning", provider="deepseek"), TextDelta("partial"), ProviderError("aborted")],
+        [TextDelta("resumed"), Done()],
+    ])
+    agent = make_agent(provider)
+    await collect_events(agent, "start")
+    await collect_events(agent, "continue")
+    assert provider.received_messages[1][1].content == [
+        provider_reasoning_block("saved reasoning", "deepseek"), text_block("partial"),
+    ]
+
+
+async def test_agent_retains_explicit_empty_reasoning() -> None:
+    provider = ScriptedProvider([[ReasoningDelta("", provider="deepseek"), TextDelta("answer"), Done()]])
+    agent = make_agent(provider)
+    await collect_events(agent, "start")
+    assert agent.session.messages[-1].content == [
+        provider_reasoning_block("", "deepseek"), text_block("answer"),
+    ]
+
+
+async def test_agent_retains_partial_reasoning_and_text_at_deadline() -> None:
+    class PartialProvider(ScriptedProvider):
+        async def complete(self, *args, **kwargs):
+            yield ReasoningDelta("private reasoning", provider="deepseek")
+            yield TextDelta("partial answer")
+            await asyncio.sleep(60)
+
+    agent = make_agent(PartialProvider([]), deadline_monotonic=time.monotonic() + 0.1)
+    events = await collect_events(agent, "start")
+    assert isinstance(events[-1], AgentError)
+    assert "deadline" in events[-1].message
+    assert agent.session.messages[-1].content == [
+        provider_reasoning_block("private reasoning", "deepseek"), text_block("partial answer"),
+    ]
+
+
 async def test_agent_does_not_fallback_after_partial_output() -> None:
     primary = ScriptedProvider([[TextDelta("partial"), ProviderError("down")]])
     fallback = ScriptedProvider([[TextDelta("ok"), Done()]])

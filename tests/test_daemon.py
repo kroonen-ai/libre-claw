@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 
 from libre_claw.config import FallbackConfig, FallbackRouteConfig, load_config
 from libre_claw.core.automations import AutomationStore
@@ -268,6 +269,9 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert "/config/theme" in response.text
     assert "/assets/lobster-icon.svg" in response.text
     assert '<option value="moonshot">Kimi Code / Moonshot</option>' in response.text
+    for selector in ("runProvider", "configProvider", "automationProvider"):
+        select = response.text.split(f'id="{selector}"', 1)[1].split("</select>", 1)[0]
+        assert '<option value="deepseek">DeepSeek</option>' in select
     assert "https://github.com/kroonen-ai/libre-claw" in response.text
     assert "https://git.kroonen.ai/kroonen-ai/libre-claw" in response.text
     assert "GitLab mirror" in response.text
@@ -1564,7 +1568,8 @@ async def test_daemon_continue_run_rejects_active_run(monkeypatch, tmp_path: Pat
             pass
 
 
-async def test_daemon_discovers_models_for_selected_provider(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("provider", ["openrouter", "deepseek"])
+async def test_daemon_discovers_models_for_selected_provider(monkeypatch, tmp_path: Path, provider: str) -> None:
     from libre_claw.providers.model_catalog import ModelCatalog, ModelInfo
 
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -1577,9 +1582,9 @@ async def test_daemon_discovers_models_for_selected_provider(monkeypatch, tmp_pa
         return ModelCatalog((ModelInfo(provider, "lab/future-agent", "Future Agent", 131072),), "live")
 
     monkeypatch.setattr("libre_claw.daemon.discover_models", discover)
-    response = await server.list_models(RequestStub(query={"provider": "openrouter", "refresh": "true"}))
+    response = await server.list_models(RequestStub(query={"provider": provider, "refresh": "true"}))
     payload = json.loads(response.text)
-    assert calls == [("openrouter", True)]
+    assert calls == [(provider, True)]
     assert payload["models"][0]["model"] == "lab/future-agent"
     assert payload["models"][0]["context_window_tokens"] == 131072
     assert payload["source"] == "live"

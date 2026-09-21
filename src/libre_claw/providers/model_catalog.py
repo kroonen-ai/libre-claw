@@ -84,6 +84,7 @@ _DEFAULT_URLS = {
     "anthropic": "https://api.anthropic.com",
     "openai": "https://api.openai.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
+    "deepseek": "https://api.deepseek.com",
     "moonshot": "https://api.kimi.com/coding/v1",
     "ollama": "http://localhost:11434",
     "llamacpp": "http://localhost:8080",
@@ -92,6 +93,7 @@ _KEY_ENVS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
     "moonshot": "KIMI_API_KEY",
 }
 
@@ -249,7 +251,7 @@ async def _discover_cached(
         async with asyncio.timeout(_DISCOVERY_TIMEOUT):
             if provider == "codex":
                 models = await _discover_codex(config, settings)
-            elif provider in {"openai", "anthropic", "moonshot"} and not api_key:
+            elif provider in {"openai", "anthropic", "deepseek", "moonshot"} and not api_key:
                 raise _DiscoveryError("Set a provider API key to load available models.")
             elif client is not None:
                 models = await _discover_http(client, provider, settings, api_key)

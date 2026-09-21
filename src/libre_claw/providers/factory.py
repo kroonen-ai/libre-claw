@@ -19,6 +19,7 @@ from libre_claw.providers.anthropic import AnthropicProvider
 from libre_claw.providers.base import LLMProvider, ProviderConfigurationError
 from libre_claw.providers.capabilities import bind_model_capabilities
 from libre_claw.providers.codex import CodexProvider
+from libre_claw.providers.deepseek import DeepSeekProvider
 from libre_claw.providers.llamacpp import DEFAULT_LLAMACPP_BASE_URL, LlamaCppProvider
 from libre_claw.providers.local import OllamaThink
 from libre_claw.providers.moonshot import (
@@ -46,6 +47,13 @@ def create_provider(
     if api_key_env:
         settings = {**config.providers.get(name, {}), "api_key_env": api_key_env}
         config = replace(config, providers={**config.providers, name: settings})
+    if isinstance(provider, DeepSeekProvider):
+        settings = {
+            **config.providers.get(name, {}),
+            "thinking": provider.thinking,
+            "reasoning_effort": provider.reasoning_effort,
+        }
+        config = replace(config, providers={**config.providers, name: settings})
     return bind_model_capabilities(provider, config, name, api_key_store=api_key_store)
 
 
@@ -71,6 +79,7 @@ def _create_provider(
         "anthropic",
         "openai",
         "openrouter",
+        "deepseek",
         "moonshot",
         "ollama",
         "llamacpp",
@@ -78,7 +87,7 @@ def _create_provider(
     }:
         msg = (
             f"Provider '{resolved_provider_name}' is not supported. "
-            "Use 'anthropic', 'openai', 'openrouter', 'moonshot', 'ollama', 'llamacpp', or 'codex'."
+            "Use 'anthropic', 'openai', 'openrouter', 'deepseek', 'moonshot', 'ollama', 'llamacpp', or 'codex'."
         )
         raise ProviderConfigurationError(msg)
     if provider_config is None:
@@ -142,6 +151,10 @@ def _create_provider(
             )
         raise ProviderConfigurationError(msg)
 
+    if resolved_provider_name == "deepseek" and "max_tokens" in provider_config:
+        token_limit = provider_config["max_tokens"]
+        if not isinstance(token_limit, int) or isinstance(token_limit, bool) or token_limit <= 0:
+            raise ProviderConfigurationError("[providers.deepseek].max_tokens must be a positive integer.")
     max_tokens = _provider_max_tokens(provider_config)
     try:
         if resolved_provider_name == "anthropic":
@@ -157,6 +170,25 @@ def _create_provider(
                 model=resolved_model,
                 max_tokens=max_tokens,
                 base_url=_str_provider_value(provider_config, "base_url", "https://openrouter.ai/api/v1"),
+            )
+        if resolved_provider_name == "deepseek":
+            thinking = provider_config.get("thinking", "enabled")
+            effort = provider_config.get("reasoning_effort", "high")
+            if not isinstance(thinking, str) or thinking.lower() not in {"enabled", "disabled"}:
+                raise ProviderConfigurationError(
+                    "[providers.deepseek].thinking must be 'enabled' or 'disabled'."
+                )
+            if not isinstance(effort, str) or effort.lower() not in {"low", "high", "max"}:
+                raise ProviderConfigurationError(
+                    "[providers.deepseek].reasoning_effort must be 'low', 'high', or 'max'."
+                )
+            return DeepSeekProvider(
+                api_key=api_key_lookup.value,
+                model=resolved_model,
+                max_tokens=max_tokens,
+                base_url=_str_provider_value(provider_config, "base_url", "https://api.deepseek.com"),
+                thinking=thinking.lower(),
+                reasoning_effort=effort.lower(),
             )
         if resolved_provider_name == "moonshot":
             thinking = _moonshot_thinking_value(provider_config)
@@ -393,6 +425,8 @@ def _moonshot_thinking_value(config: Mapping[str, Any]) -> MoonshotThinking:
 
 
 def _default_api_key_env(provider_name: str) -> str:
+    if provider_name == "deepseek":
+        return "DEEPSEEK_API_KEY"
     if provider_name == "openrouter":
         return "OPENROUTER_API_KEY"
     if provider_name == "openai":
@@ -407,6 +441,7 @@ def _provider_label(provider_name: str) -> str:
         "anthropic": "Anthropic",
         "openai": "OpenAI",
         "openrouter": "OpenRouter",
+        "deepseek": "DeepSeek",
         "moonshot": "Moonshot AI",
         "llamacpp": "llama.cpp",
         "codex": "Codex",
@@ -432,6 +467,8 @@ def _resolve_model(
 
 
 def _fallback_model(provider_name: str) -> str:
+    if provider_name == "deepseek":
+        return "deepseek-flash"
     if provider_name == "openai":
         return "gpt-4o"
     if provider_name == "openrouter":

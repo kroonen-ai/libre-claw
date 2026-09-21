@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -127,7 +128,7 @@ class OpenAIProvider(LLMProvider):
             request["temperature"] = temperature
 
         try:
-            apply_reasoning_request(self, request)
+            self._finalize_request(request)
         except ProviderConfigurationError as exc:
             yield ProviderError(str(exc))
             return
@@ -136,14 +137,15 @@ class OpenAIProvider(LLMProvider):
         usage: Usage | None = None
         stop_reason: str | None = None
         finalized_tools = False
+        stream_response: Any = None
 
         try:
             stream_response = await self._client.chat.completions.create(**request)
             async for chunk in stream_response:
-                usage = _usage_from(_object_field(chunk, "usage"), usage)
+                usage = self._usage_from(_object_field(chunk, "usage"), usage)
                 choices = _object_field(chunk, "choices") or []
                 for choice in choices:
-                    usage = _usage_from(_object_field(choice, "usage"), usage)
+                    usage = self._usage_from(_object_field(choice, "usage"), usage)
                     delta = _object_field(choice, "delta")
                     if delta is not None:
                         reasoning = self._reasoning_delta(delta)
@@ -160,11 +162,17 @@ class OpenAIProvider(LLMProvider):
                     finish_reason = _object_field(choice, "finish_reason")
                     if finish_reason:
                         stop_reason = str(finish_reason)
+                        if error := self._response_error(stop_reason, bool(accumulators) or finalized_tools):
+                            yield ProviderError(error)
+                            return
                     if finish_reason == "tool_calls" and not finalized_tools:
                         for normalized in self._finalize_tool_calls(accumulators):
                             yield normalized
                         finalized_tools = True
 
+            if error := self._response_error(stop_reason, bool(accumulators) or finalized_tools):
+                yield ProviderError(error)
+                return
             if accumulators and not finalized_tools:
                 for normalized in self._finalize_tool_calls(accumulators):
                     yield normalized
@@ -175,6 +183,15 @@ class OpenAIProvider(LLMProvider):
             self._logger.warning("openai_stream_failed", error=error, error_type=exc.__class__.__name__)
             yield ProviderError(f"{self.display_name} request failed: {error}")
             return
+        finally:
+            close = getattr(stream_response, "close", None)
+            if close is not None:
+                try:
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception as exc:
+                    self._logger.warning("openai_stream_close_failed", error=str(exc))
 
         yield Done(usage=usage, stop_reason=stop_reason)
 
@@ -207,6 +224,16 @@ class OpenAIProvider(LLMProvider):
 
     def _extra_request_parameters(self) -> dict[str, Any]:
         return {}
+
+    def _finalize_request(self, request: dict[str, Any]) -> None:
+        """Apply capability controls and provider protocol constraints."""
+        apply_reasoning_request(self, request)
+
+    def _usage_from(self, raw_usage: Any, previous: Usage | None) -> Usage | None:
+        return _usage_from(raw_usage, previous)
+
+    def _response_error(self, stop_reason: str | None, has_tool_calls: bool) -> str | None:
+        return None
 
     def _format_assistant_message(self, blocks: Sequence[ContentBlock]) -> dict[str, Any]:
         return _format_assistant_message(blocks)

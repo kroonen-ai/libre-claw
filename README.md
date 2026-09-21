@@ -23,7 +23,7 @@ Current release: Version `0.1.0`.
 | Local dashboard | Start, inspect, cancel, and approve daemon-owned runs from a browser on localhost. |
 | Memory and skills | Local persistent memory, `SOUL.md` persona files, user/project `SKILL.md` workflows, and optional Vercel Skills discovery. |
 | Real tools | File edits, shell, code search, web search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
-| Provider routing | Kimi Code/Moonshot, OpenRouter, Ollama/Ollama Cloud, llama.cpp/llama-swap, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
+| Provider routing | DeepSeek, Kimi Code/Moonshot, OpenRouter, Ollama/Ollama Cloud, llama.cpp/llama-swap, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
 | Reproducible evals | A Harbor adapter runs the real Libre Claw loop against Terminal-Bench 2.1. |
 | Petdex companion | Optional local state updates for the Petdex desktop companion app. |
 | Safe defaults | API keys stay out of project config, dangerous commands are blocked, and writes require approval. |
@@ -164,6 +164,7 @@ Libre Claw does not need real API keys in project files. Use the key store:
 
 ```bash
 libre-claw auth set-key openrouter
+libre-claw auth set-key deepseek
 libre-claw auth set-key moonshot
 libre-claw auth set-key anthropic
 libre-claw auth set-key openai
@@ -175,6 +176,7 @@ Or use environment variables:
 
 ```bash
 export OPENROUTER_API_KEY="..."
+export DEEPSEEK_API_KEY="..."
 export KIMI_API_KEY="..."
 export ANTHROPIC_API_KEY="..."
 export OPENAI_API_KEY="..."
@@ -186,6 +188,10 @@ Key lookup order:
 1. Environment variable.
 2. OS keyring.
 3. Encrypted local fallback file at `~/.libre-claw/.keys`.
+
+For direct DeepSeek access, run `/setup key deepseek`, then `/setup deepseek`.
+Use `/models deepseek` to discover available models. See the
+[DeepSeek guide](docs/DEEPSEEK.md) for thinking settings and image support.
 
 ### Choose A Model
 
@@ -285,6 +291,7 @@ Use `/provider` when you only want to switch providers:
 
 ```text
 /provider openrouter
+/provider deepseek
 /provider moonshot
 /provider ollama
 /provider anthropic
@@ -667,7 +674,7 @@ libre-claw auth status
 libre-claw auth set-key openrouter
 ```
 
-Replace `openrouter` with `moonshot`, `anthropic`, `openai`, or `ollama`. For
+Replace `openrouter` with `deepseek`, `moonshot`, `anthropic`, `openai`, or `ollama`. For
 Codex:
 
 ```bash
@@ -705,6 +712,7 @@ api_key_env = ""
 - Website: [libreclaw.sh](https://libreclaw.sh)
 - Docs: [libreclaw.sh/docs](https://libreclaw.sh/docs/)
 - Getting started: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+- DeepSeek integration: [docs/DEEPSEEK.md](docs/DEEPSEEK.md)
 - Kimi Code and Moonshot integration: [docs/MOONSHOT_KIMI.md](docs/MOONSHOT_KIMI.md)
 - SearXNG integration: [docs/SEARXNG_INTEGRATION.md](docs/SEARXNG_INTEGRATION.md)
 - Vercel Skills integration: [docs/VERCEL_SKILLS_INTEGRATION.md](docs/VERCEL_SKILLS_INTEGRATION.md)

@@ -284,12 +284,12 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/theme", "/theme list|<name> [--global]", "Switch or persist the TUI/dashboard theme"),
     SlashCommand(
         "/provider",
-        "/provider anthropic|openai|openrouter|moonshot|ollama|codex",
+        "/provider anthropic|openai|openrouter|deepseek|moonshot|ollama|llamacpp|codex",
         "Switch provider for new turns",
     ),
     SlashCommand(
         "/setup",
-        "/setup status|provider|key|model|openrouter|moonshot|ollama-cloud|codex",
+        "/setup status|provider|key|model|openrouter|deepseek|moonshot|ollama-cloud|codex",
         "First-run provider and key setup",
     ),
     SlashCommand("/codex", "/codex login|status|logout|use [model]", "Manage Codex/ChatGPT login"),
@@ -322,7 +322,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
 )
 SLASH_COMMAND_NAMES = frozenset(command.name for command in SLASH_COMMANDS)
 
-SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "moonshot", "ollama", "llamacpp", "codex")
+SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "deepseek", "moonshot", "ollama", "llamacpp", "codex")
 
 
 PERMISSION_KEYS: dict[str, PermissionResolution] = {
@@ -3050,9 +3050,9 @@ class LibreClawApp(App[None]):
 
         if action == "key":
             provider = _canonical_tui_provider(value)
-            if provider not in {"anthropic", "openai", "openrouter", "moonshot", "ollama"}:
+            if provider not in {"anthropic", "openai", "openrouter", "deepseek", "moonshot", "ollama"}:
                 self._append_system(
-                    "Usage: /setup key anthropic|openai|openrouter|moonshot|ollama"
+                    "Usage: /setup key anthropic|openai|openrouter|deepseek|moonshot|ollama"
                 )
                 return
             self._append_system(f"Ready for {provider} API key. Paste it into the input box; it will be hidden.")
@@ -3066,6 +3066,14 @@ class LibreClawApp(App[None]):
         if action == "openrouter":
             self._set_model("openrouter:qwen/qwen3.7-max --global")
             self._append_system("Next: run `/setup key openrouter` if the OpenRouter key is not stored yet.")
+            return
+
+        if action == "deepseek":
+            model = str(self.config.providers["deepseek"]["default_model"])
+            self._set_model(f"deepseek:{model} --global")
+            self._append_system(
+                "Next: run `/setup key deepseek` to store your DeepSeek key, then `/models deepseek` to discover models."
+            )
             return
 
         if action == "moonshot":
@@ -3091,7 +3099,7 @@ class LibreClawApp(App[None]):
         providers = [
             (name, _provider_api_key_env(provider_config))
             for name, provider_config in self.config.providers.items()
-            if name in {"anthropic", "openai", "openrouter", "moonshot", "ollama"}
+            if name in {"anthropic", "openai", "openrouter", "deepseek", "moonshot", "ollama"}
         ]
         try:
             statuses = await asyncio.to_thread(store.key_status, providers)
@@ -3114,6 +3122,7 @@ class LibreClawApp(App[None]):
                 "- /setup provider openrouter",
                 "- /setup key openrouter",
                 "- /model openrouter:qwen/qwen3.7-max --global",
+                "- /setup deepseek",
                 "- /setup moonshot",
                 "- /setup codex",
             ]
@@ -3677,7 +3686,7 @@ class LibreClawApp(App[None]):
         if provider not in SUPPORTED_PROVIDERS:
             raise ProviderConfigurationError(
                 "[goal].judge_provider must be 'current', 'anthropic', 'openai', "
-                "'openrouter', 'moonshot', 'ollama', or 'codex'."
+                "'openrouter', 'deepseek', 'moonshot', 'ollama', 'llamacpp', or 'codex'."
             )
 
         model = self.config.goal.judge_model.strip()
@@ -4658,6 +4667,8 @@ class LibreClawApp(App[None]):
                 SlashCommand("/setup status", "/setup status", "Show provider and key readiness"),
                 SlashCommand("/setup provider openrouter", "/setup provider openrouter", "Switch to OpenRouter"),
                 SlashCommand("/setup key openrouter", "/setup key openrouter", "Store OpenRouter key inside the TUI"),
+                SlashCommand("/setup deepseek", "/setup deepseek", "Configure DeepSeek with your default model"),
+                SlashCommand("/setup key deepseek", "/setup key deepseek", "Store DeepSeek key inside the TUI"),
                 SlashCommand("/setup moonshot", "/setup moonshot", "Configure Kimi Code with Kimi K3"),
                 SlashCommand("/setup key moonshot", "/setup key moonshot", "Store a Kimi Code or Platform key"),
                 SlashCommand("/setup key anthropic", "/setup key anthropic", "Store Anthropic key inside the TUI"),
@@ -5499,7 +5510,7 @@ def _provider_help_text(config: LibreClawConfig) -> str:
     lines = [
         f"Current provider: {provider}",
         (
-            "Use `/provider anthropic|openai|openrouter|moonshot|ollama|llamacpp|codex`, "
+            "Use `/provider anthropic|openai|openrouter|deepseek|moonshot|ollama|llamacpp|codex`, "
             + "or use `/model <provider>:<name>` to switch both."
         ),
         "For Codex/ChatGPT auth, run `/codex login` then `/provider codex`.",
@@ -5512,10 +5523,11 @@ def _setup_help_text() -> str:
         [
             "Libre Claw first-run setup:",
             "/setup status",
-            "/setup provider anthropic|openai|openrouter|moonshot|ollama|codex",
-            "/setup key anthropic|openai|openrouter|moonshot|ollama",
+            "/setup provider anthropic|openai|openrouter|deepseek|moonshot|ollama|llamacpp|codex",
+            "/setup key anthropic|openai|openrouter|deepseek|moonshot|ollama",
             "/setup model <provider>:<model> [--global]",
             "/setup openrouter",
+            "/setup deepseek",
             "/setup moonshot",
             "/setup ollama-cloud",
             "/setup codex",

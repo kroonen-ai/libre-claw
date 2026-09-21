@@ -37,6 +37,7 @@ def config(monkeypatch, tmp_path):
     for name in (
         "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "LIBRE_CLAW_DEFAULT_PROVIDER",
         "LIBRE_CLAW_DEFAULT_MODEL", "KIMI_API_KEY", "MOONSHOT_API_KEY",
+        "DEEPSEEK_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
     model_catalog._CACHE.clear()
@@ -57,6 +58,12 @@ def provider_config(config, provider, **settings):
      {"data": [{"id": "future-lab/new-agent", "name": "Future Agent"}]}),
     ("openai", {"base_url": "https://gateway.test/custom/v1"}, "/custom/v1/models",
      {"data": [{"id": "new-custom-model"}]}),
+    ("deepseek", {"default_model": "configured-deepseek"}, "/models",
+     {"data": [{"id": "future-deepseek-model", "object": "model", "owned_by": "deepseek"}]}),
+    ("deepseek", {"default_model": "configured-deepseek", "base_url": "https://api.deepseek.com/v1/"},
+     "/v1/models", {"data": [{"id": "future-deepseek-model"}]}),
+    ("deepseek", {"default_model": "configured-deepseek", "base_url": "https://gateway.test/custom/v1/"},
+     "/custom/v1/models", {"data": [{"id": "future-custom-model"}]}),
     ("moonshot", {}, "/coding/v1/models", {"data": [{"id": "future-kimi"}]}),
     ("moonshot", {"service": "platform", "base_url": "https://api.moonshot.cn/v1"},
      "/v1/models", {"data": [{"id": "future-platform-model"}]}),
@@ -153,7 +160,73 @@ async def test_openrouter_normalizes_metadata_and_ignores_malformed_rows(config)
     assert result.models[-1].max_completion_tokens == 64000
 
 
-async def test_cache_ttl_refresh_and_stale_failure(config, monkeypatch):
+@pytest.mark.parametrize("api_key_env", ["DEEPSEEK_API_KEY", "CUSTOM_DEEPSEEK_KEY"])
+async def test_deepseek_catalog_keeps_unpublished_capabilities_unknown(config, api_key_env):
+    config = provider_config(config, "deepseek", api_key_env=api_key_env)
+    store = KeyStore()
+
+    def respond(request):
+        assert str(request.url) == "https://api.deepseek.com/models"
+        assert request.headers["authorization"] == "Bearer test-secret"
+        return httpx.Response(200, json={"object": "list", "data": [
+            {"id": "deepseek-next-generation", "object": "model", "owned_by": "deepseek"},
+        ]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        result = await discover_models(config, "deepseek", api_key_store=store, client=client)
+    info = next(item for item in result.models if item.model == "deepseek-next-generation")
+    assert result.source == "live" and not result.error
+    assert store.calls == [("deepseek", api_key_env, ())]
+    assert info.label == info.model
+    assert info.capability_source == "unknown"
+    assert all(getattr(info, field) is None for field in (
+        "context_window_tokens", "max_completion_tokens", "supports_tools", "supports_vision",
+        "supports_reasoning", "supported_reasoning_efforts", "input_cost_per_token",
+        "output_cost_per_token", "supports_temperature",
+    ))
+
+
+async def test_deepseek_manual_models_and_capabilities_survive_discovery_failure(config):
+    config = replace(
+        provider_config(config, "deepseek", default_model="private-deepseek", model_capabilities={
+            "private-deepseek": {"context_window_tokens": 131072, "supports_tools": True},
+        }),
+        general=replace(config.general, default_provider="deepseek", default_model="selected-deepseek"),
+        fallback=replace(config.fallback, routes=(FallbackRouteConfig("deepseek", "fallback-deepseek", ""),)),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(401, json={"error": {"message": "sensitive test-secret"}})
+    )) as client:
+        result = await discover_models(config, "deepseek", api_key_store=KeyStore(), client=client)
+
+    assert result.source == "configured"
+    assert result.error == "Model discovery failed (HTTP 401)."
+    assert {item.model for item in result.models} == {
+        "private-deepseek", "selected-deepseek", "fallback-deepseek",
+    }
+    info = next(item for item in result.models if item.model == "private-deepseek")
+    assert info.context_window_tokens == 131072 and info.supports_tools is True
+    assert info.supports_vision is None and info.capability_source == "configured"
+
+
+async def test_deepseek_accepts_advertised_metadata_from_custom_endpoint(config):
+    config = provider_config(config, "deepseek", base_url="https://gateway.test/deepseek")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"data": [{
+            "id": "gateway-model", "context_window_tokens": 100000, "max_output_tokens": 4096,
+            "supports_tools": True, "supports_vision": False,
+        }]})
+    )) as client:
+        result = await discover_models(config, "deepseek", api_key_store=KeyStore(), client=client)
+
+    info = next(item for item in result.models if item.model == "gateway-model")
+    assert info.context_window_tokens == 100000 and info.max_completion_tokens == 4096
+    assert info.supports_tools is True and info.supports_vision is False
+    assert info.supports_reasoning is None and info.capability_source == "provider"
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "deepseek"])
+async def test_cache_ttl_refresh_and_stale_failure(config, monkeypatch, provider):
     now = [1000.0]
     monkeypatch.setattr(model_catalog.time, "monotonic", lambda: now[0])
     requests = []
@@ -166,26 +239,27 @@ async def test_cache_ttl_refresh_and_stale_failure(config, monkeypatch):
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         kwargs = {"api_key_store": KeyStore(), "client": client}
-        first = await discover_models(config, "openrouter", **kwargs)
-        cached = await discover_models(config, "openrouter", **kwargs)
+        first = await discover_models(config, provider, **kwargs)
+        cached = await discover_models(config, provider, **kwargs)
         assert first.models == cached.models and cached.source == "cache"
         assert len(requests) == 1
-        refreshed = await discover_models(config, "openrouter", refresh=True, **kwargs)
+        refreshed = await discover_models(config, provider, refresh=True, **kwargs)
         assert "vendor/model-2" in {item.model for item in refreshed.models}
         now[0] += model_catalog._CACHE_TTL + 1
-        unavailable = await discover_models(config, "openrouter", **kwargs)
+        unavailable = await discover_models(config, provider, **kwargs)
         assert unavailable.models == refreshed.models
         assert unavailable.source == "cache" and unavailable.error.endswith("(HTTP 503).")
         assert "sensitive" not in unavailable.error
-        await discover_models(config, "openrouter", **kwargs)
+        await discover_models(config, provider, **kwargs)
         assert len(requests) == 3
         now[0] += model_catalog._ERROR_TTL + 1
-        recovered = await discover_models(config, "openrouter", **kwargs)
+        recovered = await discover_models(config, provider, **kwargs)
         assert recovered.source == "live" and not recovered.error
         assert len(requests) == 4
 
 
-async def test_cache_isolated_by_endpoint_and_resolved_credentials(config):
+@pytest.mark.parametrize("provider", ["openrouter", "deepseek"])
+async def test_cache_isolated_by_endpoint_and_resolved_credentials(config, provider):
     store = KeyStore("account-one")
     requests = []
 
@@ -195,13 +269,13 @@ async def test_cache_isolated_by_endpoint_and_resolved_credentials(config):
         return httpx.Response(200, json={"data": [{"id": model}]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        one = await discover_models(config, "openrouter", api_key_store=store, client=client)
+        one = await discover_models(config, provider, api_key_store=store, client=client)
         store.key = "account-two"
-        two = await discover_models(config, "openrouter", api_key_store=store, client=client)
+        two = await discover_models(config, provider, api_key_store=store, client=client)
         assert one.models != two.models
-        assert not any("account-one" in model.model for model in cached_models(config, "openrouter"))
-        second_endpoint = provider_config(config, "openrouter", base_url="https://second.test/v1")
-        three = await discover_models(second_endpoint, "openrouter", api_key_store=store, client=client)
+        assert not any("account-one" in model.model for model in cached_models(config, provider))
+        second_endpoint = provider_config(config, provider, base_url="https://second.test/v1")
+        three = await discover_models(second_endpoint, provider, api_key_store=store, client=client)
         assert three.models != two.models
         assert len(requests) == 3
 
@@ -283,7 +357,8 @@ async def test_bad_catalogs_fall_back_to_configuration(config, payload):
     assert [item.model for item in result.models] == ["openrouter/auto"]
 
 
-async def test_missing_remote_key_avoids_request_and_local_server_needs_no_key(config):
+@pytest.mark.parametrize("provider", ["openai", "deepseek"])
+async def test_missing_remote_key_avoids_request_and_local_server_needs_no_key(config, provider):
     requests = []
 
     def respond(request):
@@ -292,7 +367,7 @@ async def test_missing_remote_key_avoids_request_and_local_server_needs_no_key(c
         return httpx.Response(200, json={"data": [{"id": "local-model"}]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        result = await discover_models(config, "openai", api_key_store=KeyStore(None), client=client)
+        result = await discover_models(config, provider, api_key_store=KeyStore(None), client=client)
         assert result.source == "configured" and "API key" in result.error
         assert not requests
         local = await discover_models(config, "llamacpp", api_key_store=KeyStore(None), client=client)
