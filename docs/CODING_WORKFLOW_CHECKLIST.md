@@ -45,7 +45,7 @@ The public website is maintained in a separate repository.
 ## Audit evidence
 
 - The stable comparison uses identical source and fixture hashes for Codex and
-  OpenRouter; `source_changed_during_run` is false. Each provider passed the
+  OpenRouter; `evaluated_source_commit` identifies the exact committed code; `source_changed_during_run` is false. Each provider passed the
   pagination, catalog/instruction, and seeded review tasks. Recovery checks are
   reported separately from model performance.
 - Both seeded reviews found the two expected regressions without reporting the

@@ -772,8 +772,11 @@ class DaemonServer:
         manager = active_agent.subagents if active_agent is not None else None
         workers = manager.snapshots() if manager is not None else saved_subagent_snapshots(session)
         pending = {item["id"] for item in session.pending_subagent_resumes}
+        active = self.active_runs.get(run_id)
+        wakeup = self._queue_wakeups.get(run_id)
+        processing = (active is not None and not active.task.done()) or (wakeup is not None and not wakeup.done())
         for worker in workers:
-            worker["resume_pending"] = worker["id"] in pending
+            worker["resume_pending"] = worker["id"] in pending and processing
         queued = await self.run_store.queued_messages(run_id)
         if getattr(request, "query", {}).get("controls") in {"1", "true"}:
             session_payload = {"mode": session.mode, "plan_steps": session.plan_steps}

@@ -80,6 +80,10 @@ async def test_compact_controls_exclude_private_history_and_resume_is_durable(mo
     assert scheduled == [run.run_id]
     queued = await server.run_store.queued_messages(run.run_id)
     assert any(worker_id in item["message"] for item in queued)
+    # A stopped/restarted parent has no live executor: its saved request must
+    # remain resumable rather than leaving the Resume button disabled forever.
+    after_restart = json.loads((await server.get_session(Request(run.run_id, compact=True))).text)
+    assert after_restart["subagents"][0]["resume_pending"] is False
 
 
 async def test_local_telegram_worker_resume_queues_on_saved_parent(monkeypatch, tmp_path: Path) -> None:
