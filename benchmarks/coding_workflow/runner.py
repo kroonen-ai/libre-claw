@@ -19,17 +19,15 @@ from pathlib import Path
 from typing import Any
 
 from libre_claw.config import LibreClawConfig, load_config
-from libre_claw.core.agent import Agent, AgentPermissionRequest
-from libre_claw.core.permissions import PermissionManager
-from libre_claw.core.session import Session, session_from_payload, session_to_payload
-from libre_claw.core.tools import ToolContext, ToolRegistry
 from libre_claw.headless import run_headless
 from libre_claw.providers.base import Done, LLMProvider, TextDelta, ToolCallReady
-from libre_claw.tools_builtin.filesystem import ReadFileTool, WriteFileTool
+from .recovery_eval import run_recovery_check
+from .review_eval import run_review_task
 
 
 TASK_ROOT = Path(__file__).parent / "tasks"
-SUITE_VERSION = "coding-workflow-v1"
+SUITE_VERSION = "coding-workflow-v2"
+COMPARISON_TASK_IDS = ("pagination", "catalog", "review-quality")
 TASK_IDS = ("pagination", "catalog")
 CODING_TOOLS = ("read_file", "write_file", "edit_file", "apply_patch", "list_directory", "glob", "search_files", "git_status", "think", "bash", "task_checkpoint")
 
@@ -59,6 +57,8 @@ class OracleProvider(LLMProvider):
 
 
 def fixture_hash(task_id: str) -> str:
+    if task_id not in COMPARISON_TASK_IDS:
+        raise ValueError(f"Unknown task: {task_id}")
     digest = hashlib.sha256()
     for path in sorted((TASK_ROOT / task_id).rglob("*")):
         if path.is_file() and "__pycache__" not in path.parts:
@@ -157,7 +157,7 @@ async def run_task(
     elapsed = time.monotonic() - started
     verification = await verify_fixture(workspace, protected)
     return {
-        "task_id": task_id, "kind": "harness_validation" if offline else "model_evaluation",
+        "task_id": task_id, "category": "coding", "kind": "harness_validation" if offline else "model_evaluation",
         "provider": resolved_provider, "model": resolved_model, "fixture_sha256": fixture_hash(task_id),
         "passed": verification["passed"] and error is None, "baseline_failed": True,
         "elapsed_seconds": round(elapsed, 3), "error": error,
@@ -166,85 +166,9 @@ async def run_task(
         "cached_tokens": usage.cached_tokens if usage else None,
         "cost_usd": usage.cost if usage else None,
         "verification": verification,
-        "trajectory": str(task_output / "trajectory.json"), "workspace": str(workspace),
-        "config": {"max_tool_calls": 30, "max_completion_tokens": 4096, "deadline_seconds": timeout, "auto_approve_fixture_tools": True, "restrict_to_working_dir": True},
+        "trajectory": f"{task_id}/trajectory.json", "workspace": f"{task_id}/workspace",
+        "config": {"max_tool_calls": 30, "max_completion_tokens": 4096, "deadline_seconds": timeout, "auto_approve_fixture_tools": True, "restrict_to_working_dir": True, "completion_token_limit_enforced": provider != "codex", "tool_call_limit_enforced": provider != "codex"},
     }
-
-
-class InterruptedProvider(LLMProvider):
-    def __init__(self) -> None:
-        self.started = asyncio.Event()
-        self.calls = 0
-
-    async def complete(self, messages, **kwargs):
-        self.calls += 1
-        if self.calls == 1:
-            yield ToolCallReady("phase-one", "write_file", {"path": "phase-one.txt", "content": "verified first phase"})
-            yield Done()
-        else:
-            self.started.set()
-            await asyncio.Future()
-
-
-class RecoveryProvider(LLMProvider):
-    def __init__(self) -> None:
-        self.calls = 0
-        self.saw_first_phase = False
-        self.saw_requirement = False
-
-    async def complete(self, messages, system=None, **kwargs):
-        self.calls += 1
-        if self.calls == 1:
-            self.saw_first_phase = any(block.get("tool_use_id") == "phase-one" and not block.get("is_error") for message in messages for block in message.content)
-            self.saw_requirement = "Preserve the first phase" in (system or "")
-            yield ToolCallReady("phase-two", "write_file", {"path": "phase-two.txt", "content": "recovered second phase"})
-            yield Done()
-        else:
-            yield TextDelta("Recovery completed.")
-            yield Done()
-
-
-async def run_recovery_check(output_directory: Path) -> dict[str, Any]:
-    started = time.monotonic()
-    workspace = output_directory / "interrupted-recovery"
-    workspace.mkdir(parents=True, exist_ok=False)
-    context = ToolContext(working_directory=workspace)
-    registry = ToolRegistry([ReadFileTool(context), WriteFileTool(context)])
-    config = load_config(working_directory=workspace)
-    permissions = PermissionManager(config.permissions)
-    permissions.always_allowed_tools.add("write_file")
-    checkpoint_path = workspace / "session.json"
-    async def checkpoint(session: Session) -> None:
-        checkpoint_path.write_text(json.dumps(session_to_payload(session)))
-    session = Session()
-    session.update_checkpoint({"requirements": ["Preserve the first phase"], "outstanding": ["finish second phase"]})
-    provider = InterruptedProvider()
-    first_agent = Agent(session, provider, registry, permissions, "Complete the two phases", checkpoint_callback=checkpoint)
-    async def consume(agent: Agent, prompt: str) -> None:
-        async for event in agent.run(prompt):
-            if isinstance(event, AgentPermissionRequest):
-                event.future.set_result("deny")
-    task = asyncio.create_task(consume(first_agent, "Complete both phases."))
-    await asyncio.wait_for(provider.started.wait(), 5)
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
-    restored = session_from_payload(json.loads(checkpoint_path.read_text()))
-    recovered_provider = RecoveryProvider()
-    second_agent = Agent(restored, recovered_provider, registry, permissions, "Complete the two phases", checkpoint_callback=checkpoint)
-    await consume(second_agent, "Resume the unfinished second phase.")
-    passed = (
-        (workspace / "phase-one.txt").read_text() == "verified first phase"
-        and (workspace / "phase-two.txt").read_text() == "recovered second phase"
-        and recovered_provider.saw_first_phase and recovered_provider.saw_requirement
-    )
-    return {
-        "task_id": "interrupted-recovery", "kind": "harness_validation", "passed": passed,
-        "elapsed_seconds": round(time.monotonic() - started, 3),
-        "input_tokens": None, "output_tokens": None, "cost_usd": None,
-        "checkpoint": str(checkpoint_path),
-        "checks": {"first_phase_preserved": recovered_provider.saw_first_phase, "requirement_restored": recovered_provider.saw_requirement},
-    }
-
 
 def revision_metadata() -> dict[str, Any]:
     root = Path(__file__).resolve().parents[2]
@@ -261,19 +185,35 @@ def revision_metadata() -> dict[str, Any]:
 
 async def run_suite(
     output_directory: Path, *, offline: bool, provider: str = "", model: str = "",
-    task_ids: Sequence[str] = TASK_IDS, timeout: float = 180, config_path: Path | None = None,
+    task_ids: Sequence[str] = COMPARISON_TASK_IDS, timeout: float = 180, config_path: Path | None = None,
 ) -> dict[str, Any]:
     if not offline and (not provider or not model):
         raise ValueError("Live evaluations require explicit --provider and --model")
     if not 1 <= timeout <= 180:
         raise ValueError("Task timeout must be between 1 and 180 seconds")
+    if not task_ids or len(set(task_ids)) != len(task_ids) or any(task not in COMPARISON_TASK_IDS for task in task_ids):
+        raise ValueError("Use unique versioned task IDs")
+    output_directory = output_directory.resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
+    if any(output_directory.iterdir()):
+        raise ValueError("Evaluation output directory must be empty")
     started_at = datetime.now(UTC).isoformat()
     revision = revision_metadata()
     results = []
     for task_id in task_ids:
-        results.append(await run_task(task_id, output_directory, offline=offline, provider=provider, model=model, timeout=timeout, config_path=config_path))
-    results.append(await run_recovery_check(output_directory))
+        try:
+            if task_id == "review-quality":
+                config = benchmark_config(output_directory / task_id / "workspace", provider or "codex", model or "offline", config_path)
+                result = await run_review_task(output_directory, config, offline=offline, timeout=timeout, fixture_sha256=fixture_hash(task_id))
+            else:
+                result = await run_task(task_id, output_directory, offline=offline, provider=provider, model=model, timeout=timeout, config_path=config_path)
+        except Exception as exc:
+            result = {"task_id": task_id, "category": "review" if task_id == "review-quality" else "coding", "kind": "harness_validation" if offline else "model_evaluation", "provider": provider, "model": model, "fixture_sha256": fixture_hash(task_id), "passed": False, "error": type(exc).__name__ + ": " + str(exc), "elapsed_seconds": None, "input_tokens": None, "output_tokens": None, "cached_tokens": None, "cost_usd": None, "verification": {"passed": False, "setup_or_harness_failed": True}}
+        results.append(result)
+    try:
+        results.append(await run_recovery_check(output_directory))
+    except Exception as exc:
+        results.append({"task_id": "interrupted-recovery", "category": "recovery", "kind": "harness_validation", "passed": False, "error": type(exc).__name__ + ": " + str(exc), "input_tokens": None, "output_tokens": None, "cached_tokens": None, "cost_usd": None})
     model_results = [item for item in results if item["kind"] == "model_evaluation"]
     report = {
         "suite_version": SUITE_VERSION, "started_at": started_at,
@@ -293,12 +233,12 @@ def main() -> int:
     parser.add_argument("--provider", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--config", type=Path)
-    parser.add_argument("--task", action="append", choices=TASK_IDS)
+    parser.add_argument("--task", action="append", choices=COMPARISON_TASK_IDS)
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     output = args.output or Path(tempfile.mkdtemp(prefix="libre-claw-workflow-eval-"))
-    report = asyncio.run(run_suite(output.resolve(), offline=args.offline, provider=args.provider, model=args.model, task_ids=args.task or TASK_IDS, timeout=args.timeout, config_path=args.config))
+    report = asyncio.run(run_suite(output.resolve(), offline=args.offline, provider=args.provider, model=args.model, task_ids=args.task or COMPARISON_TASK_IDS, timeout=args.timeout, config_path=args.config))
     sys.stdout.write(json.dumps({"results": str(output.resolve() / "results.json"), "all_checks_passed": report["all_checks_passed"], "model_completion_rate": report["model_completion_rate"]}) + "\n")
     return 0 if report["all_checks_passed"] else 1
 

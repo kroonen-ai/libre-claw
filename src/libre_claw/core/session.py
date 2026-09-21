@@ -56,6 +56,8 @@ class Session:
     mode: Literal["default", "plan"] = "default"
     plan_steps: list[dict[str, str]] = field(default_factory=list)
     pending_steering: list[str] = field(default_factory=list)
+    subagents: dict[str, dict[str, Any]] = field(default_factory=dict)
+    pending_subagent_resumes: list[dict[str, str]] = field(default_factory=list)
 
     def add_user_message(self, content: str, attachments: Sequence[UserAttachment] = ()) -> None:
         if content.strip() and not self.checkpoint.get("objective"):
@@ -84,6 +86,8 @@ class Session:
         self.checkpoint.clear()
         self.plan_steps.clear()
         self.pending_steering.clear()
+        self.subagents.clear()
+        self.pending_subagent_resumes.clear()
 
     def queue_steering(self, content: str) -> None:
         if content.strip():
@@ -286,7 +290,7 @@ def _bounded_compact_summary(summary: str, *, max_chars: int) -> str:
 
 def session_to_payload(session: Session) -> dict[str, Any]:
     return {
-        "version": 2,
+        "version": 3,
         "messages": [message.as_provider_dict() for message in session.messages],
         "summary": session.summary,
         "archived_messages": [message.as_provider_dict() for message in session.archived_messages],
@@ -294,6 +298,8 @@ def session_to_payload(session: Session) -> dict[str, Any]:
         "mode": session.mode,
         "plan_steps": session.plan_steps,
         "pending_steering": session.pending_steering,
+        "subagents": session.subagents,
+        "pending_subagent_resumes": session.pending_subagent_resumes,
     }
 
 
@@ -301,6 +307,17 @@ def session_from_payload(value: object) -> Session:
     session = Session()
     if not isinstance(value, dict):
         return session
+    if isinstance(value.get("subagents"), dict):
+        session.subagents = {
+            key: dict(item) for key, item in value["subagents"].items()
+            if isinstance(key, str) and isinstance(item, dict)
+        }
+    if isinstance(value.get("pending_subagent_resumes"), list):
+        session.pending_subagent_resumes = [
+            {"id": item["id"], "guidance": str(item.get("guidance", ""))}
+            for item in value["pending_subagent_resumes"]
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()
+        ]
     session.mode = "plan" if value.get("mode") == "plan" else "default"
     if isinstance(value.get("checkpoint"), dict):
         session.update_checkpoint(value["checkpoint"])

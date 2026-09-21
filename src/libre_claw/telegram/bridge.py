@@ -40,10 +40,10 @@ from libre_claw.core.memory import (
     summarize_session_for_memory,
 )
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
-from libre_claw.core.runs import RunRecord, RunStore
+from libre_claw.core.runs import RunRecord, RunStore, settle_finalization
 from libre_claw.core.session import UserAttachment, estimate_context_tokens, session_to_payload, session_from_payload
 from libre_claw.core.agent import AgentSubagentUpdate
-from libre_claw.core.task_control import update_plan
+from libre_claw.core.task_control import update_plan, request_subagent_resume, saved_subagent_snapshots
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.soul import SoulStore
 from libre_claw.core.tools import ToolCall
@@ -110,7 +110,7 @@ TELEGRAM_SYSTEM_PROMPT_EXTRA = (
 class TelegramChatState:
     chat_id: int
     session: Session = field(default_factory=Session)
-    usage: Usage = field(default_factory=Usage)
+    usage: Usage = field(default_factory=lambda: Usage(cost=0.0))
     last_usage: Usage = field(default_factory=Usage)
     task: asyncio.Task[None] | None = None
     pending_permissions: dict[str, AgentPermissionRequest] = field(default_factory=dict)
@@ -179,6 +179,9 @@ class TelegramBridge:
     def state_for(self, chat_id: int) -> TelegramChatState:
         return self._states.setdefault(chat_id, TelegramChatState(chat_id=chat_id))
 
+    def runtime_config_for(self, chat_id: int) -> LibreClawConfig:
+        return self.state_for(chat_id).runtime_config or self.config
+
     def new_session(self, chat_id: int) -> TelegramChatState:
         state = TelegramChatState(chat_id=chat_id)
         self._states[chat_id] = state
@@ -204,20 +207,22 @@ class TelegramBridge:
             return
 
         state = self.state_for(chat_id)
-        runtime = state.runtime_config or self.config
+        state.runtime_config = await self._with_openrouter_model_limits(self.runtime_config_for(chat_id))
+        runtime = state.runtime_config
+        provider = _canonical_provider(runtime.general.default_provider)
+        model = runtime.general.default_model or _provider_default_model(runtime, provider)
         if state.run_id is None:
-            run = await self.run_store.create_run(text, kind="chat", provider=runtime.general.default_provider, model=runtime.general.default_model, working_directory=runtime.general.working_directory)
+            run = await self.run_store.create_run(text, kind="chat", provider=provider, model=model, working_directory=runtime.general.working_directory)
             state.run_id = run.run_id
         else:
+            await self.run_store.set_runtime(state.run_id, provider=provider, model=model)
             await self.run_store.update_state(state.run_id, "running")
         await self.run_store.append_event(state.run_id, "user_message", {"content": text})
         try:
             from libre_claw.core.git_review import create_checkpoint
             state.session.checkpoint["last_turn_tree"] = await create_checkpoint(runtime.general.working_directory, name=state.run_id)
         except (ValueError, OSError):
-            pass
-        state = self.state_for(chat_id)
-        state.runtime_config = await self._with_openrouter_model_limits(state.runtime_config or self.config)
+            state.session.checkpoint.pop("last_turn_tree", None)
         try:
             agent = self._create_agent(state)
         except ProviderConfigurationError as exc:
@@ -332,13 +337,38 @@ class TelegramBridge:
             final_state = "failed"
             raise
         finally:
-            await self.run_store.save_session(state.run_id, state.session)
-            queued = await self.run_store.finish_turn(state.run_id, final_state, summary=_latest_assistant_text(state.session))
+            owner = asyncio.current_task()
+
+            async def finalize():
+                await self.run_store.save_session(state.run_id, state.session)
+                effective_state = "cancelled" if owner is not None and owner.cancelling() else final_state
+                return await self.run_store.finish_turn(state.run_id, effective_state, summary=_latest_assistant_text(state.session))
+
+            queued, cancelled = await settle_finalization(asyncio.create_task(finalize()))
+            if cancelled:
+                await settle_finalization(asyncio.create_task(self.run_store.release_queued_message(state.run_id, queued, cancelled=True)))
+                raise asyncio.CancelledError
         if final_state == "done":
             if queued is not None:
                 yield TelegramToolNotice("Continuing queued follow-up.", tool_name="task_turn")
                 async for event in self.stream_message(chat_id, queued["message"]):
                     yield event
+
+    async def stream_queued_messages(self, chat_id: int):
+        """Consume an idle chat's queue through the usual Telegram event renderer."""
+        state = self.state_for(chat_id)
+        if state.run_id is None:
+            yield TelegramError("Start or resume a task first.")
+            return
+        queued, cancelled = await settle_finalization(asyncio.create_task(self.run_store.take_queued_message(state.run_id)))
+        if cancelled:
+            await settle_finalization(asyncio.create_task(self.run_store.release_queued_message(state.run_id, queued, cancelled=True)))
+            raise asyncio.CancelledError
+        if queued is None:
+            yield TelegramDone()
+            return
+        async for event in self.stream_message(chat_id, queued["message"]):
+            yield event
 
     def resolve_permission(self, prompt_id: str, resolution: PermissionResolution) -> bool:
         if prompt_id.startswith("daemon:"):
@@ -392,9 +422,10 @@ class TelegramBridge:
 
     def status_text(self, chat_id: int) -> str:
         state = self.state_for(chat_id)
-        provider = _canonical_provider(self.config.general.default_provider)
-        model = self.config.general.default_model or _provider_default_model(self.config, provider)
-        meter = _telegram_context_meter(self.config, state, self.soul_store, self._memory_facts)
+        runtime = self.runtime_config_for(chat_id)
+        provider = _canonical_provider(runtime.general.default_provider)
+        model = runtime.general.default_model or _provider_default_model(runtime, provider)
+        meter = _telegram_context_meter(runtime, state, SoulStore(runtime.general.working_directory), self._memory_facts)
         usage = state.usage
         last_usage = state.last_usage
         lines = [
@@ -495,6 +526,8 @@ class TelegramBridge:
             result = await self.daemon_client.control_run(run_id, "steer", note)
             return str(result.get("text", "Steering queued."))
         state.session.queue_steering(note)
+        if state.subagents is not None:
+            state.subagents.steer(note)
         if state.run_id:
             await self.run_store.save_session(state.run_id, state.session)
         return f"{label} saved for future turns."
@@ -508,13 +541,26 @@ class TelegramBridge:
                 if result.get("session"):
                     state.session = session_from_payload(result["session"])
                 return str(result.get("text", "Task updated."))
-            if action in {"agents", "agent_cancel"}:
+            if action in {"agents", "agent_cancel", "agent_resume"}:
                 manager = getattr(state, "subagents", None)
-                if manager is None:
-                    return "No active subagents for this task."
+                if action == "agent_resume":
+                    if not run_id:
+                        return "Resume the parent task first."
+                    agent_id = text.split(maxsplit=1)[0] if text else ""
+                    if manager and any(item["id"] == agent_id and item["status"] in {"running", "blocked"} for item in manager.snapshots()):
+                        return "This worker is already running."
+                    agent_id, _ = request_subagent_resume(state.session, text)
+                    await self.run_store.save_session(run_id, state.session)
+                    if state.task is None or state.task.done() or (manager is not None and not getattr(manager.parent, "accepting_control", False)):
+                        await self.run_store.queue_message(run_id, f"Resume saved worker {agent_id}, wait for its result, and report the outcome.")
+                    return f"Worker {agent_id} resume queued for the next safe boundary."
                 if action == "agent_cancel":
+                    if manager is None:
+                        return "No active subagents for this task."
                     await manager.cancel(text)
-                return "\n".join(f"{item['id']}: {item['status']} - {item['task']}" for item in manager.snapshots()) or "No subagents for this task."
+                    await self.run_store.save_session(run_id, state.session)
+                snapshots = manager.snapshots() if manager else saved_subagent_snapshots(state.session)
+                return "\n".join(f"{item['id']}: {item['status']} - {item['task']}" for item in snapshots) or "No subagents for this task."
             if action == "plan":
                 result = update_plan(state.session, text)
                 if run_id:
@@ -817,8 +863,9 @@ class TelegramBridge:
     async def _extract_turn_memory(self, chat_id: int, user_message: str, assistant_text: str) -> None:
         if not self._memory_enabled() or not assistant_text.strip():
             return
+        runtime = self.runtime_config_for(chat_id)
         source_id = f"{self.state_for(chat_id).archive_id}:turn:{uuid4().hex}"
-        if self.config.memory.auto_summarize:
+        if runtime.memory.auto_summarize:
             try:
                 await self.memory_store.add_memory_item(
                     kind="summary",
@@ -826,15 +873,15 @@ class TelegramBridge:
                     text=_memory_summary_text(user_message, assistant_text),
                     source_type="telegram",
                     source_id=source_id,
-                    project_root=self.config.general.working_directory,
+                    project_root=runtime.general.working_directory,
                 )
             except Exception:
                 pass
-        if not self.config.memory.auto_extract:
+        if not runtime.memory.auto_extract:
             return
         try:
-            provider = create_provider(self.config)
-            existing = [item.text for item in await self.memory_store.search_memory_items(user_message, project_root=self.config.general.working_directory, limit=8)]
+            provider = create_provider(runtime)
+            existing = [item.text for item in await self.memory_store.search_memory_items(user_message, project_root=runtime.general.working_directory, limit=8)]
             extracted = await extract_memories_with_provider(
                 provider,
                 user_message=user_message,
@@ -848,7 +895,7 @@ class TelegramBridge:
                     text=memory.text,
                     source_type="telegram",
                     source_id=f"{source_id}:memory:{index}",
-                    project_root=self.config.general.working_directory if memory.scope == "project" else "",
+                    project_root=runtime.general.working_directory if memory.scope == "project" else "",
                 )
         except Exception:
             return
@@ -897,6 +944,7 @@ class TelegramBridge:
             if state.run_id and hasattr(self.daemon_client, "continue_run"):
                 async def start(message: str, **payload: Any) -> dict[str, Any]:
                     payload.pop("working_directory", None)
+                    payload.pop("session", None)
                     return await self.daemon_client.continue_run(state.run_id, message, **payload)
             try:
                 started = await start(
@@ -986,7 +1034,9 @@ class TelegramBridge:
 
 
 def _format_usage_cost(usage: Usage) -> str:
-    if usage.cost is None or usage.cost == 0:
+    if usage.cost is None:
+        return "unknown"
+    if usage.cost == 0:
         return "$0.00"
     if usage.cost < 0.01:
         return f"${usage.cost:.6f}"

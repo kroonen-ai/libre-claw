@@ -1,0 +1,21 @@
+{
+  "bugs": [
+    {
+      "id": "owner-and-active",
+      "file": "access.py",
+      "lines": [6],
+      "evidence_patterns": ["owner|viewer|unauthori[sz]ed|permission|access", "active|inactive|revoked|disabled", "or|any|either|non.owner|another|other user|bypass"]
+    },
+    {
+      "id": "zero-page-size",
+      "file": "pagination.py",
+      "lines": [6, 7, 8],
+      "evidence_patterns": ["zero|size\\s*=?=?\\s*0|size of 0", "divis|divide|ZeroDivisionError|ValueError|exception"]
+    }
+  ],
+  "benign_files": ["formatting.py"],
+  "oracle_findings": [
+    {"priority": "P1", "file": "access.py", "line": 6, "title": "Require ownership and active status", "body": "Using or grants any viewer access to active documents and permits owners to open inactive documents. Restore and to enforce both conditions."},
+    {"priority": "P2", "file": "pagination.py", "line": 6, "title": "Reject zero page size", "body": "A zero size now bypasses validation and raises ZeroDivisionError at integer division instead of the documented ValueError. Restore the nonpositive guard."}
+  ]
+}

@@ -159,6 +159,13 @@ class RunStore:
         async with self._lock:
             return await _settled_io(self._take_queued_message_sync, run_id)
 
+    async def release_queued_message(
+        self, run_id: str, item: dict[str, Any] | None, *, cancelled: bool = False,
+    ) -> None:
+        """Return explicitly unstarted work after a claim; never replay an executed turn."""
+        async with self._lock:
+            await _settled_io(self._release_queued_message_sync, run_id, item, cancelled)
+
     async def finish_turn(
         self, run_id: str, state: RunState, *, plan: str = "", summary: str = "",
         verification: str = "", diff: str = "", browser: str = "",
@@ -196,6 +203,25 @@ class RunStore:
         self._append_event_sync(record.run_id, "queued_message_started", item)
         _write_json(record.path / "queue.json", {"messages": items})
         return item
+
+    def _release_queued_message_sync(self, run_id: str, item: dict[str, Any] | None, cancelled: bool) -> None:
+        record = self._load_run_or_raise(run_id)
+        with _queue_file_lock(record.path):
+            if item is not None:
+                events = self._load_events_sync(run_id)
+                claim = next((event.data for event in reversed(events)
+                              if event.type == "queued_message_started" and event.data.get("id") == item.get("id")), None)
+                if claim is None or claim != item:
+                    raise ValueError("Only a recorded, unstarted queue claim can be returned.")
+                items = _read_queue(record.path)
+                if not any(pending.get("id") == item["id"] for pending in items):
+                    # The journal also restores this item if the process exits
+                    # before the queue snapshot below reaches disk.
+                    self._append_event_sync(run_id, "queued_message_returned", item)
+                    _write_json(record.path / "queue.json", {"messages": sorted([item, *items], key=lambda entry: entry.get("created_at", ""))})
+            if cancelled and record.state != "cancelled":
+                self._append_event_sync(run_id, "run_finished", {"state": "cancelled", "reason": "Stopped before the next turn started."})
+                self._update_state_sync(run_id, "cancelled")
 
     def _finish_turn_sync(
         self, run_id: str, state: RunState, plan: str, summary: str, verification: str,
@@ -359,6 +385,18 @@ async def _settled_io(function: Any, *arguments: Any) -> Any:
         raise
 
 
+async def settle_finalization(task: asyncio.Task[Any]) -> tuple[Any, bool]:
+    """Finish durable cleanup despite cancellation and report whether its caller stopped."""
+    cancelled = False
+    while True:
+        try:
+            return await asyncio.shield(task), cancelled
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+
+
 @contextmanager
 def _queue_file_lock(path: Path) -> Iterator[None]:
     """Coordinate queue claims across the TUI, daemon, and CLI RunStore instances."""
@@ -387,21 +425,30 @@ def _read_queue(path: Path) -> list[dict[str, Any]]:
     try:
         payload = json.loads((path / "queue.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return []
+        payload = {}
     if not isinstance(payload, dict):
-        return []
+        payload = {}
     started: set[str] = set()
+    returned: dict[str, dict[str, Any]] = {}
     try:
         for line in (path / "events.jsonl").read_text(encoding="utf-8").splitlines():
             try:
                 event = json.loads(line)
+                data = event.get("data", {})
+                item_id = str(data.get("id", ""))
                 if event.get("type") == "queued_message_started":
-                    started.add(str(event.get("data", {}).get("id", "")))
+                    started.add(item_id)
+                    returned.pop(item_id, None)
+                elif event.get("type") == "queued_message_returned" and item_id and isinstance(data.get("message"), str):
+                    started.discard(item_id)
+                    returned[item_id] = data
             except (ValueError, AttributeError):
                 continue
     except OSError:
         pass
-    return [item for item in payload.get("messages", []) if isinstance(item, dict) and isinstance(item.get("message"), str) and item.get("id") not in started]
+    items = [item for item in payload.get("messages", []) if isinstance(item, dict) and isinstance(item.get("message"), str) and item.get("id") not in started]
+    missing = [item for key, item in returned.items() if not any(pending.get("id") == key for pending in items)]
+    return sorted([*missing, *items], key=lambda item: item.get("created_at", "")) if missing else items
 
 
 def _new_run_id() -> str:

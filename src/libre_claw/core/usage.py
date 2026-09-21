@@ -252,7 +252,7 @@ def _group_records(name: str, records: list[UsageRecord]) -> UsageGroup:
         output_tokens=sum(record.output_tokens for record in records),
         cached_tokens=sum(record.cached_tokens for record in records),
         reasoning_tokens=sum(record.reasoning_tokens for record in records),
-        cost=sum(costs) if costs else None,
+        cost=sum(costs) if costs and len(costs) == len(records) else None,
     )
 
 
@@ -315,7 +315,9 @@ def _cost_value(value: object) -> float | None:
 
 
 def _format_cost(cost: float | None) -> str:
-    if cost is None or cost == 0:
+    if cost is None:
+        return "unknown"
+    if cost == 0:
         return "$0.00"
     if cost < 0.01:
         return f"${cost:.6f}"

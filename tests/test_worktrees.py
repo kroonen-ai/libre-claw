@@ -173,3 +173,109 @@ async def test_setup_runs_only_after_ordinary_shell_approval(repo: Path, tmp_pat
     assert len(calls) == 1 and not results[0].is_error
     assert (Path(worktree.path) / "setup.txt").read_text() == "ready"
     assert not (repo / "setup.txt").exists()
+
+
+async def test_setup_stops_at_failed_command_and_preserves_output(repo: Path, tmp_path: Path) -> None:
+    manager = WorktreeManager(tmp_path / "managed")
+    worktree = await manager.create(repo, "task")
+    permissions = PermissionManager(load_config(working_directory=repo).permissions)
+    permissions.allow_tools_for_session(("bash",))
+    results = await manager.run_setup(
+        worktree.worktree_id, ["printf 'missing dependency' >&2; exit 17", "printf bad > should-not-exist.txt"],
+        context=ToolContext(working_directory=repo), permission_manager=permissions,
+    )
+    assert len(results) == 1 and results[0].is_error
+    assert results[0].metadata["exit_code"] == 17
+    assert "missing dependency" in results[0].as_text()
+    assert not (Path(worktree.path) / "should-not-exist.txt").exists()
+
+
+async def test_setup_denial_preserves_checkout(repo: Path, tmp_path: Path) -> None:
+    manager = WorktreeManager(tmp_path / "managed")
+    worktree = await manager.create(repo, "task")
+    permissions = PermissionManager(load_config(working_directory=repo).permissions)
+
+    async def deny(_call):
+        return "deny"
+
+    with pytest.raises(WorktreeError, match="was not approved"):
+        await manager.run_setup(
+            worktree.worktree_id, ["printf bad > denied.txt"],
+            context=ToolContext(working_directory=repo), permission_manager=permissions, request_permission=deny,
+        )
+    assert not (Path(worktree.path) / "denied.txt").exists()
+
+
+async def test_transfer_preserves_disjoint_user_edits_in_same_file_and_multiple_rounds(repo: Path, tmp_path: Path) -> None:
+    path = repo / "example.txt"
+    path.write_text("".join(f"line {index}\n" for index in range(40)))
+    git(repo, "add", "example.txt")
+    git(repo, "commit", "-m", "Add independent edit regions")
+    manager = WorktreeManager(tmp_path / "managed")
+    worktree = await manager.create(repo, "task")
+    worker_path = Path(worktree.path) / "example.txt"
+    path.write_text(path.read_text().replace("line 2\n", "user staged 2\n"))
+    git(repo, "add", "example.txt")
+    path.write_text(path.read_text().replace("line 12\n", "user working 12\n"))
+    staged = git(repo, "diff", "--cached")
+    worker_path.write_text(worker_path.read_text().replace("line 24\n", "agent 24\n"))
+    preview = await manager.preview_transfer(worktree.worktree_id)
+    await manager.apply_to_source(worktree.worktree_id, expected_revision=preview.review.revision, expected_target_revision=preview.target_revision)
+    worker_path.write_text(worker_path.read_text().replace("line 36\n", "agent 36\n"))
+    preview = await manager.preview_transfer(worktree.worktree_id)
+    assert "+agent 24" not in preview.review.patch and "+agent 36" in preview.review.patch
+    await manager.apply_to_source(worktree.worktree_id, expected_revision=preview.review.revision, expected_target_revision=preview.target_revision)
+    assert git(repo, "diff", "--cached") == staged
+    assert all(text in path.read_text() for text in ("user staged 2", "user working 12", "agent 24", "agent 36"))
+
+
+async def test_transfer_rejects_stale_worker_and_symlink_destination(repo: Path, tmp_path: Path) -> None:
+    manager = WorktreeManager(tmp_path / "managed")
+    worktree = await manager.create(repo, "task")
+    worker_path = Path(worktree.path) / "example.txt"
+    worker_path.write_text("first agent edit\n")
+    preview = await manager.preview_transfer(worktree.worktree_id)
+    worker_path.write_text("newer agent edit\n")
+    with pytest.raises(WorktreeError, match="changed since review"):
+        await manager.apply_to_source(worktree.worktree_id, expected_revision=preview.review.revision, expected_target_revision=preview.target_revision)
+    assert (repo / "example.txt").read_text() == "original\n"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("original\n")
+    (repo / "example.txt").unlink()
+    (repo / "example.txt").symlink_to(outside)
+    preview = await manager.preview_transfer(worktree.worktree_id)
+    with pytest.raises(ReviewError, match="outside|symlink"):
+        await manager.apply_to_source(worktree.worktree_id, expected_revision=preview.review.revision, expected_target_revision=preview.target_revision)
+    assert outside.read_text() == "original\n"
+
+
+async def test_transfer_added_deleted_binary_and_mode_changes(repo: Path, tmp_path: Path) -> None:
+    manager = WorktreeManager(tmp_path / "managed")
+    worktree = await manager.create(repo, "task")
+    worker = Path(worktree.path)
+    (worker / ":(glob)*.txt").write_text("literal new file\n")
+    (worker / "image.bin").write_bytes(b"\0binary\xff")
+    (worker / "unrelated.txt").unlink()
+    (worker / "example.txt").chmod(0o755)
+    preview = await manager.preview_transfer(worktree.worktree_id)
+    await manager.apply_to_source(worktree.worktree_id, expected_revision=preview.review.revision, expected_target_revision=preview.target_revision)
+    assert (repo / ":(glob)*.txt").read_text() == "literal new file\n"
+    assert (repo / "image.bin").read_bytes() == b"\0binary\xff"
+    assert not (repo / "unrelated.txt").exists()
+    assert (repo / "example.txt").stat().st_mode & 0o111
+    assert not git(repo, "diff", "--cached")
+
+
+async def test_cleanup_accepts_preserved_commits_and_keeps_branch(repo: Path, tmp_path: Path) -> None:
+    manager = WorktreeManager(tmp_path / "managed")
+    worktree = await manager.create(repo, "task", branch="task-feature")
+    path = Path(worktree.path)
+    (path / "new.txt").write_text("preserved commit\n")
+    git(path, "add", "new.txt")
+    git(path, "commit", "-m", "Record work to preserve")
+    oid = git(path, "rev-parse", "HEAD")
+    git(repo, "merge", "--ff-only", oid)
+    await manager.remove(worktree.worktree_id, active_run_ids=[])
+    assert not path.exists() and not await manager.list()
+    assert git(repo, "rev-parse", "task-feature") == oid
+    assert (repo / "new.txt").read_text() == "preserved commit\n"

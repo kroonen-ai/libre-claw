@@ -109,15 +109,24 @@ Run the small versioned suite before comparing harness changes:
 The two coding tasks cover pagination boundaries and a change across multiple
 modules with nested project instructions. Their starters must fail their tests;
 completion requires passing the tests while preserving test and instruction files.
-The runner also cancels a real agent turn, reloads its saved conversation and
-checkpoint, and completes the unfinished phase as a structural recovery check.
+A third task runs the production independent reviewer against two seeded bugs and
+a harmless refactor. Findings must identify the changed file and line and explain
+the trigger and consequence. The rubric reports precision, recall, and false
+positives, including duplicate findings and complaints about the harmless change.
+Malformed or ungrounded output fails; the ground truth is kept outside the workspace.
+
+The recovery check interrupts an agent after a tool has changed a ledger but before
+its result arrives. It loads the actual `RunStore` snapshot through a fresh store,
+verifies runtime, workspace, requirements and decisions, inspects the uncertain
+side effect, and completes each phase exactly once. This is a scripted semantic
+recovery check, not a measurement of model recovery quality.
 
 Offline mode feeds checked-in solutions through the real headless agent and file
 tools. CI runs this as a fixture and harness gate. It does not measure model quality.
 Live mode uses the configured provider through the same `run_headless` entry point
 and ATIF v1.7 trajectories used by the Harbor adapter; it requires explicit provider
 and model IDs and accepts `--config`, `--task`, `--timeout` (at most 180 seconds per
-coding task), and `--output` for a new results directory. It disables fallback so a
+task), and `--output` for a new results directory. It disables fallback so a
 score is attributed to the requested model. Codex uses its installed CLI and login;
 API providers use the normal configured credentials. Runs approve coding tools only
 inside disposable fixture workspaces.
@@ -125,6 +134,52 @@ inside disposable fixture workspaces.
 The printed results path contains JSON with task checks, fixture hashes, source
 revision, configuration, elapsed time, provider token usage, and cost when reported.
 Unknown token usage or cost stays null. Model completion rate includes only live
-coding tasks; scripted recovery is reported separately. Workspaces and trajectories
+coding and review tasks; scripted recovery is reported separately. Workspaces and trajectories
 remain available beside the report for inspection. These tiny tasks are regression
 checks, not a substitute for a larger Harbor evaluation or a leaderboard score.
+
+### Compare providers and models
+
+Create a JSON file with explicit targets (model IDs come from each provider's
+current catalog):
+
+```json
+{
+  "targets": [
+    {"id": "target-a", "provider": "codex", "model": "MODEL_ID"},
+    {"id": "target-b", "provider": "openrouter", "model": "VENDOR/MODEL_ID"}
+  ]
+}
+```
+
+Each target can include `config`, a TOML path relative to the targets file; leave
+credentials in the normal environment or credential store. Run a bounded trial:
+
+```bash
+.venv/bin/python -m benchmarks.coding_workflow.comparison \
+  --targets targets.json --trials 1 --timeout 180 --output /tmp/workflow-comparison
+```
+
+Use `--offline` to validate the comparison without provider calls. The runner accepts
+2-8 targets, 1-3 trials, and unique `--task` selections. Every target gets identical
+fixture hashes and isolated workspaces; failures remain in the report. Summaries
+include completion rate, review precision/recall, runtime, input/output/cached tokens,
+and provider-reported cost. A missing cost makes the aggregate unknown, not zero.
+The API completion limit is 4,096 tokens per response and the tool budget is 30.
+The Codex CLI bridge cannot enforce token or native tool-call limits; its wall-clock
+deadline still applies, and the report records this difference.
+
+`comparison.json` uses relative artifact paths and removes local user/workspace
+prefixes. It records source revision, dirty state, fixture and source hashes before
+and after execution. A changed source tree is explicitly flagged; compare stable
+revisions for meaningful harness comparisons. Trial workspaces, final responses,
+durable recovery snapshots, and coding ATIF trajectories remain in the output
+directory. Keep raw local artifacts private unless they have been inspected.
+
+The [September 21 smoke comparison](results/coding-workflow-comparison-2026-09-21.json)
+completed all three tasks on both Codex `gpt-6-astra` and OpenRouter
+`z-ai/glm-5.3-flash`. Both reviews found the two seeded bugs without a false positive.
+The OpenRouter run reported $0.009624435; Codex cost was unavailable. All six
+attempts used a frozen source snapshot with matching source hashes before and
+after execution. The snapshot includes the recorded uncommitted changes. These
+small, single-trial checks are smoke evidence rather than a provider ranking.

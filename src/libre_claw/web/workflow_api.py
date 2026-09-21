@@ -19,6 +19,14 @@ if TYPE_CHECKING:
     from libre_claw.daemon import DaemonServer
 
 
+class WorkspaceBusyError(ReviewError):
+    """Another durable or in-process task still owns a checkout."""
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(f"Task {run_id} is still using this workspace. Wait for it to finish or stop it first.")
+
+
 class WorkflowAPI:
     def __init__(self, server: DaemonServer) -> None:
         self.server = server
@@ -53,10 +61,13 @@ class WorkflowAPI:
             checkpoint = session.checkpoint.get("last_turn_tree")
         return repo, run_id, checkpoint
 
-    async def assert_idle(self, *paths: Path) -> None:
+    async def assert_idle(self, *paths: Path, exclude_run_id: str | None = None) -> None:
         roots = [await repository_root(path) for path in paths]
         for run in await self.server.run_store.list_runs(limit=100000):
-            if run.state not in {"queued", "running", "blocked"} or not run.working_directory:
+            if run.run_id == exclude_run_id or not run.working_directory:
+                continue
+            active = self.server.active_runs.get(run.run_id)
+            if run.state not in {"queued", "running", "blocked"} and (active is None or active.task.done()):
                 continue
             directory = Path(run.working_directory).resolve()
             try:
@@ -64,7 +75,7 @@ class WorkflowAPI:
             except (ValueError, OSError):
                 pass
             if any(directory.is_relative_to(root) or root.is_relative_to(directory) for root in roots):
-                raise ReviewError(f"Task {run.run_id} is still using this workspace. Stop it before changing Git state.")
+                raise WorkspaceBusyError(run.run_id)
 
     async def snapshot(self, data: Any) -> Any:
         repo, _, checkpoint = await self.workspace(data)

@@ -1,0 +1,452 @@
+{
+  "suite_version": "coding-workflow-v2",
+  "started_at": "2026-09-21T13:23:14.861368+00:00",
+  "revision": {
+    "commit": "cc8c9315db2de4ece38a901566e446a053413b27",
+    "dirty": true,
+    "tracked_diff_sha256": "fd385af16706a96866f1e9e1bd688274bd88bb0ef1f9727826c03f90825e77af",
+    "source_tree_sha256": "82e64e50b3d3c7dda2e50099f38ca8906e39bef73ec48358161701f63bd1e03c"
+  },
+  "mode": "live_provider_comparison",
+  "python": "3.13.14",
+  "task_ids": [
+    "pagination",
+    "catalog",
+    "review-quality"
+  ],
+  "fixture_sha256": {
+    "pagination": "f964358ec67eea8c57106bd6be5c887c7307fbe0a504ee57d6c391aab900b801",
+    "catalog": "e18f63e98c30e1e4a125577a413b7a98ac1ceace7517289a8db9ecc0c97bfecf",
+    "review-quality": "0b21e968c37661517439e93dc55d119af65cceef5f5b1ed7612ec6ef482d1403"
+  },
+  "trials_per_target": 1,
+  "per_task_deadline_seconds": 180.0,
+  "targets": [
+    {
+      "id": "codex",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "trials": [
+        {
+          "trial": 1,
+          "report": "codex/trial-1/results.json",
+          "suite_version": "coding-workflow-v2",
+          "started_at": "2026-09-21T13:23:14.863183+00:00",
+          "mode": "live_model_evaluation",
+          "revision": {
+            "commit": "cc8c9315db2de4ece38a901566e446a053413b27",
+            "dirty": true,
+            "tracked_diff_sha256": "fd385af16706a96866f1e9e1bd688274bd88bb0ef1f9727826c03f90825e77af",
+            "source_tree_sha256": "82e64e50b3d3c7dda2e50099f38ca8906e39bef73ec48358161701f63bd1e03c"
+          },
+          "results": [
+            {
+              "task_id": "pagination",
+              "category": "coding",
+              "kind": "model_evaluation",
+              "provider": "codex",
+              "model": "gpt-6-astra",
+              "fixture_sha256": "f964358ec67eea8c57106bd6be5c887c7307fbe0a504ee57d6c391aab900b801",
+              "passed": true,
+              "baseline_failed": true,
+              "elapsed_seconds": 51.355,
+              "error": null,
+              "input_tokens": 99739,
+              "output_tokens": 876,
+              "cached_tokens": 86912,
+              "cost_usd": null,
+              "verification": {
+                "passed": true,
+                "tests_passed": true,
+                "protected_files_unchanged": true,
+                "verifier_output": "test_boundaries_and_order (test_pagination.PaginationTests.test_boundaries_and_order) ... ok\ntest_empty_input (test_pagination.PaginationTests.test_empty_input) ... ok\ntest_invalid_size (test_pagination.PaginationTests.test_invalid_size) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n"
+              },
+              "trajectory": "pagination/trajectory.json",
+              "workspace": "pagination/workspace",
+              "config": {
+                "max_tool_calls": 30,
+                "max_completion_tokens": 4096,
+                "deadline_seconds": 180.0,
+                "auto_approve_fixture_tools": true,
+                "restrict_to_working_dir": true,
+                "completion_token_limit_enforced": false,
+                "tool_call_limit_enforced": false
+              }
+            },
+            {
+              "task_id": "catalog",
+              "category": "coding",
+              "kind": "model_evaluation",
+              "provider": "codex",
+              "model": "gpt-6-astra",
+              "fixture_sha256": "e18f63e98c30e1e4a125577a413b7a98ac1ceace7517289a8db9ecc0c97bfecf",
+              "passed": true,
+              "baseline_failed": true,
+              "elapsed_seconds": 63.001,
+              "error": null,
+              "input_tokens": 102738,
+              "output_tokens": 1504,
+              "cached_tokens": 94848,
+              "cost_usd": null,
+              "verification": {
+                "passed": true,
+                "tests_passed": true,
+                "protected_files_unchanged": true,
+                "verifier_output": "test_project_instructions (test_catalog.CatalogTests.test_project_instructions) ... ok\ntest_provider_catalog (test_catalog.CatalogTests.test_provider_catalog) ... ok\ntest_selection (test_catalog.CatalogTests.test_selection) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n"
+              },
+              "trajectory": "catalog/trajectory.json",
+              "workspace": "catalog/workspace",
+              "config": {
+                "max_tool_calls": 30,
+                "max_completion_tokens": 4096,
+                "deadline_seconds": 180.0,
+                "auto_approve_fixture_tools": true,
+                "restrict_to_working_dir": true,
+                "completion_token_limit_enforced": false,
+                "tool_call_limit_enforced": false
+              }
+            },
+            {
+              "task_id": "review-quality",
+              "category": "review",
+              "kind": "model_evaluation",
+              "provider": "codex",
+              "model": "gpt-6-astra",
+              "fixture_sha256": "0b21e968c37661517439e93dc55d119af65cceef5f5b1ed7612ec6ef482d1403",
+              "passed": true,
+              "elapsed_seconds": 75.75,
+              "error": null,
+              "input_tokens": 107449,
+              "output_tokens": 1692,
+              "cached_tokens": 98432,
+              "cost_usd": null,
+              "verification": {
+                "passed": true,
+                "schema_valid": true,
+                "precision": 1.0,
+                "recall": 1.0,
+                "true_positives": 2,
+                "false_positives": 0,
+                "false_negatives": 0,
+                "matched_bug_ids": [
+                  "owner-and-active",
+                  "zero-page-size"
+                ],
+                "false_positive_finding_indexes": [],
+                "benign_change_findings": 0,
+                "findings": [
+                  {
+                    "priority": "P1",
+                    "file": "access.py",
+                    "line": 6,
+                    "title": "Require both ownership and an active document",
+                    "body": "Verified: can_open('owner', 'other', True) and can_open('owner', 'owner', False) now return True; both previously returned False. This permits nonowners to open active documents and owners to open inactive documents, violating the documented contract. Restore `and` so both conditions must hold."
+                  },
+                  {
+                    "priority": "P2",
+                    "file": "pagination.py",
+                    "line": 6,
+                    "title": "Reject zero page size before division",
+                    "body": "Verified: page_count(10, 0) now raises ZeroDivisionError instead of the documented ValueError because zero bypasses the guard. Callers handling ValueError would no longer catch this invalid input. Restore `size <= 0`."
+                  }
+                ],
+                "verification_limits": "Inspected complete base and target versions of all three changed files using git show and git diff. Ran in-memory checks covering all ownership/activity combinations, representative pagination inputs, and sorting/copy behavior. No actionable regression found in formatting.py. The snapshots contain no tests or callers, so integration behavior was not verified. No files were changed.",
+                "scoring_note": "Fixed-fixture rubric: path, changed-code line, and trigger/consequence evidence; unmatched or duplicate findings count as false positives. This is not a general review-quality judge.",
+                "workspace_unchanged": true
+              },
+              "workspace": "review-quality/workspace",
+              "response": "review-quality/final.txt",
+              "config": {
+                "max_tool_calls": 30,
+                "max_completion_tokens": 4096,
+                "deadline_seconds": 180.0,
+                "read_only": true,
+                "completion_token_limit_enforced": false,
+                "tool_call_limit_enforced": false
+              }
+            },
+            {
+              "task_id": "interrupted-recovery",
+              "category": "recovery",
+              "kind": "harness_validation",
+              "passed": true,
+              "elapsed_seconds": 0.025,
+              "input_tokens": null,
+              "output_tokens": null,
+              "cached_tokens": null,
+              "cost_usd": null,
+              "checkpoint": "interrupted-recovery/interrupted-session.json",
+              "interrupted_checkpoint_sha256": "238ae99db95eb35ad19b8656f7a57626b120496791a32405d8199f4efbcde324",
+              "checks": {
+                "uncertain_tool_completion_reported": true,
+                "requirement_restored": true,
+                "decision_restored": true,
+                "remaining_work_restored": true,
+                "inspected_side_effect_before_retry": true,
+                "each_phase_completed_once": true,
+                "sentinel_preserved": true,
+                "workspace_restored": true,
+                "runtime_restored": true
+              },
+              "scope_note": "Scripted providers exercise actual tools, cancellation during a side effect, durable RunStore snapshots and semantic recovery. This does not measure model recovery quality."
+            }
+          ],
+          "all_checks_passed": true,
+          "model_completion_rate": 1.0,
+          "model_cost_usd": null
+        }
+      ],
+      "summary": {
+        "completed_attempts": 3,
+        "expected_attempts": 3,
+        "passed": 3,
+        "model_completion_rate": 1.0,
+        "elapsed_seconds": 190.106,
+        "input_tokens": 309926,
+        "output_tokens": 4072,
+        "cached_tokens": 280192,
+        "cost_usd": null,
+        "review_precision": [
+          1.0
+        ],
+        "review_recall": [
+          1.0
+        ],
+        "usage_source": "provider-reported, when available"
+      }
+    },
+    {
+      "id": "openrouter",
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.3-flash",
+      "trials": [
+        {
+          "trial": 1,
+          "report": "openrouter/trial-1/results.json",
+          "suite_version": "coding-workflow-v2",
+          "started_at": "2026-09-21T13:26:25.360820+00:00",
+          "mode": "live_model_evaluation",
+          "revision": {
+            "commit": "cc8c9315db2de4ece38a901566e446a053413b27",
+            "dirty": true,
+            "tracked_diff_sha256": "fd385af16706a96866f1e9e1bd688274bd88bb0ef1f9727826c03f90825e77af",
+            "source_tree_sha256": "82e64e50b3d3c7dda2e50099f38ca8906e39bef73ec48358161701f63bd1e03c"
+          },
+          "results": [
+            {
+              "task_id": "pagination",
+              "category": "coding",
+              "kind": "model_evaluation",
+              "provider": "openrouter",
+              "model": "z-ai/glm-5.3-flash",
+              "fixture_sha256": "f964358ec67eea8c57106bd6be5c887c7307fbe0a504ee57d6c391aab900b801",
+              "passed": true,
+              "baseline_failed": true,
+              "elapsed_seconds": 19.899,
+              "error": null,
+              "input_tokens": 21287,
+              "output_tokens": 926,
+              "cached_tokens": 0,
+              "cost_usd": 0.00365605,
+              "verification": {
+                "passed": true,
+                "tests_passed": true,
+                "protected_files_unchanged": true,
+                "verifier_output": "test_boundaries_and_order (test_pagination.PaginationTests.test_boundaries_and_order) ... ok\ntest_empty_input (test_pagination.PaginationTests.test_empty_input) ... ok\ntest_invalid_size (test_pagination.PaginationTests.test_invalid_size) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n"
+              },
+              "trajectory": "pagination/trajectory.json",
+              "workspace": "pagination/workspace",
+              "config": {
+                "max_tool_calls": 30,
+                "max_completion_tokens": 4096,
+                "deadline_seconds": 180.0,
+                "auto_approve_fixture_tools": true,
+                "restrict_to_working_dir": true,
+                "completion_token_limit_enforced": true,
+                "tool_call_limit_enforced": true
+              }
+            },
+            {
+              "task_id": "catalog",
+              "category": "coding",
+              "kind": "model_evaluation",
+              "provider": "openrouter",
+              "model": "z-ai/glm-5.3-flash",
+              "fixture_sha256": "e18f63e98c30e1e4a125577a413b7a98ac1ceace7517289a8db9ecc0c97bfecf",
+              "passed": true,
+              "baseline_failed": true,
+              "elapsed_seconds": 72.826,
+              "error": null,
+              "input_tokens": 28659,
+              "output_tokens": 1615,
+              "cached_tokens": 6549,
+              "cost_usd": 0.0021602350000000004,
+              "verification": {
+                "passed": true,
+                "tests_passed": true,
+                "protected_files_unchanged": true,
+                "verifier_output": "test_project_instructions (test_catalog.CatalogTests.test_project_instructions) ... ok\ntest_provider_catalog (test_catalog.CatalogTests.test_provider_catalog) ... ok\ntest_selection (test_catalog.CatalogTests.test_selection) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n"
+              },
+              "trajectory": "catalog/trajectory.json",
+              "workspace": "catalog/workspace",
+              "config": {
+                "max_tool_calls": 30,
+                "max_completion_tokens": 4096,
+                "deadline_seconds": 180.0,
+                "auto_approve_fixture_tools": true,
+                "restrict_to_working_dir": true,
+                "completion_token_limit_enforced": true,
+                "tool_call_limit_enforced": true
+              }
+            },
+            {
+              "task_id": "review-quality",
+              "category": "review",
+              "kind": "model_evaluation",
+              "provider": "openrouter",
+              "model": "z-ai/glm-5.3-flash",
+              "fixture_sha256": "0b21e968c37661517439e93dc55d119af65cceef5f5b1ed7612ec6ef482d1403",
+              "passed": true,
+              "elapsed_seconds": 57.976,
+              "error": null,
+              "input_tokens": 22357,
+              "output_tokens": 4442,
+              "cached_tokens": 14720,
+              "cost_usd": 0.0038081499999999997,
+              "verification": {
+                "passed": true,
+                "schema_valid": true,
+                "precision": 1.0,
+                "recall": 1.0,
+                "true_positives": 2,
+                "false_positives": 0,
+                "false_negatives": 0,
+                "matched_bug_ids": [
+                  "owner-and-active",
+                  "zero-page-size"
+                ],
+                "false_positive_finding_indexes": [],
+                "benign_change_findings": 0,
+                "findings": [
+                  {
+                    "priority": "P0",
+                    "file": "access.py",
+                    "line": 6,
+                    "title": "Authorization bypass: 'and' changed to 'or' lets any viewer open any active document",
+                    "body": "Triggering condition: any call where the document is active but the viewer is not the owner, e.g. can_open(\"user-1\", \"user-2\", True). Base returned False (owner_id == viewer_id and active); target returns True because owner_id == viewer_id or active short-circuits to True whenever active is truthy. Consequence: an authorization bypass \u2014 every active document is openable by every viewer, directly violating the docstring contract \"Only the owner of an active document may open it\". Inactive documents are unaffected (both versions return False for active=False), so the regression is precisely the non-owner + active case. Suggested fix: restore the conjunction: return owner_id == viewer_id and active."
+                  },
+                  {
+                    "priority": "P1",
+                    "file": "pagination.py",
+                    "line": 6,
+                    "title": "size == 0 no longer rejected with ValueError; raises ZeroDivisionError instead",
+                    "body": "Triggering condition: page_count(any_total, 0) \u2014 e.g. page_count(10, 0) or page_count(0, 0). Base raised ValueError(\"size must be positive\") for size <= 0, matching the docstring \"reject a nonpositive page size with ValueError\". Target only rejects size < 0, so size == 0 falls through to '(total + size - 1) // size', and integer floor division by zero raises ZeroDivisionError regardless of the numerator. Consequence: the documented exception contract is broken; callers that validate inputs per the docstring or handle 'except ValueError' now receive an unhandled ZeroDivisionError (different type, different semantics). Negative sizes still raise ValueError, so only the size == 0 case regressed. Suggested fix: restore the guard 'if size <= 0:'."
+                  }
+                ],
+                "verification_limits": "Static review only: the sandbox blocked command execution (plan/read-only mode), so behaviors were not confirmed by running Python; they follow from direct reading of the base/target snapshots (which matched the provided diff and the working-tree diff exactly) and standard Python semantics ('or' truthiness, 'sorted()' returning a new list without mutating its input, '//' by zero raising ZeroDivisionError). All three changed files were inspected in full (access.py 6 lines, formatting.py 6 lines, pagination.py 8 lines). formatting.py was inspected and found behavior-preserving (sorted(labels) equals list(labels)+sort() for all iterables, is stable, and leaves the caller's list unchanged), so no finding is reported for it. The repository contains only these three files plus .git \u2014 no tests or callers exist to assess downstream impact of the access.py and pagination.py regressions.",
+                "scoring_note": "Fixed-fixture rubric: path, changed-code line, and trigger/consequence evidence; unmatched or duplicate findings count as false positives. This is not a general review-quality judge.",
+                "workspace_unchanged": true
+              },
+              "workspace": "review-quality/workspace",
+              "response": "review-quality/final.txt",
+              "config": {
+                "max_tool_calls": 30,
+                "max_completion_tokens": 4096,
+                "deadline_seconds": 180.0,
+                "read_only": true,
+                "completion_token_limit_enforced": true,
+                "tool_call_limit_enforced": true
+              }
+            },
+            {
+              "task_id": "interrupted-recovery",
+              "category": "recovery",
+              "kind": "harness_validation",
+              "passed": true,
+              "elapsed_seconds": 0.024,
+              "input_tokens": null,
+              "output_tokens": null,
+              "cached_tokens": null,
+              "cost_usd": null,
+              "checkpoint": "interrupted-recovery/interrupted-session.json",
+              "interrupted_checkpoint_sha256": "238ae99db95eb35ad19b8656f7a57626b120496791a32405d8199f4efbcde324",
+              "checks": {
+                "uncertain_tool_completion_reported": true,
+                "requirement_restored": true,
+                "decision_restored": true,
+                "remaining_work_restored": true,
+                "inspected_side_effect_before_retry": true,
+                "each_phase_completed_once": true,
+                "sentinel_preserved": true,
+                "workspace_restored": true,
+                "runtime_restored": true
+              },
+              "scope_note": "Scripted providers exercise actual tools, cancellation during a side effect, durable RunStore snapshots and semantic recovery. This does not measure model recovery quality."
+            }
+          ],
+          "all_checks_passed": true,
+          "model_completion_rate": 1.0,
+          "model_cost_usd": 0.009624435
+        }
+      ],
+      "summary": {
+        "completed_attempts": 3,
+        "expected_attempts": 3,
+        "passed": 3,
+        "model_completion_rate": 1.0,
+        "elapsed_seconds": 150.701,
+        "input_tokens": 72303,
+        "output_tokens": 6983,
+        "cached_tokens": 21269,
+        "cost_usd": 0.009624435,
+        "review_precision": [
+          1.0
+        ],
+        "review_recall": [
+          1.0
+        ],
+        "usage_source": "provider-reported, when available"
+      }
+    }
+  ],
+  "scope_note": "Small fixed regression tasks; not a leaderboard or statistical ranking. Offline runs validate only the harness. Recovery is scripted and excluded from model scores. Missing token usage/cost remains null; cost totals require complete provider-reported costs. Codex CLI output tokens and native tool calls cannot be capped by the bridge and are bounded only by the deadline.",
+  "finished_at": "2026-09-21T13:28:56.484864+00:00",
+  "revision_after": {
+    "commit": "cc8c9315db2de4ece38a901566e446a053413b27",
+    "dirty": true,
+    "tracked_diff_sha256": "fd385af16706a96866f1e9e1bd688274bd88bb0ef1f9727826c03f90825e77af",
+    "source_tree_sha256": "82e64e50b3d3c7dda2e50099f38ca8906e39bef73ec48358161701f63bd1e03c"
+  },
+  "source_changed_during_run": false,
+  "all_checks_passed": true,
+  "distinct_provider_paths": 2,
+  "copyright": "Copyright 2026 Kroonen AI (https://kroonen.ai)",
+  "license": "Apache-2.0",
+  "recording_note": "One bounded trial on three small tasks per provider. Executed from a frozen local source snapshot, including the listed uncommitted changes; source revision and hashes were identical before and after all six attempts. These are smoke checks, not a leaderboard or statistically meaningful ranking.",
+  "execution_source": {
+    "kind": "isolated local snapshot",
+    "origin_revision": {
+      "commit": "cc8c9315db2de4ece38a901566e446a053413b27",
+      "dirty": true,
+      "tracked_diff_sha256": "fd385af16706a96866f1e9e1bd688274bd88bb0ef1f9727826c03f90825e77af",
+      "source_tree_sha256": "82e64e50b3d3c7dda2e50099f38ca8906e39bef73ec48358161701f63bd1e03c"
+    },
+    "imports_verified_inside_snapshot": true
+  },
+  "artifact_paths_relative_to": "Local evaluation output directory libre-claw-workflow-stable-comparison-2026-09-21; raw workspaces and trajectories are not included in this portable report.",
+  "reproduction": {
+    "command": "python -m benchmarks.coding_workflow.comparison --targets targets.json --trials 1 --timeout 180 --output /tmp/new-workflow-comparison",
+    "targets": [
+      {
+        "id": "codex",
+        "provider": "codex",
+        "model": "gpt-6-astra"
+      },
+      {
+        "id": "openrouter",
+        "provider": "openrouter",
+        "model": "z-ai/glm-5.3-flash"
+      }
+    ]
+  }
+}

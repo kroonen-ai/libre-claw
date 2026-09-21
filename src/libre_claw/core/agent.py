@@ -9,6 +9,7 @@ import inspect
 import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -133,6 +134,7 @@ class Agent:
         deadline_monotonic: float | None = None,
         deadline_reserve_seconds: float = 0.0,
         checkpoint_callback: Callable[[Session], Awaitable[None]] | None = None,
+        usage_callback: Callable[[Usage], Awaitable[None]] | None = None,
     ) -> None:
         self.session = session
         self.provider = provider
@@ -155,11 +157,14 @@ class Agent:
         self.deadline_monotonic = deadline_monotonic
         self.deadline_reserve_seconds = max(0.0, deadline_reserve_seconds)
         self.checkpoint_callback = checkpoint_callback
+        self.usage_callback = usage_callback
+        self._checkpoint_lock = asyncio.Lock()
         context = self.tool_registry.context
         self._instruction_loader = InstructionLoader(context.working_directory) if context else None
         self._instruction_paths: list[Path] = []
         self._active_instructions: list[ProjectInstruction] = []
         self._known_instructions: dict[Path, str] = {}
+        self.accepting_control = False
         self.subagents = None
         if context is not None:
             context.shared_state["agent_session"] = session
@@ -185,6 +190,7 @@ class Agent:
         user_message: str,
         attachments: Sequence[UserAttachment] = (),
     ) -> AsyncIterator[AgentEvent]:
+        self.accepting_control = True
         if self.subagents is not None:
             self.subagents.begin_turn()
         context = self.tool_registry.context
@@ -192,12 +198,21 @@ class Agent:
             context.shared_state["agent_session"] = self.session
             if self.subagents is not None:
                 context.shared_state["subagent_manager"] = self.subagents
+        interrupted = False
         try:
-            async for event in self._run_turn(user_message, attachments):
-                yield event
-        finally:
             if self.subagents is not None:
-                await self.subagents.close()
+                async for event in self.subagents.resume_pending():
+                    yield event
+            async with aclosing(self._run_turn(user_message, attachments)) as turn:
+                async for event in turn:
+                    yield event
+        except (asyncio.CancelledError, GeneratorExit):
+            interrupted = True
+            raise
+        finally:
+            self.accepting_control = False
+            if self.subagents is not None:
+                await self.subagents.close(interrupted=interrupted)
             await self._checkpoint()
         if self.subagents is not None:
             while not self.subagents.events.empty():
@@ -207,7 +222,8 @@ class Agent:
 
     async def _checkpoint(self) -> None:
         if self.checkpoint_callback is not None:
-            await self.checkpoint_callback(self.session)
+            async with self._checkpoint_lock:
+                await self.checkpoint_callback(self.session)
 
     async def _run_turn(
         self, user_message: str, attachments: Sequence[UserAttachment],
@@ -227,9 +243,14 @@ class Agent:
         metadata_loaded: set[int] = set()
 
         while True:
+            if self.subagents is not None:
+                async for event in self.subagents.resume_pending():
+                    yield event
             steering = self.session.consume_steering()
             for message in steering:
                 self.session.add_user_message(message)
+                if self.subagents is not None:
+                    self.subagents.steer(message)
             if steering:
                 await self._checkpoint()
             await self._refresh_instructions()
@@ -254,35 +275,38 @@ class Agent:
                         await self._ensure_provider_metadata(active_provider)
                         metadata_loaded.add(id(active_provider))
                     self._maybe_compact_session(active_provider)
-                    async for event in self._stream_provider(active_provider):
-                        if isinstance(event, TextDelta):
-                            assistant_chunks.append(event.text)
-                            yield AgentTextDelta(event.text)
-                            continue
+                    async with aclosing(self._stream_provider(active_provider)) as provider_stream:
+                        async for event in provider_stream:
+                            if isinstance(event, TextDelta):
+                                assistant_chunks.append(event.text)
+                                yield AgentTextDelta(event.text)
+                                continue
 
-                        if isinstance(event, ReasoningDelta):
-                            reasoning_chunks.append(event)
-                            continue
+                            if isinstance(event, ReasoningDelta):
+                                reasoning_chunks.append(event)
+                                continue
 
-                        if isinstance(event, ToolCallReady):
-                            call = ToolCall(id=event.tool_call_id, name=event.name, arguments=event.input)
-                            tool_calls.append(call)
-                            yield AgentToolCall(call)
-                            continue
+                            if isinstance(event, ToolCallReady):
+                                call = ToolCall(id=event.tool_call_id, name=event.name, arguments=event.input)
+                                tool_calls.append(call)
+                                yield AgentToolCall(call)
+                                continue
 
-                        if isinstance(event, Done):
-                            turn_usage = combine_usage(turn_usage, event.usage)
-                            if event.usage is not None:
-                                self._last_provider_input_tokens = max(
-                                    0,
-                                    event.usage.input_tokens,
-                                )
-                            continue
+                            if isinstance(event, Done):
+                                turn_usage = combine_usage(turn_usage, event.usage)
+                                if event.usage is not None:
+                                    if self.usage_callback is not None:
+                                        await self.usage_callback(event.usage)
+                                    self._last_provider_input_tokens = max(
+                                        0,
+                                        event.usage.input_tokens,
+                                    )
+                                continue
 
-                        if isinstance(event, ProviderError):
-                            provider_failed = True
-                            provider_error = event.message
-                            break
+                            if isinstance(event, ProviderError):
+                                provider_failed = True
+                                provider_error = event.message
+                                break
                 except _AgentDeadlineReached:
                     self._save_assistant_text(assistant_chunks)
                     yield AgentError(
@@ -359,10 +383,11 @@ class Agent:
             if not tool_calls:
                 self._save_assistant_text(assistant_chunks, reasoning_chunks)
                 await self._checkpoint()
-                if self.session.pending_steering:
+                if self.session.pending_steering or self.session.pending_subagent_resumes:
                     continue
                 if self.subagents is not None:
                     turn_usage = combine_usage(turn_usage, self.subagents.total_usage())
+                self.accepting_control = False
                 yield AgentDone(turn_usage)
                 return
 
@@ -707,20 +732,25 @@ class Agent:
             tools=self._tool_schemas,
             system=self._build_system_prompt(),
         ).__aiter__()
-        while True:
-            remaining = self._remaining_seconds()
-            if remaining is not None and remaining <= 0:
-                raise _AgentDeadlineReached
-            try:
-                if remaining is None:
-                    event = await anext(stream)
-                else:
-                    event = await asyncio.wait_for(anext(stream), timeout=remaining)
-            except StopAsyncIteration:
-                return
-            except asyncio.TimeoutError as exc:
-                raise _AgentDeadlineReached from exc
-            yield event
+        try:
+            while True:
+                remaining = self._remaining_seconds()
+                if remaining is not None and remaining <= 0:
+                    raise _AgentDeadlineReached
+                try:
+                    if remaining is None:
+                        event = await anext(stream)
+                    else:
+                        event = await asyncio.wait_for(anext(stream), timeout=remaining)
+                except StopAsyncIteration:
+                    return
+                except asyncio.TimeoutError as exc:
+                    raise _AgentDeadlineReached from exc
+                yield event
+        finally:
+            close = getattr(stream, "aclose", None)
+            if callable(close):
+                await close()
 
     def _remaining_seconds(self) -> float | None:
         if self.deadline_monotonic is None:

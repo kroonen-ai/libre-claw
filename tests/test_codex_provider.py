@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import libre_claw.providers.codex as codex_provider
@@ -124,3 +125,26 @@ async def test_codex_provider_reports_stream_exit_errors(monkeypatch, tmp_path: 
 
     assert isinstance(events[0], ProviderError)
     assert "exited with 2" in events[0].message
+
+
+async def test_closing_provider_stream_closes_native_command(monkeypatch, tmp_path: Path) -> None:
+    closed = False
+
+    async def fake_status(executable: str = "codex") -> CodexStatus:
+        return CodexStatus(available=True, logged_in=True, detail="Logged in")
+
+    async def fake_stream(args, input_text=None):
+        nonlocal closed
+        try:
+            yield CodexCommandEvent(stream="stdout", text='{"item":{"type":"agent_message","text":"Partial result"}}\n')
+            await asyncio.sleep(30)
+        finally:
+            closed = True
+
+    monkeypatch.setattr(codex_provider, "codex_status", fake_status)
+    monkeypatch.setattr(codex_provider, "stream_codex_command", fake_stream)
+    provider = CodexProvider(model="arbitrary-model", working_directory=tmp_path, replay_delay=0)
+    stream = provider.complete(messages=[ChatMessage(role="user", content=[text_block("inspect")])])
+    assert isinstance(await anext(stream), TextDelta)
+    await stream.aclose()
+    assert closed

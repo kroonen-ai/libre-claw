@@ -115,6 +115,7 @@ revision. `--branch` creates the named branch; without it the worktree is
 detached. Add `--include-changes` to copy current staged, unstaged, and nonignored
 untracked content. The TUI switches the associated task to the new workspace.
 Setup runs only the command you explicitly supply, through shell sandbox checks.
+A nonzero exit stops the remaining setup commands and reports the captured output.
 
 Preview shows changes made since the worktree's initial content, or since its
 last transfer. Applying requires the previewed source and destination revisions
@@ -172,16 +173,21 @@ Open a scope before acting on it:
 
 Stage and revert use an unstaged review; unstage uses a staged review. Omit the
 optional hunk ID for a whole-file action. Use the displayed hunk ID or its unique
-prefix for one hunk. Binary, added, deleted, and mode-changing files require
-whole-file actions. Revert discards the selected unstaged change. A stale diff
-is rejected and must be refreshed.
+prefix for one hunk. Added and deleted text files support their text hunks;
+content hunks in executable or type-changing files remain separate from other
+metadata changes. Binary, empty-file, and mode-only changes have no text hunks
+and use whole-file actions. Revert discards the selected unstaged change. A stale
+diff is rejected and must be refreshed.
 
 Comments attach to a line present in the reviewed diff; the default side is the
 new text, and `--left` selects the original text. Comments remain local and are
 included in analysis of that revision. `analyze` starts a separate read-only
-reviewer using the configured provider/model, with up to 32 tool calls and a
-180-second timeout. It reports actionable findings and verification limits; it
-does not edit the coding task or publish comments.
+reviewer using the configured provider/model, with up to 32 client-side tool
+calls and a 180-second timeout. It inspects immutable base/target file snapshots,
+including staged content that differs from the working directory, and can page
+through omitted patches. It reports actionable findings and verification limits;
+it does not edit the coding task or publish comments. Native CLI runtimes own
+their internal tool-call limits.
 
 The existing `/review` or `Ctrl+E` edit drawer remains available. The dashboard's
 **Changes** view offers scopes, file/hunk actions, line comments, and
@@ -199,8 +205,19 @@ libre-claw workflow review analyze
 
 Ask the agent to delegate a bounded task, such as investigating a failing test
 while it works on a separate module. The native tools are `subagent_spawn`,
-`subagent_list`, `subagent_wait`, and `subagent_cancel`. Inspect or cancel workers
-from the TUI or Telegram with `/agents` and `/agents cancel <worker-id>`.
+`subagent_list`, `subagent_wait`, `subagent_cancel`, and `subagent_resume`. Inspect,
+stop, or resume saved workers from the TUI or Telegram:
+
+```text
+/agents
+/agents cancel <worker-id>
+/agents resume <worker-id> inspect existing work before continuing
+```
+
+The dashboard Plan panel shows worker state, scope, provider/model, remaining
+budgets, output, and errors, with explicit Resume and Cancel controls. Recovery
+requests survive a restart and are executed at the parent's next safe boundary;
+an idle parent is continued to process the request.
 
 A spawn requires a task and an existing directory `scope` inside the parent
 workspace. Workers get a separate conversation and default to read-only tools.
@@ -221,8 +238,18 @@ Writing workers use scoped file tools. Arbitrary shell/browser mutations and
 providers that execute their own tools, including the Codex CLI provider, are
 not supported as scoped workers. Choose a provider using Libre Claw's client-side
 tools for delegation. Unfinished workers are cancelled when the parent turn ends;
-an in-flight file write finishes before its ownership is released. Worker result
-events are durable, but worker processes are not resumed after a restart.
+an in-flight file write finishes before its ownership is released. Parent
+interruption saves workers as interrupted.
+
+Child conversations, usage, elapsed time, consumed tool calls, scope, and ownership
+are checkpointed with the parent before side effects and after results. Explicit
+resume restores that state, revalidates permissions and ownership, and uses the
+remaining budget. Unknown tool outcomes are inspected before repeating effects.
+Completed workers cannot be resumed; exhausted budgets require a new task. A
+writing worker cannot resume while the parent is in plan mode. Saved workers are
+not automatically restarted just because the task has reopened, and old OS
+processes are not reattached. Cancellation also stops owned Codex CLI subprocesses
+used by primary tasks.
 
 ## Model discovery and capability overrides
 
@@ -231,6 +258,10 @@ remain available when discovery fails. The selected model's metadata is refreshe
 before its first request when the provider supports discovery. Published tool,
 image, reasoning, context/output limits, and pricing appear in the catalog and
 dashboard. Missing values remain unknown.
+
+Reported usage costs stay unknown when any contributing request lacks cost data;
+the UI does not display a partial total as complete or turn an unknown cost into
+zero. Published model prices are separate from provider-reported billed usage.
 
 Requests omit tools or temperature where explicitly unsupported, reject images
 for known nonvision models, respect published token limits, and validate known
@@ -263,7 +294,10 @@ The dashboard uses the daemon's local API. Task state is available
 at `GET /runs/<id>/session`; send `{"message":"continue with the tests"}` to
 `POST /runs/<id>/messages` for an idle task. `POST /runs/<id>/control` accepts
 `{"action":"steer","text":"preserve the public API"}`. Other actions are
-`queue`, `plan` (text uses the `/plan` arguments), `agents`, and `agent_cancel`.
+`queue`, `plan` (text uses the `/plan` arguments), `agents`, `agent_cancel`, and
+`agent_resume` (text is the worker ID followed by optional guidance). Dashboard
+polling uses `GET /runs/<id>/session?controls=1` to retrieve controls and public
+worker summaries without repeatedly transferring full parent/child history.
 
 Git review endpoints are `/workspace/review`, `/workspace/review/action`,
 `/workspace/review/comments`, and `/workspace/review/analyze`. Select a task with
@@ -273,7 +307,10 @@ Git review endpoints are `/workspace/review`, `/workspace/review/action`,
 and `target_revision` values. Use the dashboard or CLI for the complete workflow.
 
 See [the evaluation guide](../benchmarks/README.md#fixed-coding-workflow-regression-suite)
-for the offline CI gate and opt-in live provider runs. The recorded
-[two-task smoke result](../benchmarks/results/coding-workflow-smoke-2026-09-19.json)
-checks basic coding and instruction following. Its scripted recovery check is
-reported separately; it is not a comparative provider benchmark.
+for the offline CI gate and opt-in live provider comparisons. The recorded
+[frozen-source comparison](../benchmarks/results/coding-workflow-comparison-2026-09-21.json)
+covers pagination, a multi-file instruction-following change, and a seeded review
+with a benign-change control across two provider paths. Recovery is checked
+separately through actual durable snapshots. The report records source/fixture
+hashes, completion, runtime, tokens, reported cost, and unsupported limit flags.
+This small single-trial comparison is smoke evidence, not a general model ranking.
