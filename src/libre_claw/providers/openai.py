@@ -12,10 +12,12 @@ from typing import Any
 import structlog
 
 from libre_claw.core.session import ChatMessage, ContentBlock
+from libre_claw.providers.capabilities import apply_reasoning_request, prepare_request
 from libre_claw.providers.base import (
     Done,
     LLMProvider,
     ProviderError,
+    ProviderConfigurationError,
     ReasoningDelta,
     StreamEvent,
     TextDelta,
@@ -97,6 +99,11 @@ class OpenAIProvider(LLMProvider):
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
         del stream
+        try:
+            tools, max_tokens = prepare_request(self, messages, tools, max_tokens)
+        except ProviderConfigurationError as exc:
+            yield ProviderError(str(exc))
+            return
         request: dict[str, Any] = {
             "model": self.model,
             "messages": self._format_messages(messages, system),
@@ -113,8 +120,17 @@ class OpenAIProvider(LLMProvider):
         if tools:
             request["tools"] = [self._format_tool_schema(tool) for tool in tools]
             request["tool_choice"] = "auto"
-        if self._supports_temperature():
+        info = self.model_info
+        if (info is not None and info.supports_temperature is True) or (
+            (info is None or info.supports_temperature is None) and self._supports_temperature()
+        ):
             request["temperature"] = temperature
+
+        try:
+            apply_reasoning_request(self, request)
+        except ProviderConfigurationError as exc:
+            yield ProviderError(str(exc))
+            return
 
         accumulators: dict[int, _OpenAIToolAccumulator] = {}
         usage: Usage | None = None

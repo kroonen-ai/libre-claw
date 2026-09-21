@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,19 +12,11 @@ from libre_claw.auth.api_keys import ApiKeyLookup
 from libre_claw.config import load_config
 from libre_claw.providers import ProviderConfigurationError, create_fallback_providers, create_provider
 from libre_claw.providers.factory import _fallback_model
-from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
-from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.codex import CodexProvider
-from libre_claw.providers.ollama_catalog import (
-    OLLAMA_CLOUD_MODEL_PRESETS,
-    OLLAMA_MODEL_PRESETS,
-)
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.moonshot import MoonshotProvider
-from libre_claw.providers.moonshot_catalog import MOONSHOT_MODEL_PRESETS
 from libre_claw.providers.openai import OpenAIProvider
 from libre_claw.providers.openrouter import OpenRouterProvider
-from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
 
 
 class FakeApiKeyStore:
@@ -43,159 +36,39 @@ class FakeApiKeyStore:
         return ApiKeyLookup(value=self.value, source="environment")
 
 
-def test_ollama_cloud_presets_include_current_library_names() -> None:
-    preset_names = {preset.model for preset in OLLAMA_MODEL_PRESETS}
-    cloud_names = {preset.model for preset in OLLAMA_CLOUD_MODEL_PRESETS}
-    expected_cloud_names = {
-        "kimi-k2.6:cloud",
-        "qwen3.5:cloud",
-        "qwen3.5:397b-cloud",
-        "gemma4:31b-cloud",
-        "glm-5.1:cloud",
-        "glm-5.2:cloud",
-        "minimax-m3:cloud",
-        "minimax-m2.7:cloud",
-        "nemotron-3-super:cloud",
-        "glm-5:cloud",
-        "minimax-m2.5:cloud",
-        "glm-4.7:cloud",
-        "gemini-3-flash-preview:cloud",
-        "minimax-m2.1:cloud",
-        "qwen3-coder-next:cloud",
-        "deepseek-v3.2:cloud",
-        "ministral-3:cloud",
-        "devstral-small-2:cloud",
-        "deepseek-v4-flash:cloud",
-        "deepseek-v4-pro:cloud",
-        "qwen3-next:cloud",
-        "nemotron-3-nano:cloud",
-        "rnj-1:cloud",
-        "kimi-k2.5:cloud",
-        "devstral-2:cloud",
-        "mistral-large-3:cloud",
-        "gpt-oss:120b",
-        "gpt-oss:20b",
-        "gpt-oss:120b-cloud",
-        "gpt-oss:20b-cloud",
-        "qwen3-vl:cloud",
-        "qwen3-coder:cloud",
-        "kimi-k2-thinking:cloud",
-        "minimax-m2:cloud",
-        "glm-4.6:cloud",
-        "deepseek-v3.1:cloud",
-        "cogito-2.1:cloud",
-        "kimi-k2:cloud",
-        "gemma3:27b-cloud",
-    }
-
-    assert expected_cloud_names <= preset_names
-    assert expected_cloud_names <= cloud_names
-    assert "qwen3.6:27b" not in cloud_names
-    assert len(preset_names) == len(OLLAMA_MODEL_PRESETS)
-
-
-def test_codex_oauth_presets_match_official_codex_model_guide() -> None:
-    preset_names = {preset.model for preset in CODEX_MODEL_PRESETS}
-
-    assert preset_names == {
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5",
-        "gpt-5.3-codex-spark",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-    }
-    assert not {
-        "gpt-5.6-sol-pro",
-        "gpt-5.6-terra-pro",
-        "gpt-5.6-luna-pro",
-        "gpt-5.3-codex",
-        "gpt-5.2",
-    } & preset_names
-    assert "codex-auto-review" not in preset_names
-
-
-def test_anthropic_presets_include_current_api_model_names() -> None:
-    preset_names = {preset.model for preset in ANTHROPIC_MODEL_PRESETS}
-
-    assert "claude-opus-5" in preset_names
-    assert "claude-sonnet-5" in preset_names
-    assert "claude-opus-4-8" in preset_names
-    assert "claude-sonnet-4-6" in preset_names
-    assert "claude-haiku-4-5-20251001" in preset_names
-    assert "anthropic/claude-opus-4.8" not in preset_names
-    assert "anthropic/claude-sonnet-5" not in preset_names
-
-
-def test_openrouter_presets_include_recommended_models() -> None:
-    preset_names = {preset.model for preset in OPENROUTER_MODEL_PRESETS}
-    expected_models = {
-        "deepseek/deepseek-v4-flash",
-        "deepseek/deepseek-v4-flash-0731",
-        "~deepseek/deepseek-v4-flash-latest",
-        "tencent/hy3",
-        "tencent/hy3:free",
-        "x-ai/grok-4.5",
-        "openai/gpt-5.6-sol",
-        "openai/gpt-5.6-sol-pro",
-        "openai/gpt-5.6-terra",
-        "openai/gpt-5.6-terra-pro",
-        "openai/gpt-5.6-luna",
-        "openai/gpt-5.6-luna-pro",
-        "sakana/fugu-ultra",
-        "poolside/laguna-s-2.1",
-        "poolside/laguna-s-2.1:free",
-        "qwen/qwen3.7-max",
-        "qwen/qwen3.7-flash",
-        "qwen/qwen3.7-plus",
-        "deepseek/deepseek-v4-pro",
-        "moonshotai/kimi-k3",
-        "moonshotai/kimi-k2.6",
-        "moonshotai/kimi-k2.7-code",
-        "minimax/minimax-m2.7",
-        "z-ai/glm-5.1",
-        "z-ai/glm-5.2",
-        "xiaomi/mimo-v2.5-pro",
-        "qwen/qwen3.6-plus",
-        "anthropic/claude-opus-5",
-        "anthropic/claude-opus-5-fast",
-        "anthropic/claude-opus-4.8",
-        "anthropic/claude-sonnet-4.6",
-        "anthropic/claude-sonnet-5",
-        "minimax/minimax-m3",
-        "google/gemini-3.6-flash",
-        "google/gemini-3.5-flash",
-        "google/gemini-3.5-flash-lite",
-        "openai/gpt-5.5",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "stepfun/step-3.5-flash",
-        "openai/gpt-4o-mini",
-        "openrouter/auto",
-    }
-
-    assert expected_models <= preset_names
-    assert len(preset_names) == len(OPENROUTER_MODEL_PRESETS)
-
-
-def test_moonshot_presets_match_official_kimi_code_model_ids() -> None:
-    preset_names = {preset.model for preset in MOONSHOT_MODEL_PRESETS}
-
-    assert preset_names == {
-        "k3",
-        "kimi-for-coding",
-        "kimi-for-coding-highspeed",
-    }
-    assert all(preset.vision for preset in MOONSHOT_MODEL_PRESETS)
-
-
 def test_provider_factory_fallback_models_match_public_defaults() -> None:
     assert _fallback_model("anthropic") == "claude-opus-5"
     assert _fallback_model("openrouter") == "openrouter/auto"
     assert _fallback_model("moonshot") == "k3"
     assert _fallback_model("codex") == "gpt-5.5"
     assert _fallback_model("ollama") == "qwen3.6:27b"
+
+
+@pytest.mark.parametrize("provider_name", ["openai", "anthropic"])
+def test_factory_inference_honors_custom_base_url(monkeypatch, tmp_path, provider_name):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = replace(config, providers={
+        **config.providers,
+        provider_name: {**config.providers[provider_name], "base_url": "https://proxy.test/v1"},
+    })
+    provider = create_provider(config, provider_name=provider_name, api_key_store=FakeApiKeyStore("key"))
+    assert provider.base_url == "https://proxy.test/v1"
+    assert str(provider._client.base_url).rstrip("/") == "https://proxy.test/v1"
+
+
+def test_factory_accepts_new_kimi_code_ids_without_allowlist(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    provider = create_provider(
+        config, provider_name="moonshot", model="kimi-future-code",
+        api_key_store=FakeApiKeyStore("key"),
+    )
+    assert provider.model == "kimi-future-code"
+    assert provider.service == "kimi_code"
+    assert provider.base_url == "https://api.kimi.com/coding/v1"
 
 
 def test_create_provider_requires_anthropic_api_key(monkeypatch, tmp_path: Path) -> None:

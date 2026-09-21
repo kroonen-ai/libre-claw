@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from pathlib import Path
 
 import httpx
@@ -134,3 +136,26 @@ async def test_openrouter_metadata_client_construction_failure_is_nonfatal(monke
 
     assert limits.source == "unavailable"
     assert limits.detected is False
+
+
+async def test_metadata_credential_lookup_does_not_block_event_loop(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = load_config(config_path=_config_path(tmp_path, base_url="https://nonblocking.test/api/v1", model="lab/new-model"))
+    entered = threading.Event()
+    release = threading.Event()
+
+    def lookup(*_args):
+        entered.set()
+        release.wait(timeout=2)
+        return ""
+
+    monkeypatch.setattr("libre_claw.providers.openrouter_metadata._openrouter_api_key", lookup)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": [{"id": "lab/new-model", "context_length": 32768}]}))) as client:
+        task = asyncio.create_task(detect_openrouter_model_limits(config, client=client))
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            await asyncio.sleep(0)
+            assert not task.done()
+        finally:
+            release.set()
+        assert (await task).context_window_tokens == 32768

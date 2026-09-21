@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -30,7 +32,7 @@ class OpenRouterModelLimits:
         return self.context_window_tokens is not None or self.max_completion_tokens is not None
 
 
-_CACHE: dict[tuple[str, str, bool], tuple[float, OpenRouterModelLimits]] = {}
+_CACHE: dict[tuple[str, str, str], tuple[float, OpenRouterModelLimits]] = {}
 
 
 async def detect_openrouter_model_limits(
@@ -49,8 +51,14 @@ async def detect_openrouter_model_limits(
     if not selected_model:
         return OpenRouterModelLimits(source="missing_model")
     base_url = _provider_value(provider_config, "base_url", "https://openrouter.ai/api/v1").rstrip("/")
-    api_key = _openrouter_api_key(config, provider_config, api_key_store)
-    cache_key = (base_url, selected_model, bool(api_key))
+    try:
+        api_key = await asyncio.wait_for(
+            asyncio.to_thread(_openrouter_api_key, config, provider_config, api_key_store),
+            timeout=OPENROUTER_METADATA_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        return OpenRouterModelLimits(source="unavailable")
+    cache_key = (base_url, selected_model, hashlib.sha256((api_key or "").encode()).hexdigest())
     cached = _CACHE.get(cache_key)
     now = time.monotonic()
     if cached is not None and now - cached[0] < OPENROUTER_METADATA_TTL_SECONDS:

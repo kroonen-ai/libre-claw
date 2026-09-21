@@ -15,10 +15,12 @@ import httpx
 import structlog
 
 from libre_claw.core.session import ChatMessage, ContentBlock
+from libre_claw.providers.capabilities import prepare_request
 from libre_claw.providers.base import (
     Done,
     LLMProvider,
     ProviderError,
+    ProviderConfigurationError,
     StreamEvent,
     TextDelta,
     ToolCallDelta,
@@ -83,6 +85,11 @@ class LocalProvider(LLMProvider):
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
         del stream
+        try:
+            tools, max_tokens = prepare_request(self, messages, tools, max_tokens)
+        except ProviderConfigurationError as exc:
+            yield ProviderError(str(exc))
+            return
         tool_schemas = list(tools or [])
         if tool_schemas and self._use_xml_tools():
             async for event in self._complete_with_xml_tools(
@@ -96,7 +103,9 @@ class LocalProvider(LLMProvider):
             return
 
         if self.api_format == "openai":
-            async for event in self._openai_delegate().complete(
+            delegate = self._openai_delegate()
+            delegate.model_info = self.model_info
+            async for event in delegate.complete(
                 messages=messages,
                 tools=tool_schemas or None,
                 system=system,
@@ -183,7 +192,9 @@ class LocalProvider(LLMProvider):
         max_tokens: int | None,
     ) -> AsyncIterator[StreamEvent]:
         if self.api_format == "openai":
-            async for event in self._openai_delegate().complete(
+            delegate = self._openai_delegate()
+            delegate.model_info = self.model_info
+            async for event in delegate.complete(
                 messages=messages,
                 tools=None,
                 system=system,
@@ -220,6 +231,16 @@ class LocalProvider(LLMProvider):
                 "num_predict": max_tokens or self.max_tokens,
             },
         }
+        info = self.model_info
+        if info is not None:
+            if info.supports_reasoning is False:
+                request.pop("think", None)
+            elif info.supported_reasoning_efforts is not None and isinstance(self.think, str):
+                if self.think not in info.supported_reasoning_efforts:
+                    yield ProviderError(f"{self.model} does not support thinking effort '{self.think}'.")
+                    return
+            if info.supports_temperature is False:
+                request["options"].pop("temperature", None)
         if tools:
             request["tools"] = [format_local_tool_schema(tool) for tool in tools]
 

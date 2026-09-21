@@ -8,7 +8,8 @@ from dataclasses import replace
 from typing import Any
 
 from libre_claw.config import LibreClawConfig
-from libre_claw.kimi import canonical_kimi_code_model
+from libre_claw.kimi import canonical_kimi_code_model, moonshot_service
+from libre_claw.providers.model_catalog import cached_models
 from libre_claw.providers.moonshot_catalog import moonshot_model_preset
 
 
@@ -17,15 +18,29 @@ def apply_moonshot_model_limits(
     *,
     model: str | None = None,
 ) -> LibreClawConfig:
-    """Apply Kimi Code's published model limits without a network lookup."""
+    """Apply discovered limits, or historical Kimi limits, without network I/O."""
     provider_config = config.providers.get("moonshot", {})
     if isinstance(provider_config, Mapping) and provider_config.get("auto_context_window") is False:
         return config
 
-    selected_model = canonical_kimi_code_model(model or _effective_moonshot_model(config))
-    preset = moonshot_model_preset(selected_model)
-    if preset is None:
-        return config
+    selected_model = model or _effective_moonshot_model(config)
+    is_kimi_code = moonshot_service(provider_config) == "kimi_code"
+    if is_kimi_code:
+        selected_model = canonical_kimi_code_model(selected_model)
+    discovered = next(
+        (item for item in cached_models(config, "moonshot") if item.model == selected_model), None
+    )
+    if discovered is not None and discovered.context_window_tokens is not None:
+        context_window = discovered.context_window_tokens
+        max_output = discovered.max_completion_tokens
+        source = "moonshot-models"
+    else:
+        preset = moonshot_model_preset(selected_model) if is_kimi_code else None
+        if preset is None:
+            return config
+        context_window = preset.context_window_tokens
+        max_output = preset.max_output_tokens
+        source = "kimi-code-docs"
 
     providers: dict[str, Mapping[str, Any]] = {}
     for name, value in config.providers.items():
@@ -33,18 +48,18 @@ def apply_moonshot_model_limits(
     moonshot_config = dict(providers.get("moonshot", {}))
     moonshot_config.update(
         {
-            "detected_context_window_tokens": preset.context_window_tokens,
-            "detected_context_source": "kimi-code-docs",
+            "detected_context_window_tokens": context_window,
+            "detected_context_source": source,
             "detected_context_model": selected_model,
         }
     )
     moonshot_config.pop("detected_max_completion_tokens", None)
-    if preset.max_output_tokens is not None:
-        moonshot_config["detected_max_completion_tokens"] = preset.max_output_tokens
+    if max_output is not None:
+        moonshot_config["detected_max_completion_tokens"] = max_output
     providers["moonshot"] = moonshot_config
     return replace(
         config,
-        agent=replace(config.agent, context_window_tokens=preset.context_window_tokens),
+        agent=replace(config.agent, context_window_tokens=context_window),
         providers=providers,
     )
 

@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import tempfile
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
@@ -13,7 +16,8 @@ import structlog
 
 from libre_claw.auth.codex import CodexCommandResult, CodexCommandEvent, codex_status, stream_codex_command
 from libre_claw.core.session import ChatMessage
-from libre_claw.providers.base import Done, LLMProvider, ProviderError, StreamEvent, TextDelta, ToolSchema, Usage
+from libre_claw.providers.base import Done, LLMProvider, ProviderConfigurationError, ProviderError, StreamEvent, TextDelta, ToolSchema, Usage
+from libre_claw.providers.capabilities import configured_reasoning_effort, has_images, prepare_request
 
 
 CODEX_REPLAY_CHUNK_SIZE = 24
@@ -53,7 +57,13 @@ class CodexProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        del tools, stream, temperature, max_tokens
+        del stream, temperature
+        try:
+            tools, max_tokens = prepare_request(self, messages, tools, max_tokens)
+            effort = configured_reasoning_effort(self)
+        except ProviderConfigurationError as exc:
+            yield ProviderError(str(exc))
+            return
 
         status = await codex_status(self.executable)
         if not status.logged_in:
@@ -79,7 +89,17 @@ class CodexProvider(LLMProvider):
             str(self.working_directory),
             "-",
         ]
+        if effort:
+            args[-1:-1] = ["--config", f"model_reasoning_effort={json.dumps(effort)}"]
+        info = self.model_info
+        if info is not None and info.context_window_tokens is not None and getattr(self, "auto_context_window", True):
+            args[-1:-1] = ["--config", f"model_context_window={info.context_window_tokens}"]
+        image_directory: tempfile.TemporaryDirectory[str] | None = None
         try:
+            if any(has_images(message.content) for message in messages):
+                image_directory = tempfile.TemporaryDirectory(prefix="libre-claw-codex-images-")
+                image_args = await asyncio.to_thread(_write_codex_images, messages, Path(image_directory.name))
+                args[-1:-1] = image_args
             emitted = False
             usage: Usage | None = None
             result: CodexCommandResult | None = None
@@ -107,6 +127,10 @@ class CodexProvider(LLMProvider):
             yield ProviderError(f"Codex provider request failed: {exc}")
             return
 
+        finally:
+            if image_directory is not None:
+                await asyncio.to_thread(image_directory.cleanup)
+
         if result is None:
             yield ProviderError("Codex provider ended without an exit status.")
             return
@@ -123,6 +147,27 @@ class CodexProvider(LLMProvider):
                         await asyncio.sleep(self.replay_delay)
 
         yield Done(usage=usage, stop_reason="codex_cli")
+
+
+def _write_codex_images(messages: Sequence[ChatMessage], directory: Path) -> list[str]:
+    args: list[str] = []
+    suffixes = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}
+    for message in messages:
+        for block in message.content:
+            if block.get("type") != "image":
+                if has_images(block):
+                    raise ValueError("Codex cannot forward images nested inside tool results.")
+                continue
+            try:
+                data = base64.b64decode(str(block.get("data", "")), validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("Invalid image attachment data.") from exc
+            if not data:
+                raise ValueError("Image attachment is empty.")
+            path = directory / f"image-{len(args) // 2}{suffixes.get(str(block.get('media_type')), '.img')}"
+            path.write_bytes(data)
+            args.extend(("--image", str(path)))
+    return args
 
 
 def _format_codex_prompt(messages: Sequence[ChatMessage], system: str | None) -> str:
@@ -150,6 +195,8 @@ def _message_text(message: ChatMessage) -> str:
         block_type = block.get("type")
         if block_type == "text":
             parts.append(str(block.get("text", "")))
+        elif block_type == "image":
+            parts.append("[Image attached to this message]")
         elif block_type == "tool_result":
             parts.append(f"Tool result: {block.get('content', '')}")
         elif block_type == "tool_use":

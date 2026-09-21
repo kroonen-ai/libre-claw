@@ -12,10 +12,12 @@ from typing import Any
 import structlog
 
 from libre_claw.core.session import ChatMessage, ContentBlock
+from libre_claw.providers.capabilities import apply_reasoning_request, prepare_request
 from libre_claw.providers.base import (
     Done,
     LLMProvider,
     ProviderError,
+    ProviderConfigurationError,
     ReasoningDelta,
     StreamEvent,
     TextDelta,
@@ -59,17 +61,23 @@ class AnthropicProvider(LLMProvider):
         model: str,
         max_tokens: int,
         client: Any | None = None,
+        *,
+        base_url: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
+        self.base_url = base_url
         if client is not None:
             self._client = client
         elif AsyncAnthropic is None:
             msg = "The anthropic package is not installed."
             raise RuntimeError(msg)
         else:
-            self._client = AsyncAnthropic(api_key=api_key)
+            kwargs: dict[str, Any] = {"api_key": api_key}
+            if base_url:
+                kwargs["base_url"] = base_url
+            self._client = AsyncAnthropic(**kwargs)
         self._logger = structlog.get_logger(__name__)
 
     async def complete(
@@ -82,17 +90,31 @@ class AnthropicProvider(LLMProvider):
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
         del stream
+        try:
+            tools, max_tokens = prepare_request(self, messages, tools, max_tokens)
+        except ProviderConfigurationError as exc:
+            yield ProviderError(str(exc))
+            return
         request: dict[str, Any] = {
             "model": self.model,
             "messages": self._format_messages(messages),
             "max_tokens": max_tokens or self.max_tokens,
         }
-        if _supports_temperature(self.model):
+        info = self.model_info
+        if (info is not None and info.supports_temperature is True) or (
+            (info is None or info.supports_temperature is None) and _supports_temperature(self.model)
+        ):
             request["temperature"] = temperature
         if system:
             request["system"] = system
         if tools:
             request["tools"] = list(tools)
+
+        try:
+            apply_reasoning_request(self, request, anthropic=True)
+        except ProviderConfigurationError as exc:
+            yield ProviderError(str(exc))
+            return
 
         usage: Usage | None = None
         stop_reason: str | None = None

@@ -11,12 +11,6 @@ MoonshotService = Literal["kimi_code", "platform"]
 
 KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1"
 MOONSHOT_PLATFORM_BASE_URL = "https://api.moonshot.ai/v1"
-KIMI_CODE_MODEL_IDS = (
-    "k3",
-    "kimi-for-coding",
-    "kimi-for-coding-highspeed",
-)
-
 _KIMI_CODE_MODEL_ALIASES = {
     "kimi-k3": "k3",
     "kimi-k2.7-code": "kimi-for-coding",
@@ -40,10 +34,6 @@ def canonical_kimi_code_model(model: str) -> str:
     """Translate legacy Libre Claw model names to official Kimi Code IDs."""
     cleaned = model.strip()
     return _KIMI_CODE_MODEL_ALIASES.get(cleaned.lower(), cleaned)
-
-
-def is_kimi_code_model(model: str) -> bool:
-    return canonical_kimi_code_model(model).lower() in KIMI_CODE_MODEL_IDS
 
 
 def normalize_moonshot_selection(

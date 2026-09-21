@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlparse
 
@@ -12,13 +12,12 @@ from libre_claw.auth.api_keys import ApiKeyStore
 from libre_claw.config import LibreClawConfig
 from libre_claw.kimi import (
     KIMI_CODE_BASE_URL,
-    KIMI_CODE_MODEL_IDS,
-    is_kimi_code_model,
     moonshot_service,
     normalize_moonshot_selection,
 )
 from libre_claw.providers.anthropic import AnthropicProvider
 from libre_claw.providers.base import LLMProvider, ProviderConfigurationError
+from libre_claw.providers.capabilities import bind_model_capabilities
 from libre_claw.providers.codex import CodexProvider
 from libre_claw.providers.llamacpp import DEFAULT_LLAMACPP_BASE_URL, LlamaCppProvider
 from libre_claw.providers.local import OllamaThink
@@ -39,6 +38,18 @@ class ProviderFallback:
 
 
 def create_provider(
+    config: LibreClawConfig, api_key_store: ApiKeyStore | None = None, *,
+    provider_name: str | None = None, model: str | None = None, api_key_env: str | None = None,
+) -> LLMProvider:
+    provider = _create_provider(config, api_key_store, provider_name=provider_name, model=model, api_key_env=api_key_env)
+    name = _canonical_provider_name(provider_name or config.general.default_provider)
+    if api_key_env:
+        settings = {**config.providers.get(name, {}), "api_key_env": api_key_env}
+        config = replace(config, providers={**config.providers, name: settings})
+    return bind_model_capabilities(provider, config, name, api_key_store=api_key_store)
+
+
+def _create_provider(
     config: LibreClawConfig,
     api_key_store: ApiKeyStore | None = None,
     *,
@@ -73,6 +84,9 @@ def create_provider(
     if provider_config is None:
         raise ProviderConfigurationError(f"Missing [providers.{resolved_provider_name}] configuration.")
 
+    if model and resolved_provider_name in {"codex", "ollama", "llamacpp"}:
+        config = replace(config, general=replace(config.general, default_model=model))
+
     if resolved_provider_name == "codex":
         return _create_codex_provider(config, provider_config)
 
@@ -88,14 +102,6 @@ def create_provider(
             provider_config,
             resolved_model,
         )
-        if moonshot_service(provider_config) == "kimi_code" and not is_kimi_code_model(
-            resolved_model
-        ):
-            models = ", ".join(KIMI_CODE_MODEL_IDS)
-            raise ProviderConfigurationError(
-                f"Unknown Kimi Code model '{resolved_model}'. Use {models}, or set "
-                "[providers.moonshot].service = 'platform' for a Moonshot Platform model."
-            )
 
     resolved_api_key_env = _str_provider_value(
         provider_config,
@@ -139,7 +145,12 @@ def create_provider(
     max_tokens = _provider_max_tokens(provider_config)
     try:
         if resolved_provider_name == "anthropic":
-            return AnthropicProvider(api_key=api_key_lookup.value, model=resolved_model, max_tokens=max_tokens)
+            return AnthropicProvider(
+                api_key=api_key_lookup.value,
+                model=resolved_model,
+                max_tokens=max_tokens,
+                base_url=_str_provider_value(provider_config, "base_url", "") or None,
+            )
         if resolved_provider_name == "openrouter":
             return OpenRouterProvider(
                 api_key=api_key_lookup.value,
@@ -171,7 +182,12 @@ def create_provider(
                 reasoning_effort=_moonshot_reasoning_effort(provider_config),
                 thinking=thinking,
             )
-        return OpenAIProvider(api_key=api_key_lookup.value, model=resolved_model, max_tokens=max_tokens)
+        return OpenAIProvider(
+            api_key=api_key_lookup.value,
+            model=resolved_model,
+            max_tokens=max_tokens,
+            base_url=_str_provider_value(provider_config, "base_url", "") or None,
+        )
     except RuntimeError as exc:
         raise ProviderConfigurationError(str(exc)) from exc
 

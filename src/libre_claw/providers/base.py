@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from libre_claw.core.session import ChatMessage
+    from libre_claw.providers.model_catalog import ModelInfo
 
 
 ToolSchema = Mapping[str, Any]
@@ -111,6 +112,18 @@ StreamEvent = (
 
 class LLMProvider(ABC):
     """Abstract provider contract used by the agent core."""
+
+    @property
+    def model_info(self) -> "ModelInfo | None":
+        config = getattr(self, "_capability_config", None)
+        if config is None:
+            return getattr(self, "_model_info", None)
+        from libre_claw.providers.model_catalog import selected_model_info
+        return selected_model_info(config, self._capability_provider, getattr(self, "model", ""))
+
+    @model_info.setter
+    def model_info(self, value: "ModelInfo | None") -> None:
+        self._model_info = value
 
     @abstractmethod
     def complete(
