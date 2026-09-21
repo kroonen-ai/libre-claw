@@ -312,7 +312,7 @@ def telegram_up_command(ctx: click.Context, host: str | None, port: int | None) 
 @click.option("--user-id", "user_ids", type=int, multiple=True, help="Allowed Telegram numeric user ID. Can be repeated.")
 @click.option("--no-daemon", is_flag=True, help="Do not route Telegram runs through the local daemon.")
 @click.option("--provider", help="Optional default provider to persist, for example openrouter.")
-@click.option("--model", help="Optional default model to persist, for example qwen/qwen3.7-max.")
+@click.option("--model", help="Optional provider model ID to persist.")
 @click.pass_context
 def telegram_setup_command(
     ctx: click.Context,
@@ -1424,3 +1424,8 @@ async def _stream_codex_login(browser_login: bool) -> CodexCommandResult:
     if final is None:
         raise CodexCliError("Codex login ended without a result.")
     return final
+
+
+from libre_claw.workflow_cli import workflow_group
+
+main.add_command(workflow_group)

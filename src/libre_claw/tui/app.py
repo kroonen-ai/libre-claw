@@ -88,6 +88,9 @@ from libre_claw.core.memory import (
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, pending_approvals, run_changes_text, run_plan_text
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
+from libre_claw.core.agent import AgentSubagentUpdate
+from libre_claw.core.task_control import update_plan, plan_text
+from libre_claw.core.session import session_from_payload
 from libre_claw.core.session import ChatMessage, UserAttachment, estimate_context_tokens, session_to_payload
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
 from libre_claw.core.soul import SoulError, SoulStore
@@ -96,7 +99,6 @@ from libre_claw.core.tools import ToolCall, ToolResult
 from libre_claw.core.usage import (
     load_usage_records,
     openrouter_attribution_text,
-    openrouter_model_presets_text,
     usage_report_text,
 )
 from libre_claw.core.workspace import (
@@ -116,12 +118,9 @@ from libre_claw.providers import (
     create_fallback_providers,
     create_provider,
 )
-from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
-from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
-from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
-from libre_claw.providers.moonshot_catalog import MOONSHOT_MODEL_PRESETS
+from libre_claw.providers.model_display import model_capability_summary
+from libre_claw.providers.model_catalog import ModelCatalog, cached_models, discover_models
 from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
-from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
@@ -279,7 +278,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/usage", "/usage openrouter|attribution|presets", "Show provider usage analytics"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
-    SlashCommand("/models", "/models", "Show model presets"),
+    SlashCommand("/models", "/models [provider] [search] [--refresh]", "Discover provider models"),
     SlashCommand("/fallback", "/fallback list|set|clear", "Manage fallback provider/model slots"),
     SlashCommand("/theme", "/theme list|<name> [--global]", "Switch or persist the TUI/dashboard theme"),
     SlashCommand(
@@ -299,6 +298,10 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/goal", "/goal <objective>|status|stop|max N", "Run a judged multi-turn goal loop"),
     SlashCommand("/runs", "/runs [N]", "List durable agent runs"),
     SlashCommand("/run", "/run <id>", "Inspect a durable run"),
+    SlashCommand("/agents", "/agents [cancel <id>]", "Inspect and cancel subagents"),
+    SlashCommand("/worktree", "/worktree create|list|use|preview|apply|setup|remove", "Manage isolated task workspaces"),
+    SlashCommand("/plan", "/plan on|off|show|set|add|edit|done", "Plan without changing files"),
+    SlashCommand("/queue", "/queue <message>", "Queue a follow-up for this task"),
     SlashCommand("/resume", "/resume <id>", "Load a durable run transcript"),
     SlashCommand("/artifacts", "/artifacts [plan|summary|verify|diff] [id]", "Open the run artifact panel"),
     SlashCommand("/review", "/review [latest|previous|next|close]", "Review file edits in a focused diff drawer"),
@@ -319,37 +322,6 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
 SLASH_COMMAND_NAMES = frozenset(command.name for command in SLASH_COMMANDS)
 
 SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "moonshot", "ollama", "llamacpp", "codex")
-MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
-    "anthropic": (
-        *((preset.model, preset.label) for preset in ANTHROPIC_MODEL_PRESETS),
-    ),
-    "openai": (
-        ("gpt-5.6-sol", "GPT-5.6 Sol"),
-        ("gpt-5.6-terra", "GPT-5.6 Terra"),
-        ("gpt-5.6-luna", "GPT-5.6 Luna"),
-        ("gpt-5.5", "GPT-5.5"),
-        ("gpt-4o", "GPT-4o"),
-        ("gpt-4.1", "GPT-4.1"),
-        ("o3", "o3 reasoning"),
-        ("o4-mini", "o4-mini reasoning"),
-        ("codex-mini", "Codex Mini"),
-    ),
-    "codex": (
-        *((preset.model, f"{preset.label} through Codex CLI auth") for preset in CODEX_MODEL_PRESETS),
-    ),
-    "openrouter": (
-        *((preset.model, f"{preset.label} through OpenRouter") for preset in OPENROUTER_MODEL_PRESETS),
-    ),
-    "moonshot": (
-        *((preset.model, f"{preset.label} through Kimi Code") for preset in MOONSHOT_MODEL_PRESETS),
-    ),
-    "ollama": (
-        *((preset.model, preset.label) for preset in OLLAMA_MODEL_PRESETS),
-    ),
-    # llama.cpp ids come from the llama-swap config; discover them live with
-    # `curl <base_url>/v1/models` (or the daemon's /models/llamacpp route).
-    "llamacpp": (),
-}
 
 
 PERMISSION_KEYS: dict[str, PermissionResolution] = {
@@ -1011,6 +983,8 @@ class LibreClawApp(App[None]):
         self.palette_open = False
         self._slash_suggestions: list[SlashCommand] = []
         self._slash_suggestion_index = 0
+        self._model_catalog_tasks: dict[str, asyncio.Task[None]] = {}
+        self._model_catalog_requested_at: dict[str, float] = {}
         self._palette_selected_index = 0
         self._active_task: asyncio.Task[None] | None = None
         self._pending_permission: AgentPermissionRequest | None = None
@@ -1027,6 +1001,8 @@ class LibreClawApp(App[None]):
         self._goal_max_turns = self.config.goal.max_turns
         self._last_goal_decision: JudgeDecision | None = None
         self._active_run_id: str | None = None
+        self._resumed_run_id: str | None = None
+        self._daemon_assistant_indices: dict[str, int] = {}
         self._active_run_summary = ""
         self._daemon_poll_after = 0
         self._artifact_run_id: str | None = None
@@ -1128,6 +1104,8 @@ class LibreClawApp(App[None]):
             self._daemon_model_sync_task.cancel()
         for task in self._memory_background_tasks:
             task.cancel()
+        for task in self._model_catalog_tasks.values():
+            task.cancel()
 
     def _apply_tui_theme(self) -> None:
         palette = self._theme
@@ -1223,6 +1201,20 @@ class LibreClawApp(App[None]):
             self._update_palette(event.value)
             return
         self._update_slash_suggestions(event.value)
+        if event.value.lstrip().lower().startswith("/model "):
+            argument = event.value.lstrip()[7:].strip().split(":", 1)[0].lower()
+            provider = _canonical_tui_provider(argument)
+            if provider not in SUPPORTED_PROVIDERS:
+                provider = _canonical_tui_provider(self.config.general.default_provider)
+            task = self._model_catalog_tasks.get(provider)
+            if (task is None or task.done()) and time.monotonic() - self._model_catalog_requested_at.get(provider, 0) > 60:
+                self._model_catalog_requested_at[provider] = time.monotonic()
+                self._model_catalog_tasks[provider] = asyncio.create_task(self._refresh_model_suggestions(provider))
+
+    async def _refresh_model_suggestions(self, provider: str) -> None:
+        await discover_models(self.config, provider)
+        if self.is_mounted:
+            self._update_slash_suggestions(self.query_one("#input", Input).value)
 
     def on_key(self, event: events.Key) -> None:
         if event.key == "up" and self._move_menu_selection(-1):
@@ -1340,8 +1332,6 @@ class LibreClawApp(App[None]):
         user_message = parsed.message.strip() if attachments else text
         if attachments and not user_message:
             user_message = TUI_IMAGE_ATTACHMENT_PROMPT
-        if attachments and _canonical_tui_provider(self.config.general.default_provider) == "codex":
-            self._append_system("Codex CLI provider currently receives text only; switch to Anthropic, OpenAI, OpenRouter, or Ollama for image inputs.")
 
         self._append_user(user_message)
         for attachment in attachments:
@@ -1388,6 +1378,18 @@ class LibreClawApp(App[None]):
             else:
                 self._cancel_active_generation()
             return
+        if command == "/worktree" or (command == "/review" and argument and argument.split(maxsplit=1)[0] not in {"latest", "previous", "next", "close"}):
+            from libre_claw.tui.workflows import handle_workflow_command
+            self.run_worker(handle_workflow_command(self, command, argument), group="workflow", exclusive=False)
+            return
+        if command == "/agents":
+            tokens = argument.split(maxsplit=1)
+            action = "agent_cancel" if tokens and tokens[0] == "cancel" else "agents"
+            await self._handle_task_control(action, tokens[1] if len(tokens) > 1 else "")
+            return
+        if command in {"/plan", "/queue"}:
+            await self._handle_task_control(command[1:], argument)
+            return
         if command == "/btw":
             self._handle_steering_note("btw", argument)
             return
@@ -1416,10 +1418,14 @@ class LibreClawApp(App[None]):
             await self._handle_usage_command(argument)
             return
         if command == "/model":
-            self._set_model(argument)
+            tokens = argument.split(maxsplit=1)
+            if not tokens or tokens[0].lower() == "list":
+                self._start_model_discovery(tokens[1] if len(tokens) > 1 else "")
+            else:
+                self._set_model(argument)
             return
         if command == "/models":
-            self._append_system(_model_help_text(self.config))
+            self._start_model_discovery(argument)
             return
         if command == "/fallback":
             await self._handle_fallback_command(argument)
@@ -1594,6 +1600,38 @@ class LibreClawApp(App[None]):
         self._append_attachment(attachment, pending=True)
         self._append_system("Attached clipboard image. It will be sent with your next message.")
 
+    async def _save_current_session(self, session: Session) -> None:
+        run_id = self._active_run_id or self._resumed_run_id
+        if run_id is not None:
+            await self.run_store.save_session(run_id, session)
+
+    async def _handle_task_control(self, action: str, argument: str) -> None:
+        run_id = self._active_run_id or self._resumed_run_id
+        try:
+            if self.daemon_client is not None and run_id:
+                result = await self.daemon_client.control_run(run_id, action, argument)
+                if result.get("session"):
+                    self.session = session_from_payload(result["session"])
+                self._append_system(str(result.get("text", "Task updated.")))
+            elif action in {"agents", "agent_cancel"}:
+                manager = self.agent.subagents if self.agent is not None else None
+                if manager is None:
+                    self._append_system("No subagents for this task.")
+                else:
+                    if action == "agent_cancel":
+                        await manager.cancel(argument)
+                    self._append_system("\n".join(f"{item['id']}: {item['status']} - {item['task']}\n{item.get('output', '')[:1000]}" for item in manager.snapshots()) or "No subagents for this task.")
+            elif action == "plan":
+                self._append_system(update_plan(self.session, argument))
+                await self._save_current_session(self.session)
+            elif run_id:
+                await self.run_store.queue_message(run_id, argument)
+                self._append_system("Follow-up queued. It will run after the current turn completes.")
+            else:
+                self._append_system("Start or resume a task before queuing a follow-up.")
+        except (ValueError, RuntimeError) as exc:
+            self._append_system(str(exc))
+
     def _handle_steering_note(self, kind: Literal["btw", "steer"], argument: str) -> None:
         note = argument.strip()
         if not note:
@@ -1601,8 +1639,14 @@ class LibreClawApp(App[None]):
             return
         label = "Side note" if kind == "btw" else "Steering instruction"
         self.session.summary = _append_session_note(self.session.summary, f"{label}: {note}")
+        self.session.queue_steering(note)
+        run_id = self._active_run_id or self._resumed_run_id
+        if self.daemon_client is not None and run_id:
+            self._track_run_background_task(self._handle_task_control("steer", note))
+        else:
+            self._track_run_background_task(self._save_current_session(self.session))
         self._archive_session_event_later("steering_note", {"kind": kind, "content": note})
-        self._append_system(f"{label} saved for future turns.")
+        self._append_system(f"{label} saved for future turns and queued for the next safe boundary.")
 
     async def _handle_palette_input(self, query: str) -> None:
         matches = self._palette_matches(query)
@@ -1752,7 +1796,9 @@ class LibreClawApp(App[None]):
             self._pending_permission = None
             self._hide_permission_prompt()
             self._active_task = None
-            await self._finish_active_run(run_state, summary=run_summary)
+            queued = await self._finish_active_run(run_state, summary=run_summary)
+            if queued is not None:
+                self.call_later(self.handle_user_input, queued["message"])
             self.query_one("#input", Input).focus()
 
     async def _stream_daemon_response(
@@ -1766,7 +1812,11 @@ class LibreClawApp(App[None]):
             return
 
         try:
-            started = await self.daemon_client.start_run(
+            start = self.daemon_client.start_run
+            if self._resumed_run_id and hasattr(self.daemon_client, "continue_run"):
+                async def start(message: str, **payload: Any) -> dict[str, Any]:
+                    return await self.daemon_client.continue_run(self._resumed_run_id, message, **payload)
+            started = await start(
                 user_message,
                 kind="chat",
                 provider=_canonical_tui_provider(self.config.general.default_provider),
@@ -1780,7 +1830,10 @@ class LibreClawApp(App[None]):
             if not run_id:
                 raise RuntimeError("Daemon did not return a run id.")
             self._active_run_id = run_id
-            self._daemon_poll_after = 0
+            continued = self._resumed_run_id == run_id
+            self._resumed_run_id = run_id
+            if not continued:
+                self._daemon_poll_after = 0
             self._append_system(f"Daemon run {run_id} started.")
             await self._poll_daemon_run(run_id, assistant_index)
         except asyncio.CancelledError:
@@ -1815,6 +1868,10 @@ class LibreClawApp(App[None]):
             run = _object_payload(detail.get("run"))
             state = str(run.get("state", ""))
             if state in {"done", "failed", "cancelled"}:
+                self._resumed_run_id = run_id
+                if hasattr(self.daemon_client, "get_session"):
+                    snapshot = await self.daemon_client.get_session(run_id)
+                    self.session = session_from_payload(snapshot.get("session"))
                 self._active_run_id = None
                 await self._refresh_artifact_panel_for_run_id(run_id)
                 return
@@ -1823,6 +1880,15 @@ class LibreClawApp(App[None]):
     def _handle_daemon_event(self, run_id: str, raw_event: dict[str, Any], assistant_index: int) -> None:
         data = _object_payload(raw_event.get("data"))
         event_type = str(raw_event.get("type", ""))
+        assistant_index = self._daemon_assistant_indices.get(run_id, assistant_index)
+        if event_type == "run_continued":
+            if assistant_index < len(self.transcript) and self.transcript[assistant_index].content:
+                assistant_index = self._append_assistant("")
+            self._daemon_assistant_indices[run_id] = assistant_index
+            return
+        if event_type == "subagent_update":
+            self._append_system(f"Subagent {data.get('id')}: {data.get('status')} - {data.get('task')}" + (f"\n{str(data['output'])[:1600]}" if data.get("output") else ""))
+            return
         if event_type in {"run_started", "user_message"}:
             return
         if event_type == "assistant_delta":
@@ -2008,7 +2074,9 @@ class LibreClawApp(App[None]):
             self._goal_description = None
             self._goal_turn = 0
             self._update_status()
-            await self._finish_active_run(run_state, summary=run_summary)
+            queued = await self._finish_active_run(run_state, summary=run_summary)
+            if queued is not None:
+                self.call_later(self.handle_user_input, queued["message"])
             self.query_one("#input", Input).focus()
 
     def _handle_agent_stream_event(
@@ -2019,6 +2087,12 @@ class LibreClawApp(App[None]):
         *,
         stop_on_error: bool,
     ) -> tuple[bool, bool]:
+        if isinstance(event, AgentSubagentUpdate):
+            item = event.snapshot
+            self._record_run_event_later("subagent_update", item)
+            self._append_system(f"Subagent {item['id']}: {item['status']} - {item['task']}" + (f"\n{item['output'][:1600]}" if item.get("output") else ""))
+            return True, False
+
         if isinstance(event, AgentTextDelta):
             stream_buffer.append(event.text)
             if stream_buffer.should_flush(time.monotonic()):
@@ -2153,13 +2227,23 @@ class LibreClawApp(App[None]):
         return "tui:goal" if self._goal_description is not None else "tui:chat"
 
     async def _start_run(self, kind: str, title: str) -> RunRecord:
-        run = await self.run_store.create_run(
-            title,
-            kind=kind,
-            provider=_canonical_tui_provider(self.config.general.default_provider),
-            model=_effective_model(self.config),
-            working_directory=self.config.general.working_directory,
-        )
+        resumed = await self.run_store.load_run(self._resumed_run_id) if self._resumed_run_id else None
+        if resumed is not None:
+            await self.run_store.set_runtime(resumed.run_id, provider=self.config.general.default_provider, model=_effective_model(self.config))
+            run = await self.run_store.update_state(resumed.run_id, "running")
+        else:
+            run = await self.run_store.create_run(
+                title, kind=kind,
+                provider=_canonical_tui_provider(self.config.general.default_provider),
+                model=_effective_model(self.config),
+                working_directory=self.config.general.working_directory,
+            )
+        self._resumed_run_id = run.run_id
+        try:
+            from libre_claw.core.git_review import create_checkpoint
+            self.session.checkpoint["last_turn_tree"] = await create_checkpoint(self.config.general.working_directory, name=run.run_id)
+        except (ValueError, OSError):
+            self.session.checkpoint.pop("last_turn_tree", None)
         self._active_run_id = run.run_id
         self._active_run_summary = ""
         self._update_shell_chrome()
@@ -2308,7 +2392,7 @@ class LibreClawApp(App[None]):
     def _memory_enabled(self) -> bool:
         return self.memory_enabled and self.config.memory.enabled
 
-    async def _finish_active_run(self, state: str, *, summary: str = "") -> None:
+    async def _finish_active_run(self, state: str, *, summary: str = "") -> dict[str, Any] | None:
         run_id = self._active_run_id
         if run_id is None:
             return
@@ -2325,7 +2409,8 @@ class LibreClawApp(App[None]):
         )
         verification, diff, browser = await _collect_run_artifacts(working_directory, state, events)
         summary_text = summary or self._active_run_summary
-        await self.run_store.finish_run(
+        await self.run_store.save_session(run_id, self.session)
+        queued = await self.run_store.finish_turn(
             run_id,
             cast(RunState, state),
             plan=run_plan_text(events),
@@ -2334,7 +2419,6 @@ class LibreClawApp(App[None]):
             diff=diff,
             browser=browser,
         )
-        await self.run_store.append_event(run_id, "run_finished", {"state": state})
         if self.config.petdex.notify_tui:
             await self.petdex_client.send_state(
                 _petdex_final_state(state),
@@ -2349,6 +2433,7 @@ class LibreClawApp(App[None]):
         self._active_run_id = None
         self._active_run_summary = ""
         self._update_shell_chrome()
+        return queued
 
     def _cancel_active_generation(self, quiet: bool = False, *, cancel_daemon_run: bool = True) -> None:
         if self._pending_permission is not None and not self._pending_permission.future.done():
@@ -2542,6 +2627,7 @@ class LibreClawApp(App[None]):
             return
         self.transcript.clear()
         self.session.clear()
+        self._resumed_run_id = None
         self._last_assistant_response = ""
         self._tool_entry_by_call_id.clear()
         self._hide_change_review()
@@ -2678,6 +2764,20 @@ class LibreClawApp(App[None]):
         self._apply_tui_theme()
         self._render_transcript()
         self._update_status()
+
+    def _start_model_discovery(self, argument: str = "") -> None:
+        self.run_worker(self._show_models(argument), group="model-catalog", exclusive=True)
+
+    async def _show_models(self, argument: str = "") -> None:
+        tokens = argument.split()
+        refresh = "--refresh" in tokens
+        tokens = [token for token in tokens if token != "--refresh"]
+        provider = _canonical_tui_provider(self.config.general.default_provider)
+        if tokens and _canonical_tui_provider(tokens[0]) in SUPPORTED_PROVIDERS:
+            provider = _canonical_tui_provider(tokens.pop(0))
+        query = " ".join(tokens).lower()
+        catalog = await discover_models(self.config, provider, refresh=refresh)
+        self._append_system(_model_catalog_text(self.config, provider, catalog, query=query))
 
     def _set_model(self, model: str) -> None:
         model, persist_global = _strip_global_flag(model)
@@ -3540,6 +3640,23 @@ class LibreClawApp(App[None]):
         if run is None:
             self._append_system(f"No durable run found for: {argument}")
             return
+        workspace = Path(run.working_directory).expanduser() if run.working_directory else self.config.general.working_directory
+        if not workspace.is_dir():
+            self._append_system("The saved task workspace no longer exists.")
+            return
+        if self.daemon_client is not None and hasattr(self.daemon_client, "get_session"):
+            payload = await self.daemon_client.get_session(run.run_id)
+            self.session = session_from_payload(payload.get("session"))
+        else:
+            self.session = await self.run_store.load_session(run.run_id, recover=run.state not in {"running", "blocked"})
+        if run.state not in {"running", "blocked"} or self.daemon_client is None:
+            self.session.recover_interrupted_tools()
+        self.config = _replace_model_selection(self.config, run.provider, run.model)
+        self.config = replace(self.config, general=replace(self.config.general, working_directory=workspace))
+        self.skill_store = SkillStore(workspace, skills_config=self.config.skills)
+        self.soul_store = SoulStore(workspace)
+        self._resumed_run_id = run.run_id
+        self._rebuild_agent()
         events = await self.run_store.load_events(run.run_id)
         last_seen = _read_last_seen_event_id(run)
         changes = run_changes_text(run, events, last_seen)
@@ -4187,6 +4304,7 @@ class LibreClawApp(App[None]):
             memory_provider=self._relevant_memory_texts,
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
             fallback_recheck_after_attempts=self.config.fallback.recheck_after_attempts,
+            checkpoint_callback=self._save_current_session,
         )
 
     async def _initialize_memory(self) -> None:
@@ -4807,7 +4925,7 @@ class LibreClawApp(App[None]):
             self._append_system(openrouter_attribution_text())
             return
         if normalized in {"openrouter presets", "presets", "models", "openrouter models"}:
-            self._append_system(openrouter_model_presets_text())
+            self._start_model_discovery("openrouter")
             return
         if normalized not in {"openrouter", "all"}:
             self._append_system(_usage_help_text())
@@ -5220,29 +5338,30 @@ def _canonical_tui_provider(provider: str) -> str:
 
 def _model_help_text(config: LibreClawConfig) -> str:
     provider = _canonical_tui_provider(config.general.default_provider)
-    current_model = _effective_model(config)
     lines = [
-        f"Current model: {provider}:{current_model}",
-        "Use `/model <name>` for the current provider or `/model <provider>:<name>` to switch both.",
+        f"Current model: {provider}:{_effective_model(config)}",
+        "Use `/models [provider] [search]` to discover models; add `--refresh` to reload.",
+        "Use `/model <provider>:<model-id>` to select any model, including unlisted IDs.",
         "Add `--global` to save the provider and model in ~/.libre-claw/config.toml.",
-        "Use `Tab` after `/model ` to complete a suggested model.",
-        "Provider key setup stays in the secure CLI/keyring path:",
+        "Use `Tab` after `/model ` to complete a discovered or configured model.",
+        "Set keys with `libre-claw auth set-key <provider>`; use `/codex login` for Codex.",
     ]
-    lines.extend(f"- libre-claw auth set-key {name}" for name in SUPPORTED_PROVIDERS if name not in {"ollama", "codex"})
-    lines.append("- libre-claw auth set-key ollama  # required for Ollama Cloud")
-    lines.append("- /codex login  # ChatGPT/Codex auth, no OpenAI API key")
-    if provider == "anthropic":
-        lines.append("- curl https://api.anthropic.com/v1/models ...  # live Claude API model catalog")
-    if provider == "ollama":
-        lines.append(
-            "- curl https://ollama.com/api/tags -H 'Authorization: Bearer $OLLAMA_API_KEY'  # live Cloud names"
-        )
-    if provider == "codex":
-        lines.append("- codex debug models  # live Codex CLI model catalog")
-    lines.append("")
-    lines.append("Suggested models:")
-    for suggestion in _model_suggestion_commands(config):
-        lines.append(f"- {suggestion.name} - {suggestion.description}")
+    return "\n".join(lines)
+
+
+def _model_catalog_text(
+    config: LibreClawConfig, provider: str, catalog: ModelCatalog, *, query: str = ""
+) -> str:
+    models = [item for item in catalog.models if query in f"{item.model} {item.label}".lower()]
+    lines = [_model_help_text(config), "", f"{provider} models ({catalog.source}):"]
+    if catalog.error:
+        lines.append(f"Discovery unavailable: {catalog.error}. Showing cached/configured models.")
+    if not models:
+        lines.append("No matching models. You can still enter a model ID directly.")
+    for item in models[:40]:
+        lines.append(f"- /model {provider}:{item.model} --global - {item.label}\n  {model_capability_summary(item)}")
+    if len(models) > 40:
+        lines.append(f"Showing 40 of {len(models)} models. Narrow with `/models {provider} <search>`.")
     return "\n".join(lines)
 
 
@@ -6031,7 +6150,8 @@ def _model_suggestion_commands(config: LibreClawConfig) -> list[SlashCommand]:
     ordered_providers = [current_provider, *(provider for provider in SUPPORTED_PROVIDERS if provider != current_provider)]
     suggestions: list[SlashCommand] = []
     for provider in ordered_providers:
-        for model, label in MODEL_PRESETS.get(provider, ()):
+        for item in cached_models(config, provider):
+            model, label = item.model, item.label
             suggestions.append(
                 SlashCommand(
                     name=f"/model {provider}:{model}",

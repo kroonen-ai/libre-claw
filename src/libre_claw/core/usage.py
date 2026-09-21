@@ -16,7 +16,6 @@ from libre_claw.providers.openrouter import (
     OPENROUTER_HTTP_REFERER,
     OPENROUTER_RANKING_TARGETS,
 )
-from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
 
 
 OPENROUTER_ANALYTICS_URL = f"https://openrouter.ai/apps?url={OPENROUTER_HTTP_REFERER}"
@@ -177,19 +176,14 @@ def openrouter_attribution_text() -> str:
 
 
 def openrouter_model_presets_text() -> str:
-    lines = ["Recommended OpenRouter presets:"]
-    for preset in OPENROUTER_MODEL_PRESETS:
-        lines.append(f"- /model openrouter:{preset.model} --global  # {preset.description}")
-    lines.extend(
+    return "\n".join(
         [
-            "",
-            "Growth workflows that produce useful attributed usage:",
-            "- /goal <repo objective> for long-running coding runs.",
-            "- /schedule examples for recurring repo health and dependency checks.",
-            "- /usage openrouter to watch tokens, cost, runs, models, and surfaces.",
+            "Use /models openrouter to discover available models.",
+            "Add --refresh to reload the provider catalog.",
+            "Select any ID with /model openrouter:<model-id> --global.",
+            "Use /usage openrouter to view tokens, cost, and runs.",
         ]
     )
-    return "\n".join(lines)
 
 
 def usage_summary_payload(records: list[UsageRecord]) -> dict[str, Any]:

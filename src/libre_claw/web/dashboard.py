@@ -1407,6 +1407,43 @@ _DASHBOARD_HTML = r"""<!doctype html>
       .settings-nav { width: 132px; }
       .grid-2, .metric-grid { grid-template-columns: 1fr; }
     }
+
+    .workflow-panel { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
+    .workflow-panel[hidden], .workflow-panel [hidden], .conversation[hidden] { display: none; }
+    .workflow-panel h2 { margin: 0; font-size: 18px; }
+    .workflow-panel h3 { font-size: 14px; margin: 12px 0; }
+    .workflow-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .workflow-row h2 { margin-inline-end: auto; }
+    .workflow-panel input:not([type=checkbox]), .workflow-panel select, .workflow-panel textarea { min-width: 0; max-width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+    .workflow-panel textarea { width: 100%; min-height: 70px; resize: vertical; }
+    .workflow-panel button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; background: var(--surface-2); }
+    .workflow-panel button:hover { background: var(--panel-hover); }
+    .workflow-panel button.danger { color: var(--danger); }
+    .workflow-panel button:disabled { opacity: .5; cursor: default; }
+    .workflow-card { padding: 14px; border: 1px solid var(--line); border-radius: 12px; margin: 12px 0; overflow: hidden; }
+    .workflow-card p, .workflow-card .hint { overflow-wrap: anywhere; }
+    .workflow-panel .hint { color: var(--muted); font-size: 12px; margin: 10px 0; }
+    .plan-steps { padding-left: 24px; }
+    .plan-steps li { margin: 10px 0; }
+    .plan-steps input:not([type=checkbox]) { flex: 1; }
+    .diff-patch { overflow: auto; max-height: 360px; font: 12px/1.6 var(--font-mono); white-space: pre; padding: 12px; background: var(--canvas); }
+    .diff-hunk { margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .diff-hunk > .workflow-row { padding: 8px; background: var(--surface-2); }
+    .diff-hunk h4 { margin: 0 auto 0 0; font: 11px var(--font-mono); overflow-wrap: anywhere; }
+    .diff-lines { overflow: auto; font: 12px/1.7 var(--font-mono); }
+    .diff-line { display: grid; grid-template-columns: 40px 40px minmax(0,1fr); min-width: 300px; }
+    .diff-line.add { background: color-mix(in srgb, var(--success, #39c18f) 12%, transparent); }
+    .diff-line.remove { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+    .diff-line code { white-space: pre; padding: 0 8px; overflow: visible; background: none; font: inherit; }
+    .diff-line .line-number { padding: 0 3px; border: 0; border-radius: 0; color: var(--muted); font: inherit; }
+    .inline-comment { margin: 5px 10px; padding: 8px 12px; border-inline-start: 2px solid var(--accent); white-space: pre-wrap; font: 12px/1.5 var(--font-ui); overflow-wrap: anywhere; }
+    .comment-form { padding: 10px; }
+    .model-metadata { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 6px 0 0; }
+    .composer-controls { flex-wrap: wrap; }
+    .composer-controls .model-metadata { flex-basis: 100%; order: 10; }
+    .view-tabs { overflow-x: auto; flex-shrink: 0; }
+    .view-tab { white-space: nowrap; }
+    @media (max-width: 700px) { .workflow-panel { padding: 12px; } .view-tabs { gap: 13px; padding-inline: 12px; } .view-tabs #eventCount { display: none; } .composer-controls select { max-width: 140px; } }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
         scroll-behavior: auto !important;
@@ -1475,6 +1512,9 @@ _DASHBOARD_HTML = r"""<!doctype html>
       <div class="view-tabs" role="tablist">
         <button class="view-tab active" id="tabChat" role="tab" aria-selected="true" type="button">Chat</button>
         <button class="view-tab" id="tabTrajectory" role="tab" aria-selected="false" type="button">Trajectory</button>
+        <button class="view-tab" id="tabPlan" role="tab" aria-selected="false" type="button">Plan</button>
+        <button class="view-tab" id="tabChanges" role="tab" aria-selected="false" type="button">Changes</button>
+        <button class="view-tab" id="tabWorktrees" role="tab" aria-selected="false" type="button">Worktrees</button>
         <span class="spacer"></span>
         <span class="tiny" id="eventCount">0 events</span>
         <select id="eventFilter" aria-label="Filter timeline events" hidden>
@@ -1488,6 +1528,29 @@ _DASHBOARD_HTML = r"""<!doctype html>
       </div>
 
       <div class="conversation" id="timeline"></div>
+      <section class="workflow-panel" id="planPanel" aria-label="Task plan" hidden>
+        <div class="workflow-row"><h2>Task plan</h2><select id="planMode" aria-label="Task execution mode"><option value="default">Build</option><option value="plan">Plan only (read-only)</option></select><button id="refreshPlan" type="button">Refresh</button></div>
+        <p class="hint" id="planStatus">Select a task to edit its plan.</p>
+        <form id="planForm" class="workflow-row"><input id="planNewStep" aria-label="New plan step" placeholder="Add a step" required><button type="submit">Add step</button></form>
+        <ol id="planSteps" class="plan-steps"></ol>
+        <h3>Queued follow-ups</h3><div id="queuedMessages"></div>
+      </section>
+      <section class="workflow-panel" id="changesPanel" aria-label="Code changes" hidden>
+        <div class="workflow-row"><h2>Changes</h2><select id="reviewScope" aria-label="Review scope"><option value="unstaged">Unstaged</option><option value="staged">Staged</option><option value="branch">Branch</option><option value="last-turn">Last turn</option></select><input id="reviewBase" aria-label="Base branch or commit" placeholder="Base branch or commit" hidden><button id="refreshReview" type="button">Refresh</button><button id="analyzeReview" type="button">Independent review</button></div>
+        <p id="reviewStatus" class="hint" role="status"></p>
+        <div id="reviewFiles"></div><div id="reviewAnalysis" class="workflow-card" hidden></div>
+      </section>
+      <section class="workflow-panel" id="worktreesPanel" aria-label="Managed worktrees" hidden>
+        <div class="workflow-row"><h2>Worktrees</h2><button id="refreshWorktrees" type="button">Refresh</button></div>
+        <form id="worktreeForm" class="workflow-card stack">
+          <div class="workflow-row"><input id="worktreeRef" aria-label="Starting Git reference" value="HEAD" required><input id="worktreeBranch" aria-label="New branch name" placeholder="New branch (optional)"></div>
+          <label><input id="worktreeInclude" type="checkbox"> Include uncommitted changes</label>
+          <label><input id="worktreeAssociate" type="checkbox"> Move the selected task to this worktree</label>
+          <button type="submit">Create worktree</button>
+        </form>
+        <div id="worktreeList"></div>
+        <div id="transferPanel" class="workflow-card" hidden><h3>Transfer to the original checkout</h3><p id="transferTarget" class="hint"></p><pre id="transferPatch" class="diff-patch"></pre><button id="applyTransfer" type="button">Apply reviewed changes</button><button id="closeTransfer" type="button">Close</button></div>
+      </section>
 
       <div class="composer-zone">
         <div id="permissions"></div>
@@ -1506,7 +1569,9 @@ _DASHBOARD_HTML = r"""<!doctype html>
               <option value="codex">OpenAI Codex</option>
             </select>
             <input id="runModel" placeholder="default model" aria-label="Model">
-            <datalist id="llamacppModels"></datalist>
+            <select id="runMode" aria-label="New task mode"><option value="default">Build</option><option value="plan">Plan only</option></select>
+            <select id="runWorktree" aria-label="Task workspace"><option value="">Current project</option></select>
+            <select id="messageAction" aria-label="Message delivery" hidden><option value="message">Send reply</option><option value="steer">Steer active task</option><option value="queue">Queue follow-up</option></select>
             <span class="spacer"></span>
             <button class="send-btn" type="submit" aria-label="Start run" title="Start run">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
@@ -1953,6 +2018,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       state.composing = false;
       renderRuns();
       await refreshRunDetail();
+      if (state.view === "changes") void loadReview();
     }
 
     function newSession() {
@@ -1963,6 +2029,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
       resetStreamNode();
       clearSelectedRun();
       renderRuns();
+      setView("chat");
+      $("runWorktree").value = "";
       $("runMessage").focus();
     }
 
@@ -1980,8 +2048,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     async function refreshRunDetail() {
-      if (!state.selectedRunId) return;
-      const detail = await request(`/runs/${state.selectedRunId}`);
+      const runId = state.selectedRunId;
+      if (!runId) return;
+      const detail = await request(`/runs/${runId}`);
+      if (runId !== state.selectedRunId) return;
       const run = detail.run;
       $("selectedTitle").textContent = run.title || "Untitled run";
       $("selectedTitle").title = `${run.run_id} | updated ${formatTime(run.updated_at)}`;
@@ -1991,11 +2061,13 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("cancelRun").disabled = !["queued", "running", "blocked"].includes(run.state);
       syncComposerMode();
       $("stripMeta").textContent = `${run.run_id} | ${run.provider}:${run.model}`;
-      const events = await request(`/runs/${state.selectedRunId}/events?after=0`);
+      const events = await request(`/runs/${runId}/events?after=0`);
+      if (runId !== state.selectedRunId) return;
       state.events = events.events || [];
       scheduleStream(run.state);
       renderEvents();
       renderPermissions(detail.pending_permissions || []);
+      if (state.view === "plan") void loadPlan();
     }
 
     /* Token streaming: while the selected run is live, new events are pulled
@@ -2122,6 +2194,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function setView(view) {
       state.view = view;
+      for (const [name, id] of [["plan", "Plan"], ["changes", "Changes"], ["worktrees", "Worktrees"]]) {
+        $("tab" + id).classList.toggle("active", view === name);
+        $("tab" + id).setAttribute("aria-selected", String(view === name));
+        $(name === "changes" ? "changesPanel" : name === "plan" ? "planPanel" : "worktreesPanel").hidden = view !== name;
+      }
+      $("timeline").hidden = !["chat", "trajectory"].includes(view);
+      if (view === "plan") void loadPlan();
+      if (view === "changes") void loadReview();
+      if (view === "worktrees") void loadWorktrees();
       $("tabChat").classList.toggle("active", view === "chat");
       $("tabChat").setAttribute("aria-selected", String(view === "chat"));
       $("tabTrajectory").classList.toggle("active", view === "trajectory");
@@ -2675,7 +2756,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
     async function loadModelConfig() {
       try {
         const payload = await request("/config/model");
-        if (payload.provider) $("configProvider").value = payload.provider;
+        if (payload.provider) {
+          $("configProvider").value = payload.provider;
+          $("configProvider").dispatchEvent(new Event("change"));
+        }
         if (payload.model) $("configModel").value = payload.model;
         $("modelCurrent").textContent = `current: ${payload.provider || "?"}:${payload.model || "?"}`;
       } catch (error) {
@@ -2735,7 +2819,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           body: JSON.stringify({ base_url: $("llamacppBaseUrl").value.trim(), persist_global: true }),
         });
         $("llamacppBaseUrl").value = payload.base_url;
-        llamacppModelsLoaded = false;
+        document.querySelectorAll("input[data-model-provider=llamacpp]").forEach((input) => input.dispatchEvent(new Event("focus")));
         setNotice(`llama.cpp endpoint saved: ${payload.base_url}`);
       } catch (error) {
         setNotice(String(error.message || error), true);
@@ -2821,46 +2905,325 @@ _DASHBOARD_HTML = r"""<!doctype html>
       }
     });
 
-    /* llama.cpp model discovery via llama-swap `/v1/models` */
-    let llamacppModelsLoaded = false;
-    async function loadLlamacppModels() {
-      if (llamacppModelsLoaded) return;
-      try {
-        const payload = await request("/models/llamacpp");
-        const list = $("llamacppModels");
-        list.replaceChildren();
-        for (const item of payload.models || []) {
-          const option = document.createElement("option");
-          option.value = item.model;
-          option.label = item.label;
-          list.append(option);
-        }
-        llamacppModelsLoaded = true;
-        const count = (payload.models || []).length;
-        setNotice(count
-          ? `${count} llama.cpp ${count === 1 ? "model" : "models"} discovered from ${payload.base_url}.`
-          : `No llama.cpp models reported by ${payload.base_url}.`);
-      } catch (error) {
-        setNotice(String(error.message || error), true);
-      }
-    }
-
     function syncModelDatalist(select, input) {
-      const update = () => {
-        if (select.value === "llamacpp") {
-          input.setAttribute("list", "llamacppModels");
-          void loadLlamacppModels();
-        } else if (input.getAttribute("list") === "llamacppModels") {
-          input.removeAttribute("list");
+      const list = document.createElement("datalist");
+      list.id = `${input.id}Models`;
+      input.after(list);
+      input.setAttribute("list", list.id);
+      let generation = 0, models = [];
+      const metadata = document.createElement("p"); metadata.className = "model-metadata"; metadata.id = `${input.id}Capabilities`;
+      metadata.setAttribute("aria-live", "polite"); input.after(metadata);
+      const showCapabilities = () => {
+        const item = models.find((model) => model.model === input.value.trim());
+        const support = (value) => value === true ? "yes" : value === false ? "no" : "unknown";
+        const price = (value) => typeof value === "number" && Number.isFinite(value) ? `$${(value * 1000000).toLocaleString(undefined,{maximumFractionDigits:4})}/M` : "unknown";
+        metadata.textContent = `Tools: ${support(item?.supports_tools)} · Images: ${support(item?.supports_vision)} · Reasoning: ${support(item?.supports_reasoning)} · Context: ${item?.context_window_tokens?.toLocaleString() || "unknown"} · Output: ${item?.max_completion_tokens?.toLocaleString() || "unknown"} · Input/output: ${price(item?.input_cost_per_token)} / ${price(item?.output_cost_per_token)}`;
+        if (item?.supported_reasoning_efforts?.length) metadata.textContent += ` · Effort: ${item.supported_reasoning_efforts.join(", ")}`;
+      };
+      input.addEventListener("input", showCapabilities);
+      input.addEventListener("change", showCapabilities);
+      showCapabilities();
+      const update = async () => {
+        const requestId = ++generation;
+        const provider = select.value;
+        input.dataset.modelProvider = provider;
+        list.replaceChildren(); models = []; showCapabilities();
+        try {
+          const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+          const payload = await request(`/models${query}`);
+          if (requestId !== generation) return;
+          models = payload.models || [];
+          for (const item of models) {
+            const option = document.createElement("option");
+            option.value = item.model;
+            option.label = item.label;
+            list.append(option);
+          }
+          showCapabilities();
+          input.title = payload.error
+            ? "Discovery unavailable. You can still enter a model ID."
+            : "Choose a discovered model or enter any model ID.";
+        } catch (_error) {
+          if (requestId === generation) input.title = "Discovery unavailable. Enter a model ID.";
         }
       };
       select.addEventListener("change", update);
-      update();
+      input.addEventListener("focus", update);
     }
 
     syncModelDatalist($("runProvider"), $("runModel"));
     syncModelDatalist($("configProvider"), $("configModel"));
     syncModelDatalist($("automationProvider"), $("automationModel"));
+
+    const workflow = { review: null, reviewContext: {}, comments: [], reviewGeneration: 0, planGeneration: 0, planSignature: "", worktrees: [], transfer: null };
+
+    function workflowButton(label, action, className = "") {
+      const button = document.createElement("button");
+      button.type = "button"; button.textContent = label; button.className = className;
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try { await action(); } catch (error) { setNotice(error.message || String(error), true); }
+        finally { button.disabled = false; }
+      });
+      return button;
+    }
+
+    function reviewContext() {
+      const context = { scope: $("reviewScope").value };
+      if (state.selectedRunId) context.run_id = state.selectedRunId;
+      if (context.scope === "branch" && $("reviewBase").value.trim()) context.base_ref = $("reviewBase").value.trim();
+      return context;
+    }
+
+    async function loadReview() {
+      const generation = ++workflow.reviewGeneration;
+      const context = reviewContext();
+      workflow.review = null;
+      $("reviewFiles").replaceChildren();
+      $("reviewAnalysis").hidden = true;
+      $("analyzeReview").disabled = true;
+      $("reviewStatus").textContent = "Loading changes…";
+      try {
+        const [snapshot, feedback] = await Promise.all([
+          request(`/workspace/review?${new URLSearchParams(context)}`),
+          request(`/workspace/review/comments?${new URLSearchParams(context)}`),
+        ]);
+        if (generation !== workflow.reviewGeneration) return;
+        workflow.review = snapshot; workflow.reviewContext = context; workflow.comments = feedback.comments || [];
+        $("reviewStatus").textContent = `${snapshot.repository} · ${snapshot.files.length} changed ${snapshot.files.length === 1 ? "file" : "files"}`;
+        $("analyzeReview").disabled = !snapshot.files.length;
+        renderReview();
+      } catch (error) {
+        if (generation === workflow.reviewGeneration) $("reviewStatus").textContent = error.message || String(error);
+      }
+    }
+
+    function parseDiffLines(patch) {
+      let oldLine = 0, newLine = 0, inHunk = false;
+      const result = [];
+      for (const line of String(patch || "").split("\n")) {
+        const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        if (match) { oldLine = Number(match[1]); newLine = Number(match[2]); inHunk = true; continue; }
+        if (!inHunk || line.startsWith("\\") || ![" ", "+", "-"].includes(line[0])) continue;
+        const kind = line[0] === "+" ? "add" : line[0] === "-" ? "remove" : "context";
+        result.push({ kind, text: line, oldLine: kind === "add" ? null : oldLine++, newLine: kind === "remove" ? null : newLine++ });
+      }
+      return result;
+    }
+
+    function reviewActions(file, hunk, snapshot, context) {
+      const row = document.createElement("div"); row.className = "workflow-row";
+      const mutate = async (action) => {
+        if (action === "revert" && !window.confirm(`Revert ${hunk ? "this hunk in" : "changes to"} ${file.path}?`)) return;
+        await request("/workspace/review/action", { method: "POST", body: JSON.stringify({
+          ...context, action, revision: snapshot.revision, path: file.path, ...(hunk ? {hunk_id: hunk.hunk_id} : {}),
+        }) });
+        setNotice(`${action === "stage" ? "Staged" : action === "unstage" ? "Unstaged" : "Reverted"} ${file.path}.`);
+        await loadReview();
+      };
+      if (snapshot.scope === "unstaged") {
+        row.append(workflowButton(hunk ? "Stage hunk" : "Stage file", () => mutate("stage")));
+        row.append(workflowButton(hunk ? "Revert hunk" : "Revert file", () => mutate("revert"), "danger"));
+      } else if (snapshot.scope === "staged") row.append(workflowButton(hunk ? "Unstage hunk" : "Unstage file", () => mutate("unstage")));
+      return row;
+    }
+
+    function commentEditor(container, file, line, side, snapshot, context) {
+      container.querySelector(".comment-form")?.remove();
+      const form = document.createElement("form"); form.className = "comment-form stack";
+      const input = document.createElement("textarea"); input.required = true; input.maxLength = 10000;
+      input.setAttribute("aria-label", `Comment on ${file.path} ${side} line ${line}`);
+      input.placeholder = `Comment on ${side} line ${line}`;
+      const actions = document.createElement("div"); actions.className = "workflow-row";
+      const save = document.createElement("button"); save.type = "submit"; save.textContent = "Save comment";
+      actions.append(save, workflowButton("Cancel", () => form.remove())); form.append(input, actions);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault(); save.disabled = true;
+        try {
+          const payload = await request("/workspace/review/comments", { method: "POST", body: JSON.stringify({
+            ...context, path: file.path, line, side, body: input.value, revision: snapshot.revision,
+          }) });
+          if (workflow.review === snapshot) { workflow.comments.push(payload.comment); renderReview(); }
+          setNotice("Comment saved.");
+        } catch (error) { setNotice(error.message || String(error), true); save.disabled = false; }
+      });
+      container.append(form); input.focus();
+    }
+
+    function renderReview() {
+      const snapshot = workflow.review, context = workflow.reviewContext;
+      const container = $("reviewFiles"); container.replaceChildren();
+      if (!snapshot?.files.length) { container.append(empty("No changes in this view.")); return; }
+      for (const file of snapshot.files) {
+        const card = document.createElement("article"); card.className = "workflow-card";
+        const head = document.createElement("div"); head.className = "workflow-row";
+        const title = document.createElement("h3"); title.textContent = file.path; title.style.marginInlineEnd = "auto";
+        head.append(title, reviewActions(file, null, snapshot, context)); card.append(head);
+        if (file.binary) card.append(empty("Binary file — file actions are available above."));
+        else if (!file.hunks.length) { const patch = document.createElement("pre"); patch.className = "diff-patch"; patch.textContent = file.patch; card.append(patch); }
+        for (const hunk of file.hunks) {
+          const block = document.createElement("section"); block.className = "diff-hunk";
+          const toolbar = document.createElement("div"); toolbar.className = "workflow-row";
+          const heading = document.createElement("h4"); heading.textContent = hunk.header;
+          toolbar.append(heading, reviewActions(file, hunk, snapshot, context)); block.append(toolbar);
+          const lines = document.createElement("div"); lines.className = "diff-lines";
+          for (const line of parseDiffLines(hunk.patch)) {
+            const row = document.createElement("div"); row.className = `diff-line ${line.kind}`;
+            for (const [side, number] of [["left", line.oldLine], ["right", line.newLine]]) {
+              const numberCell = document.createElement(number === null ? "span" : "button");
+              numberCell.className = "line-number"; numberCell.textContent = number ?? "";
+              if (number !== null) {
+                numberCell.type = "button"; numberCell.setAttribute("aria-label", `Comment on ${file.path} ${side} line ${number}`);
+                numberCell.addEventListener("click", () => commentEditor(block, file, number, side, snapshot, context));
+              }
+              row.append(numberCell);
+            }
+            const code = document.createElement("code"); code.textContent = line.text; row.append(code); lines.append(row);
+            for (const comment of workflow.comments.filter((item) => item.path === file.path && item.revision === snapshot.revision &&
+              ((item.side === "left" && item.line === line.oldLine) || (item.side === "right" && item.line === line.newLine)))) {
+              const feedback = document.createElement("p"); feedback.className = "inline-comment";
+              feedback.textContent = `${comment.side}:${comment.line} · ${comment.body}`; lines.append(feedback);
+            }
+          }
+          block.append(lines); card.append(block);
+        }
+        container.append(card);
+      }
+    }
+
+    async function analyzeReview() {
+      const snapshot = workflow.review; if (!snapshot) return;
+      const button = $("analyzeReview"); button.disabled = true; button.textContent = "Reviewing…";
+      try {
+        const result = await request("/workspace/review/analyze", { method: "POST", body: JSON.stringify(workflow.reviewContext) });
+        if (workflow.review !== snapshot || result.revision !== snapshot.revision) { setNotice("Changes moved during review. Refresh and review again.", true); return; }
+        $("reviewAnalysis").replaceChildren(renderMarkdown(result.text)); $("reviewAnalysis").hidden = false;
+      } catch (error) { setNotice(error.message || String(error), true); }
+      finally { button.disabled = !workflow.review?.files.length; button.textContent = "Independent review"; }
+    }
+
+    async function sendTaskControl(action, text, clearComposer = false) {
+      const runId = state.selectedRunId;
+      if (!runId) { setNotice("Select a task first.", true); return false; }
+      const draft = $("runMessage").value;
+      try {
+        const payload = await request(`/runs/${runId}/control`, { method: "POST", body: JSON.stringify({action, text}) });
+        if (clearComposer && runId === state.selectedRunId && $("runMessage").value === draft) { $("runMessage").value = ""; autoGrow(); }
+        setNotice(payload.text || "Task updated.");
+        if (runId === state.selectedRunId) await loadPlan(true);
+        return true;
+      } catch (error) { setNotice(error.message || String(error), true); return false; }
+    }
+
+    async function loadPlan(force = false) {
+      const runId = state.selectedRunId, generation = ++workflow.planGeneration;
+      $("planForm").hidden = !runId; $("planMode").disabled = !runId;
+      if (!runId) { workflow.planSignature = ""; $("planStatus").textContent = "Select a task to edit its plan."; $("planSteps").replaceChildren(); $("queuedMessages").replaceChildren(); return; }
+      try {
+        const payload = await request(`/runs/${runId}/session`);
+        if (runId !== state.selectedRunId || generation !== workflow.planGeneration) return;
+        const session = payload.session || {}, queued = payload.queued || [];
+        const signature = JSON.stringify([runId, session.mode, session.plan_steps, queued]);
+        if (!force && signature === workflow.planSignature) return;
+        if (!force && $("planSteps").contains(document.activeElement)) return;
+        workflow.planSignature = signature;
+        $("planMode").value = session.mode || "default";
+        $("planStatus").textContent = session.mode === "plan" ? "Plan-only mode: tool actions are read-only." : "Build mode: tools follow your approval policy.";
+        const list = $("planSteps"); list.replaceChildren();
+        for (const [index, step] of (session.plan_steps || []).entries()) {
+          const item = document.createElement("li"); const row = document.createElement("div"); row.className = "workflow-row";
+          const check = document.createElement("input"); check.type = "checkbox"; check.checked = step.status === "done"; check.setAttribute("aria-label", `Complete step ${index + 1}`);
+          check.addEventListener("change", () => sendTaskControl("plan", `${check.checked ? "done" : "pending"} ${index + 1}`));
+          const input = document.createElement("input"); input.value = step.text; input.setAttribute("aria-label", `Plan step ${index + 1}`);
+          row.append(check, input, workflowButton("Save", () => sendTaskControl("plan", `edit ${index + 1} ${input.value}`)));
+          item.append(row); list.append(item);
+        }
+        if (!(session.plan_steps || []).length) list.append(empty("No steps yet."));
+        $("queuedMessages").replaceChildren();
+        for (const item of queued) { const row = document.createElement("p"); row.className = "workflow-card"; row.textContent = item.message; $("queuedMessages").append(row); }
+        if (!queued.length) $("queuedMessages").append(empty("No queued messages."));
+      } catch (error) { if (generation === workflow.planGeneration) $("planStatus").textContent = error.message || String(error); }
+    }
+
+    async function loadWorktrees() {
+      try {
+        const payload = await request("/worktrees"); workflow.worktrees = payload.worktrees || [];
+        const picker = $("runWorktree"), selected = picker.value;
+        picker.replaceChildren(new Option("Current project", ""));
+        for (const record of workflow.worktrees) picker.append(new Option(record.branch || record.worktree_id.slice(0, 8), record.worktree_id));
+        picker.value = workflow.worktrees.some((item) => item.worktree_id === selected) ? selected : "";
+        const list = $("worktreeList"); list.replaceChildren();
+        for (const record of workflow.worktrees) {
+          const card = document.createElement("article"); card.className = "workflow-card";
+          const heading = document.createElement("h3"); heading.textContent = record.branch || record.worktree_id.slice(0, 12);
+          const path = document.createElement("p"); path.className = "hint"; path.textContent = record.path;
+          const actions = document.createElement("div"); actions.className = "workflow-row";
+          actions.append(workflowButton("Open task", () => selectRun(record.run_id)), workflowButton("Use for new task", () => {
+            newSession(); $("runWorktree").value = record.worktree_id;
+          }), workflowButton("Review transfer", () => previewTransfer(record)), workflowButton("Remove", async () => {
+            if (!window.confirm(`Remove worktree ${record.branch || record.worktree_id}? The server will check for work that has not been transferred.`)) return;
+            await request(`/worktrees/${record.worktree_id}`, {method:"DELETE"}); await loadWorktrees(); setNotice("Worktree removed.");
+          }, "danger"));
+          const setup = document.createElement("details"); const summary = document.createElement("summary"); summary.textContent = "Setup commands";
+          const form = document.createElement("form"); form.className = "stack";
+          const commands = document.createElement("textarea"); commands.placeholder = "One shell command per line"; commands.required = true; commands.setAttribute("aria-label", `Setup commands for ${heading.textContent}`);
+          const label = document.createElement("label"); const approve = document.createElement("input"); approve.type = "checkbox"; approve.required = true;
+          label.append(approve, " Approve these setup commands");
+          const submit = document.createElement("button"); submit.type = "submit"; submit.textContent = "Run setup";
+          const output = document.createElement("pre"); output.className = "diff-patch"; output.hidden = true;
+          form.append(commands, label, submit); setup.append(summary, form, output);
+          form.addEventListener("submit", async (event) => {
+            event.preventDefault(); if (!approve.checked) return; submit.disabled = true;
+            try { const result = await request(`/worktrees/${record.worktree_id}/setup`, { method:"POST", body:JSON.stringify({commands: commands.value.split("\n").filter((item) => item.trim()), approved:true}) });
+              output.textContent = result.results.map((item) => item.content).join("\n"); output.hidden = false; approve.checked = false;
+            } catch (error) { setNotice(error.message || String(error), true); }
+            finally { submit.disabled = false; }
+          });
+          card.append(heading, path, actions, setup); list.append(card);
+        }
+        if (!workflow.worktrees.length) list.append(empty("No managed worktrees yet."));
+      } catch (error) { $("worktreeList").replaceChildren(empty(error.message || String(error))); }
+    }
+
+    async function previewTransfer(record) {
+      workflow.transfer = null; $("transferPanel").hidden = true;
+      const payload = await request(`/worktrees/${record.worktree_id}/transfer`);
+      workflow.transfer = payload;
+      $("transferTarget").textContent = `${record.path} → ${record.repository}`;
+      $("transferPatch").textContent = payload.review.patch || "No changes to transfer.";
+      $("applyTransfer").disabled = !payload.review.patch;
+      $("transferPanel").hidden = false;
+      $("transferPanel").scrollIntoView({block:"nearest"});
+    }
+
+    $("reviewScope").addEventListener("change", () => { $("reviewBase").hidden = $("reviewScope").value !== "branch"; void loadReview(); });
+    $("reviewBase").addEventListener("change", loadReview);
+    $("refreshReview").addEventListener("click", loadReview);
+    $("analyzeReview").addEventListener("click", analyzeReview);
+    $("refreshPlan").addEventListener("click", () => loadPlan(true));
+    $("planMode").addEventListener("change", () => sendTaskControl("plan", $("planMode").value === "plan" ? "on" : "off"));
+    $("planForm").addEventListener("submit", async (event) => { event.preventDefault(); const input = $("planNewStep"); if (await sendTaskControl("plan", `add ${input.value}`)) input.value = ""; });
+    $("refreshWorktrees").addEventListener("click", loadWorktrees);
+    $("worktreeForm").addEventListener("submit", async (event) => {
+      event.preventDefault(); const submit = event.submitter; submit.disabled = true;
+      try {
+        if ($("worktreeAssociate").checked && !state.selectedRunId) throw new Error("Select a task before moving it to a worktree.");
+        const payload = await request("/worktrees", { method:"POST", body:JSON.stringify({ ref:$("worktreeRef").value, branch:$("worktreeBranch").value || undefined,
+          include_changes:$("worktreeInclude").checked, ...($("worktreeAssociate").checked ? {run_id:state.selectedRunId} : {}),
+        }) });
+        await loadWorktrees(); await refreshRuns(); await selectRun(payload.run.run_id); setNotice("Worktree ready.");
+      } catch (error) { setNotice(error.message || String(error), true); }
+      finally { submit.disabled = false; }
+    });
+    $("applyTransfer").addEventListener("click", async () => {
+      const preview = workflow.transfer; if (!preview) return; $("applyTransfer").disabled = true;
+      try {
+        await request(`/worktrees/${preview.worktree.worktree_id}/transfer`, {method:"POST", body:JSON.stringify({revision:preview.review.revision,target_revision:preview.target_revision})});
+        workflow.transfer = null; $("transferPanel").hidden = true; setNotice("Changes transferred to the original checkout."); await loadWorktrees();
+      } catch (error) { setNotice(error.message || String(error), true); }
+      finally { $("applyTransfer").disabled = !workflow.transfer; }
+    });
+    $("closeTransfer").addEventListener("click", () => { workflow.transfer = null; $("transferPanel").hidden = true; });
 
     /* The composer continues the selected session; New Session starts a thread. */
     function composerMode() {
@@ -2871,6 +3234,13 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function syncComposerMode() {
       const mode = composerMode();
+      $("messageAction").hidden = mode === "new";
+      $("runMode").hidden = mode !== "new";
+      $("runWorktree").hidden = mode !== "new";
+      $("messageAction").options[0].disabled = mode === "busy";
+      $("messageAction").options[1].disabled = mode !== "busy";
+      if (mode === "busy" && $("messageAction").value === "message") $("messageAction").value = "queue";
+      if (mode !== "busy" && $("messageAction").value === "steer") $("messageAction").value = "message";
       $("runMessage").placeholder = mode === "reply"
         ? "Reply to this session"
         : "Describe what you want Libre Claw to do";
@@ -2879,16 +3249,22 @@ _DASHBOARD_HTML = r"""<!doctype html>
     $("runForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const mode = composerMode();
-      if (mode === "busy") {
-        setNotice("This session is still working - wait for it to finish or cancel it.", true);
+      const delivery = mode === "new" ? "message" : $("messageAction").value;
+      if (delivery !== "message") {
+        await sendTaskControl(delivery, $("runMessage").value, true);
         return;
       }
+      if (mode === "busy") { setNotice("Choose steer or queue while this task is running.", true); return; }
       const body = {
         message: $("runMessage").value,
         surface: "dashboard",
       };
       if ($("runProvider").value.trim()) body.provider = $("runProvider").value.trim();
       if ($("runModel").value.trim()) body.model = $("runModel").value.trim();
+      if (mode === "new") {
+        body.session = { mode: $("runMode").value };
+        if ($("runWorktree").value) body.worktree_id = $("runWorktree").value;
+      }
       try {
         const path = mode === "reply" ? `/runs/${state.selectedRunId}/messages` : "/runs";
         const payload = await request(path, { method: "POST", body: JSON.stringify(body) });
@@ -2933,6 +3309,9 @@ _DASHBOARD_HTML = r"""<!doctype html>
     $("eventFilter").addEventListener("change", renderEvents);
     $("tabChat").addEventListener("click", () => setView("chat"));
     $("tabTrajectory").addEventListener("click", () => setView("trajectory"));
+    $("tabPlan").addEventListener("click", () => setView("plan"));
+    $("tabChanges").addEventListener("click", () => setView("changes"));
+    $("tabWorktrees").addEventListener("click", () => setView("worktrees"));
     $("focusRunInput").addEventListener("click", newSession);
     $("openSettings").addEventListener("click", () => openSettingsPane("general"));
     $("closeSettings").addEventListener("click", closeSettingsPanel);
@@ -2966,6 +3345,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       }
     }
 
+    void loadWorktrees();
     initTheme();
     initRail();
     refreshAll();

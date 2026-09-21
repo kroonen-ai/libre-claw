@@ -6,13 +6,17 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from libre_claw.config import load_config
 from libre_claw.core.session import ChatMessage
 from libre_claw.core.session import UserAttachment
 from libre_claw.core.tools import ToolCall
 from libre_claw.providers.base import Done, LLMProvider, StreamEvent, TextDelta, ToolCallReady, ToolSchema
+from libre_claw.providers.model_catalog import ModelCatalog, ModelInfo
 from libre_claw.telegram.auth import TelegramAuth
 from libre_claw.telegram.bot import TelegramBot
 from libre_claw.telegram.bridge import (
@@ -25,7 +29,7 @@ from libre_claw.telegram.bridge import (
     _tool_result_notice,
 )
 from libre_claw.telegram.handlers import (
-    TELEGRAM_MODEL_PRESETS,
+    TELEGRAM_MODEL_PAGE_SIZE,
     TelegramExpandablePayload,
     TelegramHandlers,
     _cancel_task,
@@ -839,51 +843,28 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
 
     text = _model_configuration_text(config)
     provider_keyboard = _provider_keyboard(config)
-    model_keyboard = _model_keyboard(config, "openrouter")
-    moonshot_keyboard = _model_keyboard(config, "moonshot")
-    ollama_keyboard = _model_keyboard(config, "ollama")
 
     assert "Model Configuration" in text
     assert "Select a provider" in text
     assert provider_keyboard.inline_keyboard
     assert any("OpenRouter" in button.text for row in provider_keyboard.inline_keyboard for button in row)
-    assert len([button for row in model_keyboard.inline_keyboard for button in row if button.callback_data.startswith("cfg:model:openrouter:")]) == len(
-        TELEGRAM_MODEL_PRESETS["openrouter"]
-    )
-    assert any("MiniMax M3" in button.text for row in model_keyboard.inline_keyboard for button in row)
-    assert any("Kimi K3" in button.text for row in model_keyboard.inline_keyboard for button in row)
-    assert any("Laguna S 2.1" in button.text for row in model_keyboard.inline_keyboard for button in row)
-    assert any("Laguna S 2.1 Free" in button.text for row in model_keyboard.inline_keyboard for button in row)
-    assert any("Gemini 3.6 Flash" in button.text for row in model_keyboard.inline_keyboard for button in row)
-    assert any("Gemini 3.5 Flash-Lite" in button.text for row in model_keyboard.inline_keyboard for button in row)
-    assert any(
-        preset.model == "moonshotai/kimi-k3" for preset in TELEGRAM_MODEL_PRESETS["openrouter"]
-    )
     assert any("Kimi Code / Moonshot" in button.text for row in provider_keyboard.inline_keyboard for button in row)
-    assert any("Kimi K3" in button.text for row in moonshot_keyboard.inline_keyboard for button in row)
-    assert any(preset.model == "k3" for preset in TELEGRAM_MODEL_PRESETS["moonshot"])
-    assert any("MiniMax M3" in button.text for row in ollama_keyboard.inline_keyboard for button in row)
-    assert any(preset.model == "minimax-m3:cloud" for preset in TELEGRAM_MODEL_PRESETS["ollama"])
-    assert any("GLM 5.2" in button.text for row in ollama_keyboard.inline_keyboard for button in row)
-    assert any(preset.model == "glm-5.2:cloud" for preset in TELEGRAM_MODEL_PRESETS["ollama"])
+    assert not any("(" in button.text for row in provider_keyboard.inline_keyboard for button in row)
 
 
-def test_telegram_openrouter_keyboard_promotes_current_model(tmp_path: Path, monkeypatch) -> None:
+def test_telegram_model_keyboard_promotes_current_model_with_stable_index(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     config = load_config()
-    config = _replace_general(config, default_provider="openrouter", default_model="minimax/minimax-m3")
+    models = tuple(ModelInfo("openrouter", f"vendor/future-{index}", f"Future {index}") for index in range(30))
+    config = _replace_general(config, default_provider="openrouter", default_model=models[-1].model)
 
-    model_keyboard = _model_keyboard(config, "openrouter")
+    model_keyboard = _model_keyboard(config, "openrouter", models, "snapshot")
 
     first = model_keyboard.inline_keyboard[0][0]
-    minimax_index = next(
-        index
-        for index, preset in enumerate(TELEGRAM_MODEL_PRESETS["openrouter"])
-        if preset.model == "minimax/minimax-m3"
-    )
-    assert first.text == "✓ MiniMax M3"
-    assert first.callback_data == f"cfg:model:openrouter:{minimax_index}"
+    assert first.text == "✓ Future 29"
+    assert first.callback_data == "cfg:model:snapshot:29"
+    assert len([button for row in model_keyboard.inline_keyboard for button in row if button.callback_data.startswith("cfg:model:")]) == TELEGRAM_MODEL_PAGE_SIZE
 
 
 async def test_telegram_model_command_strips_global_flag_and_persists(monkeypatch, tmp_path: Path) -> None:
@@ -1010,44 +991,202 @@ async def test_telegram_model_global_command_syncs_daemon_and_schedules(monkeypa
     ]
 
 
-async def test_telegram_model_callback_sets_provider_and_model(monkeypatch, tmp_path: Path) -> None:
+class ModelQuery:
+    def __init__(self, data: str = "cfg:provider:openrouter", *, user_id: int = 123, chat_id: int = 10, message_id: int = 20) -> None:
+        self.data = data
+        self.from_user = SimpleNamespace(id=user_id)
+        self.message = SimpleNamespace(chat_id=chat_id, message_id=message_id)
+        self.answers: list[str] = []
+        self.edits: list[str] = []
+        self.markup: Any = None
+
+    async def answer(self, text: str, show_alert: bool = False) -> None:
+        del show_alert
+        self.answers.append(text)
+
+    async def edit_message_text(self, text: str, reply_markup: object | None = None) -> None:
+        self.edits.append(text)
+        self.markup = reply_markup
+
+    def button(self, text: str) -> str:
+        return next(button.callback_data for row in self.markup.inline_keyboard for button in row if button.text == text)
+
+    async def click(self, handlers: TelegramHandlers, data: str | None = None) -> None:
+        if data is not None:
+            self.data = data
+        await handlers.callback(SimpleNamespace(callback_query=self), object())
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "openai", "anthropic", "moonshot", "ollama", "llamacpp", "codex"])
+async def test_telegram_model_callback_discovers_future_model(monkeypatch, tmp_path: Path, provider: str) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     config = load_config()
-    bridge = TelegramBridge(config)
+    daemon = FakeDaemonClient(with_permission=False)
+    bridge = TelegramBridge(config, daemon_client=daemon)
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))
+    model_id = "future-vendor/" + ("new-model-" * 20) + ":cloud"
+
+    async def discover(config_arg: Any, provider_arg: str, *, refresh: bool = False) -> ModelCatalog:
+        assert config_arg is config
+        assert provider_arg == provider
+        assert refresh is False
+        return ModelCatalog((ModelInfo(provider, model_id, "Future model"),), source="live")
+
+    monkeypatch.setattr("libre_claw.telegram.handlers.discover_models", discover)
+    query = ModelQuery(f"cfg:provider:{provider}")
+    await query.click(handlers)
+
+    assert "page 1/1" in query.edits[-1]
+    assert all(len(button.callback_data.encode()) <= 64 for row in query.markup.inline_keyboard for button in row)
+    await query.click(handlers, query.button("Future model"))
+
+    assert bridge.config.general.default_provider == provider
+    assert bridge.config.general.default_model == model_id
+    assert daemon.model_updates == [(provider, model_id, False)]
+    assert query.answers[-1] == "Model selected."
+    assert "Your next Telegram message will use this model." in query.edits[-1]
+
+
+async def test_telegram_model_pages_keep_catalog_snapshot(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    bridge = TelegramBridge(load_config())
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))
+    models = tuple(ModelInfo("openrouter", f"vendor/future-{index}", f"Future {index}") for index in range(28))
+    calls = []
+
+    async def discover(*args: Any, **kwargs: Any) -> ModelCatalog:
+        calls.append(kwargs)
+        return ModelCatalog(models, source="live")
+
+    monkeypatch.setattr("libre_claw.telegram.handlers.discover_models", discover)
+    query = ModelQuery()
+    await query.click(handlers)
+    old_button = query.button("Future 0")
+    assert "page 1/3" in query.edits[-1]
+    await query.click(handlers, query.button("Next ›"))
+    assert "page 2/3" in query.edits[-1]
+    await query.click(handlers, query.button("Next ›"))
+    assert "page 3/3" in query.edits[-1]
+    assert len(calls) == 1
+    last_button = query.button("Future 27")
+    await query.click(handlers, old_button)
+    assert "expired" in query.answers[-1]
+    await query.click(handlers, last_button)
+    assert bridge.config.general.default_model == "vendor/future-27"
+    assert "Telegram session only" in query.edits[-1]
+
+
+async def test_telegram_refresh_expires_old_selection(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    bridge = TelegramBridge(load_config())
+    initial_model = bridge.config.general.default_model
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))
+    original = ModelInfo("openrouter", "vendor/original", "Original")
+    replacement = ModelInfo("openrouter", "vendor/replacement", "Replacement")
+    calls = []
+
+    async def discover(*args: Any, refresh: bool = False) -> ModelCatalog:
+        calls.append(refresh)
+        return ModelCatalog((replacement, original) if refresh else (original,), source="live")
+
+    monkeypatch.setattr("libre_claw.telegram.handlers.discover_models", discover)
+    query = ModelQuery()
+    await query.click(handlers)
+    old_button = query.button("Original")
+    await query.click(handlers, query.button("Refresh"))
+    replacement_button = query.button("Replacement")
+    await query.click(handlers, old_button)
+    assert "expired" in query.answers[-1]
+    assert bridge.config.general.default_model == initial_model
+    assert calls == [False, True]
+    await query.click(handlers, replacement_button)
+    assert bridge.config.general.default_model == replacement.model
+
+
+async def test_telegram_independent_menus_do_not_reinterpret_model_indices(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    bridge = TelegramBridge(load_config())
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))
+    models = (ModelInfo("openrouter", "vendor/first", "First"), ModelInfo("openrouter", "vendor/second", "Second"))
+    calls = []
+
+    async def discover(*args: Any, **kwargs: Any) -> ModelCatalog:
+        calls.append(kwargs)
+        return ModelCatalog(models if len(calls) == 1 else tuple(reversed(models)), source="live")
+
+    monkeypatch.setattr("libre_claw.telegram.handlers.discover_models", discover)
+    first_query = ModelQuery(message_id=20)
+    second_query = ModelQuery(message_id=21)
+    await first_query.click(handlers)
+    first_button = first_query.button("First")
+    await second_query.click(handlers)
+    await first_query.click(handlers, first_button)
+    assert bridge.config.general.default_model == "vendor/first"
+    await second_query.click(handlers, second_query.button("Second"))
+    assert bridge.config.general.default_model == "vendor/second"
+
+
+@pytest.mark.parametrize("scope", [{"user_id": 456}, {"chat_id": 11}, {"message_id": 21}])
+async def test_telegram_model_callback_requires_original_scope(monkeypatch, tmp_path: Path, scope: dict[str, int]) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    bridge = TelegramBridge(load_config())
+    initial_model = bridge.config.general.default_model
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123, 456})))
+
+    async def discover(*args: Any, **kwargs: Any) -> ModelCatalog:
+        return ModelCatalog((ModelInfo("openrouter", "vendor/future", "Future"),), source="live")
+
+    monkeypatch.setattr("libre_claw.telegram.handlers.discover_models", discover)
+    query = ModelQuery()
+    await query.click(handlers)
+    other_query = ModelQuery(query.button("Future"), **scope)
+    await other_query.click(handlers)
+    assert "expired" in other_query.answers[-1]
+    assert bridge.config.general.default_model == initial_model
+    await query.click(handlers, query.button("Future"))
+    assert bridge.config.general.default_model == "vendor/future"
+
+
+@pytest.mark.parametrize("models", [(), (ModelInfo("openrouter", "vendor/saved", "Saved"),)])
+async def test_telegram_unavailable_catalog_allows_manual_model_ids(monkeypatch, tmp_path: Path, models: tuple[ModelInfo, ...]) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    bridge = TelegramBridge(load_config())
     handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))
 
-    class User:
-        id = 123
+    async def discover(*args: Any, **kwargs: Any) -> ModelCatalog:
+        return ModelCatalog(models, source="cache" if models else "configured", error="Provider unavailable")
 
-    class Query:
-        data = "cfg:model:openrouter:0"
-        from_user = User()
+    monkeypatch.setattr("libre_claw.telegram.handlers.discover_models", discover)
+    query = ModelQuery()
+    await query.click(handlers)
+    assert "Live catalog unavailable" in query.edits[-1]
+    assert "/model openrouter:<model-id>" in query.edits[-1]
+    assert query.button("Refresh")
+    if models:
+        assert query.button("Saved")
+    else:
+        assert "No models found" in query.edits[-1]
+    await query.click(handlers, query.button("Enter model ID"))
+    assert "Send /model openrouter:<model-id>" in query.edits[-1]
+    assert "--global" in query.edits[-1]
 
-        def __init__(self) -> None:
-            self.answers: list[str] = []
-            self.edits: list[str] = []
 
-        async def answer(self, text: str, show_alert: bool = False) -> None:
-            del show_alert
-            self.answers.append(text)
-
-        async def edit_message_text(self, text: str, reply_markup: object | None = None) -> None:
-            del reply_markup
-            self.edits.append(text)
-
-    class Update:
-        def __init__(self, query: Query) -> None:
-            self.callback_query = query
-
-    query = Query()
-
-    await handlers.callback(Update(query), object())  # type: ignore[arg-type]
-
-    assert bridge.config.general.default_provider == "openrouter"
-    assert bridge.config.general.default_model == TELEGRAM_MODEL_PRESETS["openrouter"][0].model
-    assert query.answers == ["Model selected."]
-    assert "Your next Telegram message will use this model." in query.edits[-1]
+async def test_telegram_legacy_model_callback_expires(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    bridge = TelegramBridge(load_config())
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))
+    initial_model = bridge.config.general.default_model
+    query = ModelQuery("cfg:model:openrouter:0")
+    await query.click(handlers)
+    assert "expired" in query.answers[-1]
+    assert bridge.config.general.default_model == initial_model
 
 
 async def test_telegram_permission_callback_data_stays_under_telegram_limit(monkeypatch, tmp_path: Path) -> None:

@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 if TYPE_CHECKING:
     from libre_claw.core.memory import MemoryStore
+    from libre_claw.providers.base import LLMProvider
 
 from libre_claw.core.sandbox import SandboxPolicy
 from libre_claw.core.session import UserAttachment
@@ -53,6 +54,9 @@ class ToolContext:
     skills_cli_enabled: bool = True
     skills_cli_command: str = "npx -y skills@latest"
     skills_cli_timeout: int = 45
+    subagent_provider_factory: Callable[[str, str, Path, bool], LLMProvider] | None = None
+    subagent_max_concurrent: int = 3
+    subagent_max_total: int = 12
     shared_state: dict[str, Any] = field(default_factory=dict)
 
     def sandbox_policy(self) -> SandboxPolicy:
@@ -106,6 +110,7 @@ class BaseTool(ABC):
     parameters: ClassVar[Mapping[str, Any]]
     required: ClassVar[tuple[str, ...]] = ()
     permission_level: ClassVar[PermissionLevel] = "ask"
+    read_only: ClassVar[bool | None] = None
 
     def __init__(self, context: ToolContext) -> None:
         self.context = context
@@ -124,6 +129,23 @@ class BaseTool(ABC):
     @abstractmethod
     async def execute(self, **kwargs: Any) -> ToolResult:
         """Execute the tool and return a normalized result."""
+
+    def is_read_only(self, arguments: Mapping[str, Any]) -> bool:
+        """Permission approval does not imply a tool is free of side effects."""
+        if self.read_only is not None:
+            return self.read_only
+        if self.name == "http_request":
+            return (
+                str(arguments.get("method", "GET")).upper() in {"GET", "HEAD"}
+                and not any(arguments.get(key) for key in ("body", "json_body", "output_path"))
+            )
+        if self.name == "process":
+            return str(arguments.get("action", "")).lower() in {"poll", "list"}
+        return self.name in {
+            "read_file", "list_directory", "glob", "search_files", "view_image",
+            "git_status", "think", "web_search", "schedule_list",
+            "browser_read", "browser_extract", "browser_wait", "subagent_list", "subagent_wait",
+        }
 
     def resolve_path(self, path: str) -> Path:
         return self.context.sandbox_policy().resolve_path(path)
@@ -162,6 +184,13 @@ class ToolRegistry:
         except KeyError as exc:
             msg = f"Unknown tool: {name}"
             raise ToolRegistryError(msg) from exc
+
+    @property
+    def context(self) -> ToolContext | None:
+        return next((tool.context for tool in self._tools.values()), None)
+
+    def tools(self) -> tuple[BaseTool, ...]:
+        return tuple(self._tools.values())
 
     def schemas(self) -> list[dict[str, Any]]:
         return [tool.schema() for tool in self._tools.values()]

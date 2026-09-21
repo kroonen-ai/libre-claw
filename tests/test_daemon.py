@@ -239,6 +239,7 @@ async def test_daemon_starts_background_run_and_persists_events(monkeypatch, tmp
         "assistant_delta",
         "assistant_delta",
         "usage",
+        "turn_finished",
         "run_finished",
     ]
 
@@ -1561,3 +1562,43 @@ async def test_daemon_continue_run_rejects_active_run(monkeypatch, tmp_path: Pat
             await active.task
         except asyncio.CancelledError:
             pass
+
+
+async def test_daemon_discovers_models_for_selected_provider(monkeypatch, tmp_path: Path) -> None:
+    from libre_claw.providers.model_catalog import ModelCatalog, ModelInfo
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = DaemonServer(load_config(), run_store=RunStore(tmp_path / "runs"))
+    calls = []
+
+    async def discover(config, provider, **kwargs):
+        calls.append((provider, kwargs.get("refresh", False)))
+        return ModelCatalog((ModelInfo(provider, "lab/future-agent", "Future Agent", 131072),), "live")
+
+    monkeypatch.setattr("libre_claw.daemon.discover_models", discover)
+    response = await server.list_models(RequestStub(query={"provider": "openrouter", "refresh": "true"}))
+    payload = json.loads(response.text)
+    assert calls == [("openrouter", True)]
+    assert payload["models"][0]["model"] == "lab/future-agent"
+    assert payload["models"][0]["context_window_tokens"] == 131072
+    assert payload["source"] == "live"
+    assert payload["error"] == ""
+
+
+async def test_daemon_model_catalog_reports_offline_fallback(monkeypatch, tmp_path: Path) -> None:
+    from libre_claw.providers.model_catalog import ModelCatalog, ModelInfo
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = DaemonServer(load_config(), run_store=RunStore(tmp_path / "runs"))
+
+    async def discover(config, provider, **kwargs):
+        assert provider == config.general.default_provider
+        return ModelCatalog((ModelInfo(provider, config.general.default_model, "Configured model"),), "configured", "Unavailable")
+
+    monkeypatch.setattr("libre_claw.daemon.discover_models", discover)
+    response = await server.list_models(RequestStub())
+    payload = json.loads(response.text)
+    assert payload["models"][0]["model"] == server.config.general.default_model
+    assert payload["error"] == "Unavailable"

@@ -9,7 +9,7 @@ import json
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -69,6 +69,8 @@ from libre_claw.core.usage import (
     usage_report_text,
     usage_summary_payload,
 )
+from libre_claw.core.agent import AgentSubagentUpdate
+from libre_claw.core.task_control import update_plan, plan_text
 from libre_claw.core.session import ChatMessage, UserAttachment, session_from_payload, session_to_payload, text_block
 from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
 from libre_claw.kimi import normalize_moonshot_selection
@@ -79,11 +81,13 @@ from libre_claw.providers.llamacpp import (
     discover_llamacpp_models,
     normalize_llamacpp_base_url,
 )
+from libre_claw.providers.model_catalog import discover_models
 from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.telegram.formatting import clean_final_answer_for_telegram, plain_text_chunks, telegram_html_chunks
 from libre_claw.tools_builtin import create_builtin_registry
 from libre_claw.web import dashboard_html
+from libre_claw.web.workflow_api import WorkflowAPI
 
 
 ProviderFactory = Callable[[LibreClawConfig], LLMProvider]
@@ -166,7 +170,13 @@ class DaemonServer:
         self.memory_store = MemoryStore()
         self.automation_store = AutomationStore(config.automations.root)
         self.active_runs: dict[str, ActiveRun] = {}
+        self._active_sessions: dict[str, Session] = {}
+        self._active_agents: dict[str, Agent] = {}
+        self._run_start_locks: dict[str, asyncio.Lock] = {}
+        self._queue_wakeups: dict[str, asyncio.Task[None]] = {}
+        self._closing = False
         self._provider_cooldowns: dict[str, ProviderCooldown] = {}
+        self.workflows = WorkflowAPI(self)
         self._app: web.Application | None = None
         self._automation_task: asyncio.Task[None] | None = None
         self._telegram_task: asyncio.Task[None] | None = None
@@ -182,6 +192,7 @@ class DaemonServer:
                 web.get("/health", self.health),
                 web.get("/config/model", self.current_model),
                 web.patch("/config/model", self.update_model),
+                web.get("/models", self.list_models),
                 web.get("/models/llamacpp", self.list_llamacpp_models),
                 web.get("/config/llamacpp", self.current_llamacpp_config),
                 web.patch("/config/llamacpp", self.update_llamacpp_config),
@@ -192,6 +203,8 @@ class DaemonServer:
                 web.get("/runs", self.list_runs),
                 web.post("/runs", self.start_run),
                 web.post("/runs/{run_id}/messages", self.continue_run),
+                web.get("/runs/{run_id}/session", self.get_session),
+                web.post("/runs/{run_id}/control", self.control_run),
                 web.get("/runs/{run_id}", self.get_run),
                 web.get("/runs/{run_id}/events", self.get_events),
                 web.post("/runs/{run_id}/cancel", self.cancel_run),
@@ -208,6 +221,7 @@ class DaemonServer:
                 web.post("/automations/{automation_id}/resume", self.resume_automation),
             ]
         )
+        app.add_routes(self.workflows.routes())
         app.on_startup.append(self._on_startup)
         app.on_cleanup.append(self._on_cleanup)
         self._app = app
@@ -256,6 +270,10 @@ class DaemonServer:
             )
 
     async def _on_cleanup(self, _app: web.Application) -> None:
+        self._closing = True
+        queue_tasks = list(self._queue_wakeups.values())
+        for task in queue_tasks:
+            task.cancel()
         await self._send_petdex_state("idle", message="Libre Claw daemon stopped", details={"surface": "daemon"}, surface="daemon")
         if self._automation_task is not None and not self._automation_task.done():
             self._automation_task.cancel()
@@ -265,12 +283,14 @@ class DaemonServer:
             if not active.task.done():
                 active.task.cancel()
         tasks = [active.task for active in self.active_runs.values()]
+        tasks.extend(queue_tasks)
         if self._automation_task is not None:
             tasks.append(self._automation_task)
         if self._telegram_task is not None:
             tasks.append(self._telegram_task)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self._queue_wakeups.clear()
 
     def _should_start_telegram_bridge(self) -> bool:
         if not self.start_telegram_bridge:
@@ -344,6 +364,20 @@ class DaemonServer:
     def _llamacpp_config(self) -> Mapping[str, Any]:
         provider_config = self.config.providers.get("llamacpp")
         return provider_config if isinstance(provider_config, Mapping) else {}
+
+    async def list_models(self, request: web.Request) -> web.Response:
+        provider = str(request.query.get("provider") or self.config.general.default_provider).strip().lower()
+        catalog = await discover_models(
+            self.config, provider, refresh=request.query.get("refresh", "").lower() in {"1", "true"}
+        )
+        return web.json_response(
+            {
+                "provider": provider,
+                "source": catalog.source,
+                "error": catalog.error,
+                "models": [asdict(item) for item in catalog.models],
+            }
+        )
 
     async def list_llamacpp_models(self, request: web.Request) -> web.Response:
         """List models a llama.cpp / llama-swap endpoint can serve.
@@ -564,6 +598,8 @@ class DaemonServer:
         return web.json_response({"theme": theme, "label": THEME_PALETTES[theme].label, "persisted_path": persisted_path})
 
     async def start_run(self, request: web.Request) -> web.Response:
+        if self._closing:
+            return _json_error("The daemon is shutting down.", status=503)
         try:
             payload = await request.json()
         except ValueError:
@@ -581,6 +617,31 @@ class DaemonServer:
             run_config = await self._config_for_payload(payload)
         except ValueError as exc:
             return _json_error(str(exc), status=403)
+        if payload.get("worktree_id"):
+            # The owner changes when a new run is attached, so a per-run lock
+            # cannot serialize two simultaneous launches into this checkout.
+            async with self._run_start_lock(f"worktree:{payload['worktree_id']}"):
+                return await self._start_run_in_workspace(payload, message, kind, run_config)
+        return await self._start_run_in_workspace(payload, message, kind, run_config)
+
+    async def _start_run_in_workspace(
+        self, payload: Mapping[str, Any], message: str, kind: str, run_config: LibreClawConfig,
+    ) -> web.Response:
+        if self._closing:
+            return _json_error("The daemon is shutting down.", status=503)
+        worktree = None
+        if payload.get("worktree_id"):
+            try:
+                worktree = await self.workflows.worktrees.get(str(payload["worktree_id"]))
+                existing = self.active_runs.get(worktree.run_id)
+                if existing and not existing.task.done():
+                    raise ValueError("The worktree is already in use by an active task.")
+                # Include durable tasks owned by the local TUI or another
+                # surface, including tasks rooted below the Git checkout.
+                await self.workflows.assert_idle(Path(worktree.path))
+                run_config = replace(run_config, general=replace(run_config.general, working_directory=Path(worktree.path)))
+            except (ValueError, OSError) as exc:
+                return _json_error(str(exc), status=409)
         run = await self.run_store.create_run(
             message,
             kind=cast(RunKind, kind),
@@ -589,6 +650,9 @@ class DaemonServer:
             working_directory=run_config.general.working_directory,
             state="queued",
         )
+        if worktree is not None:
+            await self.workflows.worktrees.associate(worktree.worktree_id, run.run_id)
+            await self.run_store.append_event(run.run_id, "worktree_attached", {"worktree_id": worktree.worktree_id})
         surface = str(payload.get("surface", "daemon")).strip() or "daemon"
         telegram_chat_id = _optional_int(payload.get("telegram_chat_id")) if "telegram_chat_id" in payload else None
         session = session_from_payload(payload.get("session"))
@@ -604,12 +668,147 @@ class DaemonServer:
                 telegram_chat_id=telegram_chat_id,
             )
         )
-        active = ActiveRun(run_id=run.run_id, task=task, surface=surface)
-        self.active_runs[run.run_id] = active
-        task.add_done_callback(lambda _task, run_id=run.run_id: self.active_runs.pop(run_id, None))
+        self._register_active(run.run_id, task, surface)
         return web.json_response({"run": _run_payload(run)}, status=202)
 
+    def _run_start_lock(self, run_id: str) -> asyncio.Lock:
+        return self._run_start_locks.setdefault(run_id, asyncio.Lock())
+
+    def _register_active(self, run_id: str, task: asyncio.Task[Any], surface: str) -> ActiveRun:
+        active = ActiveRun(run_id=run_id, task=task, surface=surface)
+        self.active_runs[run_id] = active
+
+        def completed(_task: asyncio.Task[Any]) -> None:
+            if self.active_runs.get(run_id) is active:
+                self.active_runs.pop(run_id, None)
+
+        task.add_done_callback(completed)
+        return active
+
+    def _schedule_queue_wakeup(self, run_id: str) -> None:
+        if self._closing:
+            return
+        existing = self._queue_wakeups.get(run_id)
+        if existing is not None and not existing.done():
+            return
+        task = asyncio.create_task(self._wake_queued_run(run_id), name=f"libre-claw-queue-{run_id}")
+        self._queue_wakeups[run_id] = task
+
+        def completed(_task: asyncio.Task[None]) -> None:
+            if self._queue_wakeups.get(run_id) is task:
+                self._queue_wakeups.pop(run_id, None)
+
+        task.add_done_callback(completed)
+
+    async def _wake_queued_run(self, run_id: str) -> None:
+        """Catch queue additions after a turn's final claim and start explicitly queued idle work."""
+        try:
+            while not self._closing:
+                async with self._run_start_lock(run_id):
+                    active = self.active_runs.get(run_id)
+                    if active is None or active.task.done():
+                        if not await self.run_store.queued_messages(run_id):
+                            return
+                        run = await self.run_store.load_run(run_id)
+                        if run is None:
+                            return
+                        config = await self._config_for_payload({"provider": run.provider, "model": run.model})
+                        if run.working_directory:
+                            workspace = Path(run.working_directory).expanduser().resolve()
+                            if not workspace.is_dir():
+                                raise ValueError("The saved task workspace no longer exists.")
+                            config = replace(config, general=replace(config.general, working_directory=workspace))
+                        session = await self.run_store.load_session(run_id, recover=True)
+                        queued = await self.run_store.take_queued_message(run_id)
+                        if queued is None or self._closing:
+                            return
+                        run = await self.run_store.update_state(run_id, "queued")
+                        self._active_sessions[run_id] = session
+                        task = asyncio.create_task(self._run_agent(run, queued["message"], config, surface="daemon:queue", session=session, continuation=True))
+                        active = self._register_active(run_id, task, "daemon:queue")
+                    task = active.task
+                # An explicit cancellation must leave untouched follow-ups queued for later resume.
+                await asyncio.shield(task)
+                run = await self.run_store.load_run(run_id)
+                if run is None or run.state != "done":
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("queued_run_start_failed", run_id=run_id, error=str(exc))
+            await self.run_store.append_event(run_id, "queue_start_failed", {"error": str(exc)})
+
+    async def get_session(self, request: web.Request) -> web.Response:
+        run_id = request.match_info["run_id"]
+        run = await self.run_store.load_run(run_id)
+        if run is None:
+            return _json_error("Unknown run.", status=404)
+        session = self._active_sessions.get(run_id)
+        if session is None:
+            session = await self.run_store.load_session(run_id)
+        return web.json_response({"run": _run_payload(run), "session": session_to_payload(session), "queued": await self.run_store.queued_messages(run_id)})
+
+    async def control_run(self, request: web.Request) -> web.Response:
+        async with self._run_start_lock(request.match_info["run_id"]):
+            return await self._control_run_locked(request)
+
+    async def _control_run_locked(self, request: web.Request) -> web.Response:
+        run_id = request.match_info["run_id"]
+        run = await self.run_store.load_run(run_id)
+        if run is None:
+            return _json_error("Unknown run.", status=404)
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Request body must be a JSON object.")
+            action = str(payload.get("action", ""))
+            value = str(payload.get("text", "")).strip()
+            if action in {"agents", "agent_cancel"}:
+                agent = self._active_agents.get(run_id)
+                manager = agent.subagents if agent is not None else None
+                if action == "agent_cancel":
+                    if manager is None:
+                        raise ValueError("No active subagents for this task.")
+                    await manager.cancel(value)
+                if manager is not None:
+                    snapshots = manager.snapshots()
+                else:
+                    latest = {event.data.get("id"): event.data for event in await self.run_store.load_events(run_id) if event.type == "subagent_update"}
+                    snapshots = list(latest.values())
+                text = "\n".join(f"{item['id']}: {item['status']} - {item['task']}\n{item.get('output', '')[:1000]}" for item in snapshots) or "No subagents for this task."
+                return web.json_response({"text": text, "subagents": snapshots})
+            if action == "queue":
+                if self._closing:
+                    raise ValueError("The daemon is shutting down; queued work was not started.")
+                item = await self.run_store.queue_message(run_id, value)
+                await self.run_store.append_event(run_id, "message_queued", item)
+                self._schedule_queue_wakeup(run_id)
+                return web.json_response({"text": "Follow-up queued.", "queued": await self.run_store.queued_messages(run_id)})
+            session = self._active_sessions.get(run_id)
+            if session is None:
+                session = await self.run_store.load_session(run_id)
+            if action == "steer":
+                if not value:
+                    raise ValueError("A steering instruction is required.")
+                session.queue_steering(value)
+                response = "Steering queued for the next safe boundary."
+            elif action == "plan":
+                response = update_plan(session, value)
+            else:
+                raise ValueError("Action must be steer, queue, or plan.")
+            await self.run_store.save_session(run_id, session)
+            await self.run_store.append_event(run_id, "task_control", {"action": action, "text": value})
+            return web.json_response({"text": response, "session": session_to_payload(session)})
+        except (ValueError, TypeError) as exc:
+            return _json_error(str(exc))
+
     async def continue_run(self, request: web.Request) -> web.Response:
+        if self._closing:
+            return _json_error("The daemon is shutting down.", status=503)
+        async with self._run_start_lock(request.match_info["run_id"]):
+            return await self._continue_run_locked(request)
+
+    async def _continue_run_locked(self, request: web.Request) -> web.Response:
         """Continue a finished run's conversation with a follow-up message."""
         run_id = request.match_info["run_id"]
         run = await self.run_store.load_run(run_id)
@@ -643,11 +842,15 @@ class DaemonServer:
         except ValueError as exc:
             return _json_error(str(exc), status=403)
 
-        session = await asyncio.to_thread(_load_session_snapshot, run)
-        if session is None:
-            session = _session_from_events(await self.run_store.load_events(run_id))
+        session = await self.run_store.load_session(run_id, recover=True)
+        if run.working_directory:
+            workspace = Path(run.working_directory).expanduser().resolve()
+            if not workspace.is_dir():
+                return _json_error("The saved task workspace no longer exists.", status=409)
+            run_config = replace(run_config, general=replace(run_config.general, working_directory=workspace))
         surface = str(payload.get("surface", "daemon")).strip() or "daemon"
         attachments = _attachments_from_payload(payload.get("attachments"))
+        run = await self.run_store.set_runtime(run_id, provider=run_config.general.default_provider, model=run_config.general.default_model)
         run = await self.run_store.update_state(run_id, "queued")
         task = asyncio.create_task(
             self._run_agent(
@@ -660,13 +863,19 @@ class DaemonServer:
                 continuation=True,
             )
         )
-        active = ActiveRun(run_id=run.run_id, task=task, surface=surface)
-        self.active_runs[run.run_id] = active
-        task.add_done_callback(lambda _task, active_run_id=run.run_id: self.active_runs.pop(active_run_id, None))
+        self._active_sessions[run.run_id] = session
+        self._register_active(run.run_id, task, surface)
         return web.json_response({"run": _run_payload(run)}, status=202)
 
     async def cancel_run(self, request: web.Request) -> web.Response:
+        async with self._run_start_lock(request.match_info["run_id"]):
+            return await self._cancel_run_locked(request)
+
+    async def _cancel_run_locked(self, request: web.Request) -> web.Response:
         run_id = request.match_info["run_id"]
+        wakeup = self._queue_wakeups.get(run_id)
+        if wakeup is not None and not wakeup.done():
+            wakeup.cancel()
         run = await self.run_store.load_run(run_id)
         if run is None:
             return _json_error("Unknown run.", status=404)
@@ -871,6 +1080,30 @@ class DaemonServer:
         return await self._with_openrouter_model_limits(config)
 
     async def _run_agent(
+        self, run: RunRecord, message: str, config: LibreClawConfig, *, surface: str = "daemon",
+        hold_final_state: bool = False, session: Session | None = None,
+        attachments: tuple[UserAttachment, ...] = (), telegram_chat_id: int | None = None,
+        deadline_monotonic: float | None = None, deadline_reserve_seconds: float = 0.0,
+        continuation: bool = False,
+    ) -> RunState:
+        session = session if session is not None else Session()
+        self._active_sessions[run.run_id] = session
+        try:
+            while True:
+                state, queued = await self._run_agent_turn(
+                    run, message, config, surface=surface, hold_final_state=hold_final_state,
+                    session=session, attachments=attachments, telegram_chat_id=telegram_chat_id,
+                    deadline_monotonic=deadline_monotonic, deadline_reserve_seconds=deadline_reserve_seconds,
+                    continuation=continuation,
+                )
+                if queued is None:
+                    return state
+                message, attachments, continuation = queued["message"], (), True
+        finally:
+            if self._active_sessions.get(run.run_id) is session:
+                self._active_sessions.pop(run.run_id, None)
+
+    async def _run_agent_turn(
         self,
         run: RunRecord,
         message: str,
@@ -884,14 +1117,21 @@ class DaemonServer:
         deadline_monotonic: float | None = None,
         deadline_reserve_seconds: float = 0.0,
         continuation: bool = False,
-    ) -> RunState:
+    ) -> tuple[RunState, dict[str, Any] | None]:
         # The agent mutates this session in place; holding the reference lets the
         # daemon snapshot the full conversation for follow-up turns.
         session = session if session is not None else Session()
+        self._active_sessions[run.run_id] = session
         assistant_chunks: list[str] = []
         state: RunState = "done"
         primary_rate_limited = False
+        queued: dict[str, Any] | None = None
         try:
+            try:
+                from libre_claw.core.git_review import create_checkpoint
+                session.checkpoint["last_turn_tree"] = await create_checkpoint(config.general.working_directory, name=run.run_id)
+            except (ValueError, OSError):
+                session.checkpoint.pop("last_turn_tree", None)
             await self.run_store.update_state(run.run_id, "running")
             await self._send_petdex_state(
                 "running",
@@ -927,7 +1167,12 @@ class DaemonServer:
                 deadline_monotonic=deadline_monotonic,
                 deadline_reserve_seconds=deadline_reserve_seconds,
             )
+            agent.checkpoint_callback = lambda current: self.run_store.save_session(run.run_id, current)
+            self._active_agents[run.run_id] = agent
             async for event in agent.run(message, attachments=attachments):
+                if isinstance(event, AgentSubagentUpdate):
+                    await self.run_store.append_event(run.run_id, "subagent_update", event.snapshot)
+                    continue
                 if isinstance(event, AgentTextDelta):
                     assistant_chunks.append(event.text)
                     await self.run_store.append_event(run.run_id, "assistant_delta", {"text": event.text})
@@ -1104,33 +1349,47 @@ class DaemonServer:
             )
             await self.run_store.append_event(run.run_id, "error", {"message": str(exc)})
         finally:
-            persisted_state: RunState = "running" if hold_final_state and state in {"done", "failed", "cancelled"} else state
-            await self.run_store.finish_run(
-                run.run_id,
-                persisted_state,
-                plan=run_plan_text(await self.run_store.load_events(run.run_id)),
-                summary="".join(assistant_chunks),
-                verification=f"Daemon run finished with state: {state}\n",
-                diff="",
-                browser=browser_artifact_text(await self.run_store.load_events(run.run_id)),
-            )
-            if not hold_final_state:
-                await self.run_store.append_event(run.run_id, "run_finished", {"state": state})
+            self._active_agents.pop(run.run_id, None)
+            owner = asyncio.current_task()
+            memory_extraction: asyncio.Task[None] | None = None
+
+            async def finalize() -> dict[str, Any] | None:
+                nonlocal memory_extraction
+                try:
+                    await self.run_store.save_session(run.run_id, session)
+                except OSError:
+                    LOGGER.warning("session_snapshot_failed", run_id=run.run_id)
+                if state == "done" and (owner is None or not owner.cancelling()):
+                    memory_extraction = asyncio.create_task(self._extract_run_memory(config, run, message, "".join(assistant_chunks)))
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await memory_extraction
+                    if not primary_rate_limited:
+                        self._clear_provider_cooldown(config.general.default_provider)
+                effective_state: RunState = "cancelled" if owner is not None and owner.cancelling() else state
+                await self._send_petdex_state(
+                    _petdex_final_state(effective_state), message=f"Run {effective_state}",
+                    details={"surface": surface, "run_id": run.run_id}, surface=surface,
+                )
+                events = await self.run_store.load_events(run.run_id)
+                return await self.run_store.finish_turn(
+                    run.run_id, effective_state, plan=run_plan_text(events), summary="".join(assistant_chunks),
+                    verification=f"Daemon run finished with state: {effective_state}\n", browser=browser_artifact_text(events),
+                    hold_final_state=hold_final_state,
+                )
+
+            finishing = asyncio.create_task(finalize())
             try:
-                await asyncio.to_thread(_write_session_snapshot, run, session)
-            except OSError:
-                LOGGER.warning("session_snapshot_failed", run_id=run.run_id)
-            await self._send_petdex_state(
-                _petdex_final_state(state),
-                message=f"Run {state}",
-                details={"surface": surface, "run_id": run.run_id},
-                surface=surface,
-            )
-            if state == "done":
-                await self._extract_run_memory(config, run, message, "".join(assistant_chunks))
-                if not primary_rate_limited:
-                    self._clear_provider_cooldown(config.general.default_provider)
-        return state
+                queued = await asyncio.shield(finishing)
+            except asyncio.CancelledError:
+                state = "cancelled"
+                if memory_extraction is not None:
+                    memory_extraction.cancel()
+                await finishing
+                record = await self.run_store.load_run(run.run_id)
+                if record is not None and record.state != "cancelled" and not hold_final_state:
+                    await self.run_store.finish_turn(run.run_id, "cancelled", summary="".join(assistant_chunks), drain_queue=False)
+                raise
+        return state, queued
 
     async def _automation_loop(self) -> None:
         try:
@@ -1186,13 +1445,7 @@ class DaemonServer:
             },
         )
         task = asyncio.create_task(self._run_automation_agent(automation, run, config, report_path))
-        active = ActiveRun(
-            run_id=run.run_id,
-            task=task,
-            surface=f"automation:{automation.route}",
-        )
-        self.active_runs[run.run_id] = active
-        task.add_done_callback(lambda _task, run_id=run.run_id: self.active_runs.pop(run_id, None))
+        self._register_active(run.run_id, task, f"automation:{automation.route}")
         return run
 
     async def _run_automation_agent(
@@ -1624,6 +1877,15 @@ class DaemonClient:
 
     async def start_run(self, message: str, **payload: Any) -> dict[str, Any]:
         return await self._request("POST", "/runs", json={"message": message, **payload})
+
+    async def continue_run(self, run_id: str, message: str, **payload: Any) -> dict[str, Any]:
+        return await self._request("POST", f"/runs/{run_id}/messages", json={"message": message, **payload})
+
+    async def get_session(self, run_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/runs/{run_id}/session")
+
+    async def control_run(self, run_id: str, action: str, text: str) -> dict[str, Any]:
+        return await self._request("POST", f"/runs/{run_id}/control", json={"action": action, "text": text})
 
     async def list_runs(self, limit: int = 20) -> dict[str, Any]:
         return await self._request("GET", f"/runs?limit={limit}")
@@ -2218,7 +2480,9 @@ _SESSION_SNAPSHOT_NAME = "session.json"
 
 def _write_session_snapshot(run: RunRecord, session: Session) -> None:
     path = run.path / _SESSION_SNAPSHOT_NAME
-    path.write_text(json.dumps(session_to_payload(session)), encoding="utf-8")
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(session_to_payload(session)), encoding="utf-8")
+    temporary.replace(path)
 
 
 def _load_session_snapshot(run: RunRecord) -> Session | None:

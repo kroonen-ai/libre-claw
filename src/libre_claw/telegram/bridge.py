@@ -8,6 +8,7 @@ import json
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -40,7 +41,9 @@ from libre_claw.core.memory import (
 )
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.runs import RunRecord, RunStore
-from libre_claw.core.session import UserAttachment, estimate_context_tokens, session_to_payload
+from libre_claw.core.session import UserAttachment, estimate_context_tokens, session_to_payload, session_from_payload
+from libre_claw.core.agent import AgentSubagentUpdate
+from libre_claw.core.task_control import update_plan
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.soul import SoulStore
 from libre_claw.core.tools import ToolCall
@@ -112,6 +115,9 @@ class TelegramChatState:
     task: asyncio.Task[None] | None = None
     pending_permissions: dict[str, AgentPermissionRequest] = field(default_factory=dict)
     daemon_run_id: str | None = None
+    run_id: str | None = None
+    subagents: Any = None
+    runtime_config: LibreClawConfig | None = None
     daemon_event_id: int = 0
     archive_id: str = field(default_factory=lambda: new_session_archive_id("telegram"))
 
@@ -198,10 +204,24 @@ class TelegramBridge:
             return
 
         state = self.state_for(chat_id)
-        self.config = await self._with_openrouter_model_limits(self.config)
+        runtime = state.runtime_config or self.config
+        if state.run_id is None:
+            run = await self.run_store.create_run(text, kind="chat", provider=runtime.general.default_provider, model=runtime.general.default_model, working_directory=runtime.general.working_directory)
+            state.run_id = run.run_id
+        else:
+            await self.run_store.update_state(state.run_id, "running")
+        await self.run_store.append_event(state.run_id, "user_message", {"content": text})
+        try:
+            from libre_claw.core.git_review import create_checkpoint
+            state.session.checkpoint["last_turn_tree"] = await create_checkpoint(runtime.general.working_directory, name=state.run_id)
+        except (ValueError, OSError):
+            pass
+        state = self.state_for(chat_id)
+        state.runtime_config = await self._with_openrouter_model_limits(state.runtime_config or self.config)
         try:
             agent = self._create_agent(state)
         except ProviderConfigurationError as exc:
+            await self.run_store.update_state(state.run_id, "failed")
             yield TelegramError(str(exc))
             return
 
@@ -210,91 +230,115 @@ class TelegramBridge:
             message=petdex_message_preview(text),
             details={"surface": "telegram", "chat_id": chat_id},
         )
-        async for event in agent.run(text, attachments=attachments):
-            if isinstance(event, AgentTextDelta):
-                yield TelegramText(event.text)
-                continue
-            if isinstance(event, AgentToolCall):
-                await self._send_petdex_state(
-                    "command" if event.call.name == "bash" else "working",
-                    message=f"Calling {event.call.name}",
-                    details=petdex_tool_details(event.call.name, event.call.arguments),
-                )
-                await self._archive_event(chat_id, "tool_call", {"name": event.call.name, "arguments": dict(event.call.arguments)})
-                yield TelegramToolNotice(
-                    _tool_call_notice(event.call.name, dict(event.call.arguments)),
-                    tool_name=event.call.name,
-                )
-                continue
-            if isinstance(event, AgentPermissionRequest):
-                prompt_id = f"{chat_id}:{event.call.id}"
-                state.pending_permissions[prompt_id] = event
-                await self._send_petdex_state(
-                    "waving",
-                    message=f"Approval needed: {event.call.name}",
-                    details=petdex_tool_details(event.call.name, event.call.arguments),
-                )
-                await self._archive_event(chat_id, "permission_request", {"name": event.call.name, "arguments": dict(event.call.arguments)})
-                yield TelegramPermissionPrompt(
-                    prompt_id=prompt_id,
-                    call=event.call,
-                    text=_permission_notice(event.call.name, dict(event.call.arguments)),
-                )
-                continue
-            if isinstance(event, AgentToolResult):
-                status = "error" if event.result.is_error else "result"
-                await self._send_petdex_state(
-                    "error" if event.result.is_error else "success",
-                    message=f"{event.call.name} {'failed' if event.result.is_error else 'finished'}",
-                    details={"tool": event.call.name, "is_error": event.result.is_error},
-                )
-                await self._archive_event(
-                    chat_id,
-                    "tool_result",
-                    {
-                        "name": event.call.name,
-                        "is_error": event.result.is_error,
-                        "content": event.result.as_text(),
-                        "metadata": dict(event.result.metadata),
-                    },
-                )
-                yield TelegramToolNotice(
-                    _tool_result_notice(
-                        event.call.name,
+        final_state = "done"
+        queued = None
+        agent.checkpoint_callback = lambda session: self.run_store.save_session(state.run_id, session)
+        state.subagents = agent.subagents
+        try:
+            async for event in agent.run(text, attachments=attachments):
+                if isinstance(event, AgentSubagentUpdate):
+                    await self.run_store.append_event(state.run_id, "subagent_update", event.snapshot)
+                    yield TelegramToolNotice(f"Subagent {event.snapshot['id']}: {event.snapshot['status']}", tool_name="subagent")
+                    continue
+                if isinstance(event, AgentTextDelta):
+                    yield TelegramText(event.text)
+                    continue
+                if isinstance(event, AgentToolCall):
+                    await self._send_petdex_state(
+                        "command" if event.call.name == "bash" else "working",
+                        message=f"Calling {event.call.name}",
+                        details=petdex_tool_details(event.call.name, event.call.arguments),
+                    )
+                    await self._archive_event(chat_id, "tool_call", {"name": event.call.name, "arguments": dict(event.call.arguments)})
+                    yield TelegramToolNotice(
+                        _tool_call_notice(event.call.name, dict(event.call.arguments)),
+                        tool_name=event.call.name,
+                    )
+                    continue
+                if isinstance(event, AgentPermissionRequest):
+                    prompt_id = f"{chat_id}:{event.call.id}"
+                    state.pending_permissions[prompt_id] = event
+                    await self._send_petdex_state(
+                        "waving",
+                        message=f"Approval needed: {event.call.name}",
+                        details=petdex_tool_details(event.call.name, event.call.arguments),
+                    )
+                    await self._archive_event(chat_id, "permission_request", {"name": event.call.name, "arguments": dict(event.call.arguments)})
+                    yield TelegramPermissionPrompt(
+                        prompt_id=prompt_id,
+                        call=event.call,
+                        text=_permission_notice(event.call.name, dict(event.call.arguments)),
+                    )
+                    continue
+                if isinstance(event, AgentToolResult):
+                    status = "error" if event.result.is_error else "result"
+                    await self._send_petdex_state(
+                        "error" if event.result.is_error else "success",
+                        message=f"{event.call.name} {'failed' if event.result.is_error else 'finished'}",
+                        details={"tool": event.call.name, "is_error": event.result.is_error},
+                    )
+                    await self._archive_event(
+                        chat_id,
+                        "tool_result",
+                        {
+                            "name": event.call.name,
+                            "is_error": event.result.is_error,
+                            "content": event.result.as_text(),
+                            "metadata": dict(event.result.metadata),
+                        },
+                    )
+                    yield TelegramToolNotice(
+                        _tool_result_notice(
+                            event.call.name,
+                            is_error=event.result.is_error,
+                            content=event.result.as_text(),
+                            metadata=dict(event.result.metadata),
+                        ),
+                        tool_name=event.call.name,
                         is_error=event.result.is_error,
-                        content=event.result.as_text(),
-                        metadata=dict(event.result.metadata),
-                    ),
-                    tool_name=event.call.name,
-                    is_error=event.result.is_error,
-                    is_result=True,
-                )
-                continue
-            if isinstance(event, AgentDone):
-                await self._send_petdex_state("success", message="Telegram run complete", details={"surface": "telegram", "chat_id": chat_id})
-                if event.usage is not None:
-                    state.usage = combine_usage(state.usage, event.usage) or state.usage
-                    state.last_usage = event.usage
-                assistant_text = _latest_assistant_text(state.session)
-                if assistant_text:
-                    await self._archive_event(chat_id, "assistant_message", {"content": assistant_text})
-                    await self._extract_turn_memory(chat_id, text, assistant_text)
-                yield TelegramDone(event.usage)
-                continue
-            if isinstance(event, AgentError):
-                await self._send_petdex_state("error", message=event.message, details={"surface": "telegram", "chat_id": chat_id})
-                await self._archive_event(chat_id, "error", {"message": event.message})
-                yield TelegramError(event.message)
-                return
-            if isinstance(event, AgentFallback):
-                await self._send_petdex_state(
-                    "thinking",
-                    message=f"Fallback: {event.provider_label}",
-                    details={"provider": event.provider_label, "reason": event.reason},
-                )
-                await self._archive_event(chat_id, "provider_fallback", {"provider": event.provider_label, "reason": event.reason})
-                yield TelegramToolNotice(f"🔁 Provider fallback: {event.provider_label}\n{_compact_text(event.reason)}")
-                continue
+                        is_result=True,
+                    )
+                    continue
+                if isinstance(event, AgentDone):
+                    await self._send_petdex_state("success", message="Telegram run complete", details={"surface": "telegram", "chat_id": chat_id})
+                    if event.usage is not None:
+                        state.usage = combine_usage(state.usage, event.usage) or state.usage
+                        state.last_usage = event.usage
+                    assistant_text = _latest_assistant_text(state.session)
+                    if assistant_text:
+                        await self._archive_event(chat_id, "assistant_message", {"content": assistant_text})
+                        await self._extract_turn_memory(chat_id, text, assistant_text)
+                    yield TelegramDone(event.usage)
+                    continue
+                if isinstance(event, AgentError):
+                    final_state = "failed"
+                    await self._send_petdex_state("error", message=event.message, details={"surface": "telegram", "chat_id": chat_id})
+                    await self._archive_event(chat_id, "error", {"message": event.message})
+                    yield TelegramError(event.message)
+                    return
+                if isinstance(event, AgentFallback):
+                    await self._send_petdex_state(
+                        "thinking",
+                        message=f"Fallback: {event.provider_label}",
+                        details={"provider": event.provider_label, "reason": event.reason},
+                    )
+                    await self._archive_event(chat_id, "provider_fallback", {"provider": event.provider_label, "reason": event.reason})
+                    yield TelegramToolNotice(f"🔁 Provider fallback: {event.provider_label}\n{_compact_text(event.reason)}")
+                    continue
+        except asyncio.CancelledError:
+            final_state = "cancelled"
+            raise
+        except Exception:
+            final_state = "failed"
+            raise
+        finally:
+            await self.run_store.save_session(state.run_id, state.session)
+            queued = await self.run_store.finish_turn(state.run_id, final_state, summary=_latest_assistant_text(state.session))
+        if final_state == "done":
+            if queued is not None:
+                yield TelegramToolNotice("Continuing queued follow-up.", tool_name="task_turn")
+                async for event in self.stream_message(chat_id, queued["message"]):
+                    yield event
 
     def resolve_permission(self, prompt_id: str, resolution: PermissionResolution) -> bool:
         if prompt_id.startswith("daemon:"):
@@ -446,7 +490,71 @@ class TelegramBridge:
         label = "Side note" if kind == "btw" else "Steering instruction"
         state.session.summary = _append_session_note(state.session.summary, f"{label}: {note}")
         await self._archive_event(chat_id, "steering_note", {"kind": kind, "content": note})
+        run_id = state.daemon_run_id or state.run_id
+        if self.daemon_client is not None and run_id and hasattr(self.daemon_client, "control_run"):
+            result = await self.daemon_client.control_run(run_id, "steer", note)
+            return str(result.get("text", "Steering queued."))
+        state.session.queue_steering(note)
+        if state.run_id:
+            await self.run_store.save_session(state.run_id, state.session)
         return f"{label} saved for future turns."
+
+    async def task_control_text(self, chat_id: int, action: str, text: str) -> str:
+        state = self.state_for(chat_id)
+        run_id = state.daemon_run_id or state.run_id
+        try:
+            if self.daemon_client is not None and run_id:
+                result = await self.daemon_client.control_run(run_id, action, text)
+                if result.get("session"):
+                    state.session = session_from_payload(result["session"])
+                return str(result.get("text", "Task updated."))
+            if action in {"agents", "agent_cancel"}:
+                manager = getattr(state, "subagents", None)
+                if manager is None:
+                    return "No active subagents for this task."
+                if action == "agent_cancel":
+                    await manager.cancel(text)
+                return "\n".join(f"{item['id']}: {item['status']} - {item['task']}" for item in manager.snapshots()) or "No subagents for this task."
+            if action == "plan":
+                result = update_plan(state.session, text)
+                if run_id:
+                    await self.run_store.save_session(run_id, state.session)
+                return result
+            if action == "queue" and run_id:
+                await self.run_store.queue_message(run_id, text)
+                return "Follow-up queued."
+            return "Start or resume a task first."
+        except (ValueError, RuntimeError) as exc:
+            return str(exc)
+
+    async def resume_command_text(self, chat_id: int, run_id: str) -> str:
+        state = self.state_for(chat_id)
+        if state.task is not None and not state.task.done():
+            return "Stop the current task before resuming another."
+        try:
+            if self.daemon_client is not None:
+                payload = await self.daemon_client.get_session(run_id)
+                raw = payload.get("run", {})
+                loaded_session = session_from_payload(payload.get("session"))
+                active_id = run_id if raw.get("state") in {"running", "blocked", "queued"} else None
+            else:
+                run = await self.run_store.load_run(run_id)
+                if run is None:
+                    return "Unknown task."
+                raw = {"provider": run.provider, "model": run.model, "working_directory": run.working_directory}
+                loaded_session = await self.run_store.load_session(run_id, recover=True)
+                active_id = None
+            workspace = Path(raw.get("working_directory") or self.config.general.working_directory)
+            if not workspace.is_dir():
+                return "The saved workspace no longer exists."
+            state.session = loaded_session
+            state.daemon_run_id = active_id
+            state.runtime_config = replace(self.config, general=replace(self.config.general, default_provider=raw.get("provider") or self.config.general.default_provider, default_model=raw.get("model") or self.config.general.default_model, working_directory=workspace))
+            state.run_id = run_id
+            state.daemon_event_id = 0
+            return f"Resumed {run_id}. Conversation, model, workspace, and plan restored."
+        except (ValueError, RuntimeError, OSError) as exc:
+            return f"Could not resume task: {exc}"
 
     async def runs_command_text(self, argument: str) -> str:
         limit = _telegram_list_limit(argument, default=10, maximum=25)
@@ -580,27 +688,30 @@ class TelegramBridge:
         return {"automation": _automation_record_payload(_require_record(record))}
 
     def _create_agent(self, state: TelegramChatState) -> Agent:
-        provider = create_provider(self.config)
-        fallbacks = create_fallback_providers(self.config)
+        config = state.runtime_config or self.config
+        skill_store = SkillStore(config.general.working_directory, skills_config=config.skills)
+        soul_store = SoulStore(config.general.working_directory)
+        provider = create_provider(config)
+        fallbacks = create_fallback_providers(config)
         return Agent(
             session=state.session,
             provider=provider,
-            tool_registry=create_builtin_registry(self.config, memory_store=self.memory_store),
-            permission_manager=PermissionManager(self.config.permissions),
-            system_prompt=self.config.agent.system_prompt,
-            max_tool_calls_per_turn=self.config.agent.max_tool_calls_per_turn,
-            auto_compact_threshold=self.config.agent.auto_compact_threshold,
-            context_window_tokens=self.config.agent.context_window_tokens,
-            compact_keep_last=self.config.agent.compact_keep_last,
-            provider_retry_attempts=self.config.agent.provider_retry_attempts,
-            provider_retry_initial_delay=self.config.agent.provider_retry_initial_delay,
+            tool_registry=create_builtin_registry(config, memory_store=self.memory_store),
+            permission_manager=PermissionManager(config.permissions),
+            system_prompt=config.agent.system_prompt,
+            max_tool_calls_per_turn=config.agent.max_tool_calls_per_turn,
+            auto_compact_threshold=config.agent.auto_compact_threshold,
+            context_window_tokens=config.agent.context_window_tokens,
+            compact_keep_last=config.agent.compact_keep_last,
+            provider_retry_attempts=config.agent.provider_retry_attempts,
+            provider_retry_initial_delay=config.agent.provider_retry_initial_delay,
             memory_facts=self._memory_facts,
-            system_prompt_extra=_combine_prompt_extra(self.config.agent.system_prompt_extra, TELEGRAM_SYSTEM_PROMPT_EXTRA),
-            skill_provider=self.skill_store.relevant_skill_texts,
-            soul_provider=self.soul_store.soul_texts,
-            memory_provider=lambda user_message: self.relevant_memory_texts(user_message),
+            system_prompt_extra=_combine_prompt_extra(config.agent.system_prompt_extra, TELEGRAM_SYSTEM_PROMPT_EXTRA),
+            skill_provider=skill_store.relevant_skill_texts,
+            soul_provider=soul_store.soul_texts,
+            memory_provider=lambda user_message: self.relevant_memory_texts(user_message, config=config),
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
-            fallback_recheck_after_attempts=self.config.fallback.recheck_after_attempts,
+            fallback_recheck_after_attempts=config.fallback.recheck_after_attempts,
         )
 
     async def _with_openrouter_model_limits(self, config: LibreClawConfig) -> LibreClawConfig:
@@ -615,12 +726,13 @@ class TelegramBridge:
             return config
         return apply_openrouter_model_limits(config, limits, model=config.general.default_model)
 
-    async def relevant_memory_texts(self, user_message: str) -> list[str]:
+    async def relevant_memory_texts(self, user_message: str, *, config: LibreClawConfig | None = None) -> list[str]:
         if not self._memory_enabled() or not self.config.memory.inject_relevant:
             return []
+        config = config or self.config
         items = await self.memory_store.search_memory_items(
             user_message,
-            project_root=self.config.general.working_directory,
+            project_root=config.general.working_directory,
             limit=max(1, self.config.memory.max_injected_items),
         )
         return _memory_texts_with_budget(items, self.config.memory.max_injected_tokens)
@@ -770,36 +882,49 @@ class TelegramBridge:
         chat_id: int,
         text: str,
         attachments: tuple[UserAttachment, ...] = (),
+        resume_existing: bool = False,
     ):
         if self.daemon_client is None:
             yield TelegramError("Daemon client is not configured.")
             return
 
         state = self.state_for(chat_id)
-        try:
-            started = await self.daemon_client.start_run(
-                text,
-                kind="chat",
-                provider=self.config.general.default_provider,
-                model=self.config.general.default_model,
-                working_directory=str(self.config.general.working_directory),
-                surface="telegram:daemon",
-                telegram_chat_id=chat_id,
-                session=session_to_payload(state.session),
-                attachments=[attachment.as_payload() for attachment in attachments],
-            )
-        except Exception as exc:
-            yield TelegramError(f"Could not start daemon run: {exc}")
-            return
+        runtime = state.runtime_config or self.config
+        if resume_existing:
+            started = {"run": {"run_id": state.daemon_run_id or state.run_id}}
+        else:
+            start = self.daemon_client.start_run
+            if state.run_id and hasattr(self.daemon_client, "continue_run"):
+                async def start(message: str, **payload: Any) -> dict[str, Any]:
+                    payload.pop("working_directory", None)
+                    return await self.daemon_client.continue_run(state.run_id, message, **payload)
+            try:
+                started = await start(
+                    text,
+                    kind="chat",
+                    provider=runtime.general.default_provider,
+                    model=runtime.general.default_model,
+                    working_directory=str(runtime.general.working_directory),
+                    surface="telegram:daemon",
+                    telegram_chat_id=chat_id,
+                    session=session_to_payload(state.session),
+                    attachments=[attachment.as_payload() for attachment in attachments],
+                )
+            except Exception as exc:
+                yield TelegramError(f"Could not start daemon run: {exc}")
+                return
 
         run = _object_payload(started.get("run"))
         run_id = str(run.get("run_id", ""))
         if not run_id:
             yield TelegramError("Daemon did not return a run id.")
             return
+        continued = state.run_id == run_id
+        state.run_id = run_id
         state.daemon_run_id = run_id
-        state.daemon_event_id = 0
-        event_cursor = 0
+        if not continued:
+            state.daemon_event_id = 0
+        event_cursor = state.daemon_event_id
         assistant_chunks: list[str] = []
         yielded_done = False
         yield TelegramToolNotice(f"🚀 Run {_short_run_id(run_id)} started.")
@@ -851,9 +976,11 @@ class TelegramBridge:
                         await self._archive_event(chat_id, "assistant_message", {"content": assistant_text, "run_id": run_id})
                 if not yielded_done:
                     yield TelegramDone(None)
+                if hasattr(self.daemon_client, "get_session"):
+                    saved = await self.daemon_client.get_session(run_id)
+                    state.session = session_from_payload(saved.get("session"))
                 if state.daemon_run_id == run_id:
                     state.daemon_run_id = None
-                    state.daemon_event_id = 0
                 return
             await asyncio.sleep(max(0.1, self.config.daemon.poll_interval))
 
@@ -1128,6 +1255,10 @@ def _short_run_id(run_id: str) -> str:
 async def _telegram_events_from_daemon_event(run_id: str, event: dict[str, Any]):
     data = _object_payload(event.get("data"))
     event_type = str(event.get("type", ""))
+    if event.get("type") == "run_continued":
+        yield TelegramToolNotice("Continuing task.", tool_name="task_turn")
+        return
+
     if event_type == "assistant_delta":
         yield TelegramText(str(data.get("text", "")))
         return

@@ -8,6 +8,7 @@ import base64
 import mimetypes
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
@@ -30,11 +31,8 @@ from libre_claw.core.heartbeat import HeartbeatError, heartbeat_prompt, parse_he
 from libre_claw.core.permissions import PermissionResolution
 from libre_claw.core.session import UserAttachment
 from libre_claw.kimi import normalize_moonshot_selection
-from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
-from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
-from libre_claw.providers.moonshot_catalog import MOONSHOT_MODEL_PRESETS
-from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
-from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
+from libre_claw.providers.model_display import model_capability_summary
+from libre_claw.providers.model_catalog import ModelCatalog, ModelInfo, discover_models
 from libre_claw.telegram.auth import TelegramAuth
 from libre_claw.telegram.bridge import (
     TelegramBridge,
@@ -66,6 +64,8 @@ TELEGRAM_TOOL_LOG_UPDATE_INTERVAL_SECONDS = 8.0
 TELEGRAM_TOOL_LOG_UPDATE_EVENT_INTERVAL = 12
 TELEGRAM_MAX_IMAGE_BYTES = 8 * 1024 * 1024
 TELEGRAM_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+TELEGRAM_MODEL_PAGE_SIZE = 12
+TELEGRAM_MODEL_MENU_LIMIT = 128
 TELEGRAM_DOCUMENT_EXTENSIONS = frozenset(
     {
         ".csv",
@@ -103,10 +103,11 @@ PERMISSION_CALLBACKS: dict[str, tuple[PermissionResolution, str, str]] = {
 
 
 @dataclass(frozen=True)
-class TelegramModelPreset:
+class TelegramModelMenu:
     provider: str
-    model: str
-    label: str
+    catalog: ModelCatalog
+    user_id: int
+    scope: tuple[int | None, int | None]
 
 
 @dataclass(frozen=True)
@@ -123,30 +124,8 @@ TELEGRAM_PROVIDER_LABELS: dict[str, str] = {
     "openrouter": "OpenRouter",
     "moonshot": "Kimi Code / Moonshot",
     "ollama": "Ollama Cloud/Local",
+    "llamacpp": "llama.cpp",
     "codex": "OpenAI Codex",
-}
-
-TELEGRAM_MODEL_PRESETS: dict[str, tuple[TelegramModelPreset, ...]] = {
-    "ollama": tuple(TelegramModelPreset("ollama", preset.model, preset.label) for preset in OLLAMA_MODEL_PRESETS),
-    "openrouter": (
-        *(TelegramModelPreset("openrouter", preset.model, preset.label) for preset in OPENROUTER_MODEL_PRESETS),
-    ),
-    "moonshot": tuple(
-        TelegramModelPreset("moonshot", preset.model, preset.label)
-        for preset in MOONSHOT_MODEL_PRESETS
-    ),
-    "openai": (
-        TelegramModelPreset("openai", "gpt-5.5", "GPT-5.5"),
-        TelegramModelPreset("openai", "gpt-4o", "GPT-4o"),
-        TelegramModelPreset("openai", "gpt-4.1", "GPT-4.1"),
-        TelegramModelPreset("openai", "o3", "o3"),
-        TelegramModelPreset("openai", "o4-mini", "o4-mini"),
-        TelegramModelPreset("openai", "codex-mini", "Codex Mini"),
-    ),
-    "codex": tuple(TelegramModelPreset("codex", preset.model, preset.label) for preset in CODEX_MODEL_PRESETS),
-    "anthropic": tuple(
-        TelegramModelPreset("anthropic", preset.model, preset.label) for preset in ANTHROPIC_MODEL_PRESETS
-    ),
 }
 
 try:
@@ -169,6 +148,7 @@ class TelegramHandlers:
         self._expand_callback_ids: dict[str, TelegramExpandablePayload] = {}
         self._expand_callback_counter = 0
         self._recent_document_paths: dict[int, list[Path]] = {}
+        self._model_menus: dict[str, TelegramModelMenu] = {}
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -316,6 +296,34 @@ class TelegramHandlers:
         response = await self.bridge.run_command_text(text)
         await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
 
+    async def agents(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        tokens = context.args or []
+        action = "agent_cancel" if tokens and tokens[0] == "cancel" else "agents"
+        response = await self.bridge.task_control_text(update.effective_chat.id, action, " ".join(tokens[1:]))
+        await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
+
+    async def plan(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        response = await self.bridge.task_control_text(update.effective_chat.id, "plan", " ".join(context.args or []))
+        await update.effective_message.reply_text(response)
+
+    async def queue(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        response = await self.bridge.task_control_text(update.effective_chat.id, "queue", " ".join(context.args or []))
+        await update.effective_message.reply_text(response)
+
+    async def resume(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        response = await self.bridge.resume_command_text(update.effective_chat.id, " ".join(context.args or []))
+        await update.effective_message.reply_text(response)
+        if response.startswith("Resumed") and self.bridge.state_for(update.effective_chat.id).daemon_run_id:
+            await self.message(update, context, resume_only=True)
+
     async def compact(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
@@ -377,6 +385,10 @@ class TelegramHandlers:
                 provider_config if isinstance(provider_config, Mapping) else {},
                 selected_model,
             )
+        chat = getattr(update, "effective_chat", None)
+        state = self.bridge.state_for(chat.id) if chat is not None else None
+        if state is not None and state.runtime_config is not None:
+            state.runtime_config = _replace_general(state.runtime_config, default_provider=provider, default_model=selected_model)
         self.bridge.config = _replace_general(self.bridge.config, default_provider=provider, default_model=selected_model)
         response = f"Model set to {provider}:{selected_model}."
         daemon_note = await self._sync_daemon_model(provider, selected_model, persist_global=persist_global)
@@ -484,7 +496,7 @@ class TelegramHandlers:
 
         await update.effective_message.reply_text("Usage: /heartbeat status|once|start [every 30 minutes|1h]|stop")
 
-    async def message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def message(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *, resume_only: bool = False) -> None:
         if not await self._authorized(update):
             return
         attachments, attachment_warnings = await _telegram_image_attachments(update.effective_message, update.effective_chat.id)
@@ -506,8 +518,11 @@ class TelegramHandlers:
                 return
         state = self.bridge.state_for(chat_id)
         if state.task is not None and not state.task.done():
-            await self.bridge.cancel_async(chat_id)
-            await update.effective_message.reply_text("↻ Previous run cancelled. Starting the new message.")
+            if attachments:
+                await update.effective_message.reply_text("Wait for this turn to finish before sending another image, or use /stop.")
+            else:
+                await update.effective_message.reply_text(await self.bridge.task_control_text(chat_id, "queue", text))
+            return
         placeholder = await update.effective_message.reply_text("Libre Claw is thinking...")
         accumulated = ""
         last_update = time.monotonic()
@@ -528,13 +543,15 @@ class TelegramHandlers:
                 typing_task = None
 
         async def runner() -> None:
-            nonlocal accumulated, http_done, http_started, last_update, saw_tool_notice, tool_event_count, tool_log_dirty, tool_log_last_update, tool_log_message
+            nonlocal accumulated, http_done, http_started, last_update, saw_tool_notice, tool_event_count, tool_log_dirty, tool_log_last_update, tool_log_message, placeholder
             try:
                 stream = (
                     self.bridge.stream_message(chat_id, text, attachments=attachments)
                     if attachments
                     else self.bridge.stream_message(chat_id, text)
                 )
+                if resume_only:
+                    stream = self.bridge._stream_daemon_message(chat_id, "", resume_existing=True)
                 async for event in stream:
                     if isinstance(event, TelegramText):
                         accumulated += event.text
@@ -551,6 +568,15 @@ class TelegramHandlers:
                             last_update = time.monotonic()
                         continue
                     if isinstance(event, TelegramToolNotice):
+                        if event.tool_name == "task_turn":
+                            placeholder = await update.effective_message.reply_text(event.text)
+                            accumulated = ""
+                            saw_tool_notice = False
+                            tool_log_message = None
+                            tool_notices.clear()
+                            tool_event_count = http_started = http_done = 0
+                            tool_log_dirty = False
+                            continue
                         saw_tool_notice = True
                         accumulated = ""
                         tool_event_count += 1
@@ -795,10 +821,12 @@ class TelegramHandlers:
                 )
             return
         if data == "cfg:cancel":
+            self._expire_model_menus(query)
             await query.answer("Cancelled.")
             await query.edit_message_text("Model configuration cancelled.")
             return
         if data == "cfg:providers":
+            self._expire_model_menus(query)
             await query.answer("Providers")
             await query.edit_message_text(
                 _model_configuration_text(self.bridge.config),
@@ -811,27 +839,56 @@ class TelegramHandlers:
                 await query.answer("Unknown provider.", show_alert=True)
                 return
             await query.answer(TELEGRAM_PROVIDER_LABELS[provider])
-            await query.edit_message_text(
-                _provider_model_text(self.bridge.config, provider),
-                reply_markup=_model_keyboard(self.bridge.config, provider),
-            )
+            await self._show_provider_models(query, provider)
             return
-        if data.startswith("cfg:model:"):
+        if data.startswith(("cfg:model:", "cfg:page:", "cfg:refresh:", "cfg:manual:")):
             parts = data.split(":")
-            if len(parts) != 4:
+            action = parts[1]
+            if len(parts) != (4 if action in {"model", "page"} else 3):
                 await query.answer("Invalid model selection.", show_alert=True)
                 return
-            _, _, provider, index_text = parts
-            provider = _canonical_telegram_provider(provider)
-            preset = _model_preset_at(provider, index_text)
-            if preset is None:
+            menu = self._model_menus.get(parts[2])
+            if menu is None or menu.user_id != query.from_user.id or menu.scope != _model_menu_scope(query):
+                await query.answer("Model menu expired. Open /model again.", show_alert=True)
+                return
+            if action == "refresh":
+                await query.answer("Refreshing models...")
+                await self._show_provider_models(query, menu.provider, refresh=True)
+                return
+            if action == "manual":
+                await query.answer("Enter a model ID with /model.")
+                await query.edit_message_text(
+                    f"Send /model {menu.provider}:<model-id>\n"
+                    "Add --global to save it as the default.\n\n"
+                    "You can use any model ID supported by your provider.",
+                    reply_markup=_model_keyboard(self.bridge.config, menu.provider, menu.catalog.models, parts[2]),
+                )
+                return
+            if not parts[3].isascii() or not parts[3].isdigit() or len(parts[3]) > 8:
+                await query.answer("Invalid model selection.", show_alert=True)
+                return
+            index = int(parts[3])
+            if action == "page":
+                if index >= _model_page_count(menu.catalog.models):
+                    await query.answer("Unknown model page.", show_alert=True)
+                    return
+                await query.answer("Models")
+                await self._show_provider_models(query, menu.provider, catalog=menu.catalog, page=index)
+                return
+            if index >= len(menu.catalog.models):
                 await query.answer("Unknown model.", show_alert=True)
                 return
+            preset = menu.catalog.models[index]
+            self._expire_model_menus(query)
             self.bridge.config = _replace_general(
                 self.bridge.config,
                 default_provider=preset.provider,
                 default_model=preset.model,
             )
+            chat = getattr(update, "effective_chat", None)
+            state = self.bridge.state_for(chat.id) if chat is not None else None
+            if state is not None and state.runtime_config is not None:
+                state.runtime_config = _replace_general(state.runtime_config, default_provider=preset.provider, default_model=preset.model)
             daemon_note = await self._sync_daemon_model(preset.provider, preset.model)
             await query.answer("Model selected.")
             text = _model_selected_text(preset)
@@ -840,6 +897,34 @@ class TelegramHandlers:
             elif self.bridge.daemon_client is None:
                 text += "\n\nTelegram session only. Use /model <provider>:<model> --global to update the TUI/default config."
             await query.edit_message_text(text)
+
+    def _expire_model_menus(self, query: Any) -> None:
+        scope = _model_menu_scope(query)
+        for token, menu in tuple(self._model_menus.items()):
+            if menu.scope == scope:
+                del self._model_menus[token]
+
+    async def _show_provider_models(
+        self,
+        query: Any,
+        provider: str,
+        *,
+        refresh: bool = False,
+        catalog: ModelCatalog | None = None,
+        page: int = 0,
+    ) -> None:
+        if catalog is None:
+            catalog = await discover_models(self.bridge.config, provider, refresh=refresh)
+        # A callback index belongs to this immutable catalog, never a newer discovery.
+        token = secrets.token_hex(8)
+        self._expire_model_menus(query)
+        self._model_menus[token] = TelegramModelMenu(provider, catalog, query.from_user.id, _model_menu_scope(query))
+        while len(self._model_menus) > TELEGRAM_MODEL_MENU_LIMIT:
+            self._model_menus.pop(next(iter(self._model_menus)))
+        await query.edit_message_text(
+            _provider_model_text(self.bridge.config, provider, catalog, page),
+            reply_markup=_model_keyboard(self.bridge.config, provider, catalog.models, token, page),
+        )
 
     async def _sync_daemon_model(self, provider: str, model: str, *, persist_global: bool = False) -> str:
         if self.bridge.daemon_client is None:
@@ -1695,6 +1780,9 @@ def _telegram_help_text() -> str:
             "/new - Start a fresh chat session",
             "/restart - Restart the Libre Claw daemon/Telegram stack",
             "/update [--dry-run] - Safely update Libre Claw from origin/main",
+            "/plan on|off|set|edit|done - Manage a read-only planning mode and task steps",
+            "/queue <message> - Queue a follow-up",
+            "/resume <run-id> - Restore a saved task",
             "/model - Open provider/model buttons",
             "/model <provider>:<name> - Switch model by text",
             "/models - Open provider/model buttons",
@@ -1751,6 +1839,10 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("shutdown", "Shut down Libre Claw"),
         ("btw", "Add a side note"),
         ("steer", "Steer future turns"),
+        ("agents", "Inspect or cancel subagents"),
+        ("plan", "Plan without changing files"),
+        ("queue", "Queue a follow-up"),
+        ("resume", "Resume a saved task"),
     )
 
 
@@ -1790,6 +1882,8 @@ def _canonical_telegram_provider(provider: str) -> str:
         return "ollama"
     if normalized in {"openai-codex", "openai_codex"}:
         return "codex"
+    if normalized in {"llama.cpp", "llama-cpp", "llama_cpp"}:
+        return "llamacpp"
     return normalized
 
 
@@ -1892,7 +1986,7 @@ def _model_configuration_text(config: Any) -> str:
     )
 
 
-def _provider_model_text(config: Any, provider: str) -> str:
+def _provider_model_text(config: Any, provider: str, catalog: ModelCatalog, page: int = 0) -> str:
     current_provider = _canonical_telegram_provider(str(config.general.default_provider))
     current_model = str(config.general.default_model)
     label = TELEGRAM_PROVIDER_LABELS.get(provider, provider)
@@ -1902,12 +1996,23 @@ def _provider_model_text(config: Any, provider: str) -> str:
         f"Provider: {label}",
         f"Current model: {current_provider}:{current_model}",
         "",
-        "Select a model:",
     ]
+    if catalog.error:
+        lines.append("Live catalog unavailable.")
+        lines.append(catalog.error)
+        if catalog.models:
+            lines.append("Showing saved and configured models.")
+    if catalog.models:
+        lines.append(
+            f"Select a model ({len(catalog.models)} available, page {page + 1}/{_model_page_count(catalog.models)}):"
+        )
+    else:
+        lines.append("No models found. Refresh or enter a model ID.")
+    lines.extend(["", f"Or send /model {provider}:<model-id> [--global]"])
     return "\n".join(lines)
 
 
-def _model_selected_text(preset: TelegramModelPreset) -> str:
+def _model_selected_text(preset: ModelInfo) -> str:
     label = TELEGRAM_PROVIDER_LABELS.get(preset.provider, preset.provider)
     return "\n".join(
         [
@@ -1915,6 +2020,7 @@ def _model_selected_text(preset: TelegramModelPreset) -> str:
             "",
             f"Provider: {label}",
             f"Model: {preset.model}",
+            model_capability_summary(preset),
             "",
             "Your next Telegram message will use this model.",
         ]
@@ -1925,11 +2031,10 @@ def _provider_keyboard(config: Any) -> Any:
     provider = _canonical_telegram_provider(str(config.general.default_provider))
     buttons: list[list[Any]] = []
     row: list[Any] = []
-    for provider_name in TELEGRAM_MODEL_PRESETS:
+    for provider_name in TELEGRAM_PROVIDER_LABELS:
         label = TELEGRAM_PROVIDER_LABELS[provider_name]
-        count = len(TELEGRAM_MODEL_PRESETS.get(provider_name, ()))
         prefix = "✓ " if provider_name == provider else ""
-        row.append(InlineKeyboardButton(f"{prefix}{label} ({count})", callback_data=f"cfg:provider:{provider_name}"))
+        row.append(InlineKeyboardButton(f"{prefix}{label}", callback_data=f"cfg:provider:{provider_name}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
@@ -1939,12 +2044,26 @@ def _provider_keyboard(config: Any) -> Any:
     return InlineKeyboardMarkup(buttons)
 
 
-def _model_keyboard(config: Any, provider: str) -> Any:
+def _model_menu_scope(query: Any) -> tuple[int | None, int | None]:
+    message = getattr(query, "message", None)
+    return getattr(message, "chat_id", None), getattr(message, "message_id", None)
+
+
+def _model_page_count(models: Sequence[ModelInfo]) -> int:
+    return max(1, (len(models) + TELEGRAM_MODEL_PAGE_SIZE - 1) // TELEGRAM_MODEL_PAGE_SIZE)
+
+
+def _model_keyboard(
+    config: Any,
+    provider: str,
+    models: Sequence[ModelInfo],
+    token: str,
+    page: int = 0,
+) -> Any:
     current_provider = _canonical_telegram_provider(str(config.general.default_provider))
     current_model = str(config.general.default_model)
-    presets = TELEGRAM_MODEL_PRESETS.get(provider, ())
-    indexed_presets = list(enumerate(presets))
-    indexed_presets.sort(
+    indexed_models = list(enumerate(models))
+    indexed_models.sort(
         key=lambda item: (
             not (provider == current_provider and item[1].model == current_model),
             item[0],
@@ -1952,15 +2071,29 @@ def _model_keyboard(config: Any, provider: str) -> Any:
     )
     buttons: list[list[Any]] = []
     row: list[Any] = []
-    for index, preset in indexed_presets:
-        selected = provider == current_provider and preset.model == current_model
+    start = page * TELEGRAM_MODEL_PAGE_SIZE
+    for index, model in indexed_models[start:start + TELEGRAM_MODEL_PAGE_SIZE]:
+        selected = provider == current_provider and model.model == current_model
         prefix = "✓ " if selected else ""
-        row.append(InlineKeyboardButton(f"{prefix}{preset.label}", callback_data=f"cfg:model:{provider}:{index}"))
+        row.append(InlineKeyboardButton(f"{prefix}{model.label}", callback_data=f"cfg:model:{token}:{index}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
+    navigation = []
+    if page > 0:
+        navigation.append(InlineKeyboardButton("‹ Previous", callback_data=f"cfg:page:{token}:{page - 1}"))
+    if page + 1 < _model_page_count(models):
+        navigation.append(InlineKeyboardButton("Next ›", callback_data=f"cfg:page:{token}:{page + 1}"))
+    if navigation:
+        buttons.append(navigation)
+    buttons.append(
+        [
+            InlineKeyboardButton("Refresh", callback_data=f"cfg:refresh:{token}"),
+            InlineKeyboardButton("Enter model ID", callback_data=f"cfg:manual:{token}"),
+        ]
+    )
     buttons.append(
         [
             InlineKeyboardButton("‹ Providers", callback_data="cfg:providers"),
@@ -1968,13 +2101,3 @@ def _model_keyboard(config: Any, provider: str) -> Any:
         ]
     )
     return InlineKeyboardMarkup(buttons)
-
-
-def _model_preset_at(provider: str, index_text: str) -> TelegramModelPreset | None:
-    if not index_text.isdigit():
-        return None
-    presets = TELEGRAM_MODEL_PRESETS.get(provider, ())
-    index = int(index_text)
-    if index < 0 or index >= len(presets):
-        return None
-    return presets[index]

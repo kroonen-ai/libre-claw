@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import structlog
 
+from libre_claw.core.instructions import InstructionLoader, ProjectInstruction, render_instructions, tool_paths
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.session import (
     ContentBlock,
@@ -62,6 +66,11 @@ class AgentPermissionRequest:
 
 
 @dataclass(frozen=True)
+class AgentSubagentUpdate:
+    snapshot: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class AgentDone:
     usage: Usage | None = None
 
@@ -87,6 +96,7 @@ AgentEvent = (
     | AgentDone
     | AgentError
     | AgentFallback
+    | AgentSubagentUpdate
 )
 SkillProvider = Callable[[str], Sequence[str] | Awaitable[Sequence[str]]]
 SoulProvider = Callable[[], Sequence[str] | Awaitable[Sequence[str]]]
@@ -122,6 +132,7 @@ class Agent:
         fallback_recheck_after_attempts: int = 3,
         deadline_monotonic: float | None = None,
         deadline_reserve_seconds: float = 0.0,
+        checkpoint_callback: Callable[[Session], Awaitable[None]] | None = None,
     ) -> None:
         self.session = session
         self.provider = provider
@@ -143,6 +154,19 @@ class Agent:
         self.fallback_recheck_after_attempts = max(1, fallback_recheck_after_attempts)
         self.deadline_monotonic = deadline_monotonic
         self.deadline_reserve_seconds = max(0.0, deadline_reserve_seconds)
+        self.checkpoint_callback = checkpoint_callback
+        context = self.tool_registry.context
+        self._instruction_loader = InstructionLoader(context.working_directory) if context else None
+        self._instruction_paths: list[Path] = []
+        self._active_instructions: list[ProjectInstruction] = []
+        self._known_instructions: dict[Path, str] = {}
+        self.subagents = None
+        if context is not None:
+            context.shared_state["agent_session"] = session
+            if "subagent_spawn" in tool_registry:
+                from libre_claw.core.subagents import SubagentManager
+                self.subagents = SubagentManager(self)
+                context.shared_state["subagent_manager"] = self.subagents
         self._tool_schemas = self.tool_registry.schemas()
         self._serialized_tool_schemas = json.dumps(
             self._tool_schemas,
@@ -161,7 +185,37 @@ class Agent:
         user_message: str,
         attachments: Sequence[UserAttachment] = (),
     ) -> AsyncIterator[AgentEvent]:
+        if self.subagents is not None:
+            self.subagents.begin_turn()
+        context = self.tool_registry.context
+        if context is not None:
+            context.shared_state["agent_session"] = self.session
+            if self.subagents is not None:
+                context.shared_state["subagent_manager"] = self.subagents
+        try:
+            async for event in self._run_turn(user_message, attachments):
+                yield event
+        finally:
+            if self.subagents is not None:
+                await self.subagents.close()
+            await self._checkpoint()
+        if self.subagents is not None:
+            while not self.subagents.events.empty():
+                event = self.subagents.events.get_nowait()
+                if not isinstance(event, AgentPermissionRequest) or not event.future.done():
+                    yield event
+
+    async def _checkpoint(self) -> None:
+        if self.checkpoint_callback is not None:
+            await self.checkpoint_callback(self.session)
+
+    async def _run_turn(
+        self, user_message: str, attachments: Sequence[UserAttachment],
+    ) -> AsyncIterator[AgentEvent]:
+        self.session.recover_interrupted_tools()
         self.session.add_user_message(user_message, attachments=attachments)
+        await self._checkpoint()
+        await self._refresh_instructions()
         self._active_soul = await self._load_soul()
         self._active_skills = await self._load_skills(user_message)
         self._active_memory = await self._load_memory(user_message)
@@ -170,8 +224,15 @@ class Agent:
         provider_chain = (("primary", self.provider), *self.fallback_providers)
         active_provider_index = 0
         fallback_calls_since_recheck = 0
+        metadata_loaded: set[int] = set()
 
         while True:
+            steering = self.session.consume_steering()
+            for message in steering:
+                self.session.add_user_message(message)
+            if steering:
+                await self._checkpoint()
+            await self._refresh_instructions()
             if self._deadline_expired():
                 yield AgentError("Run deadline reached before a final response was produced.")
                 return
@@ -189,7 +250,10 @@ class Agent:
 
             while True:
                 try:
-                    self._maybe_compact_session()
+                    if id(active_provider) not in metadata_loaded:
+                        await self._ensure_provider_metadata(active_provider)
+                        metadata_loaded.add(id(active_provider))
+                    self._maybe_compact_session(active_provider)
                     async for event in self._stream_provider(active_provider):
                         if isinstance(event, TextDelta):
                             assistant_chunks.append(event.text)
@@ -294,6 +358,11 @@ class Agent:
 
             if not tool_calls:
                 self._save_assistant_text(assistant_chunks, reasoning_chunks)
+                await self._checkpoint()
+                if self.session.pending_steering:
+                    continue
+                if self.subagents is not None:
+                    turn_usage = combine_usage(turn_usage, self.subagents.total_usage())
                 yield AgentDone(turn_usage)
                 return
 
@@ -303,6 +372,7 @@ class Agent:
                 return
 
             self._save_assistant_tool_request(assistant_chunks, reasoning_chunks, tool_calls)
+            await self._checkpoint()
 
             immediate_results: dict[str, ToolResult] = {}
             executable_calls: list[ToolCall] = []
@@ -312,6 +382,14 @@ class Agent:
                     tool = self.tool_registry.get(call.name)
                 except ToolRegistryError as exc:
                     immediate_results[call.id] = ToolResult(error=str(exc))
+                    continue
+
+                if getattr(self.session, "mode", "default") == "plan" and not tool.is_read_only(call.arguments):
+                    immediate_results[call.id] = ToolResult(error="Plan mode permits read-only tools. Switch to default mode to make changes.")
+                    continue
+
+                if self.session.pending_steering:
+                    immediate_results[call.id] = ToolResult(error="New user guidance is pending. Reconsider this action after reading the next user message.")
                     continue
 
                 decision = self.permission_manager.check(call, tool)
@@ -348,7 +426,35 @@ class Agent:
 
                 executable_calls.append(call)
 
-            executed = await self._execute_tools(executable_calls)
+            execution = asyncio.create_task(self._execute_tools(executable_calls))
+            queued: asyncio.Task[AgentEvent] | None = None
+            try:
+                while not execution.done():
+                    if self.subagents is None:
+                        await execution
+                        break
+                    queued = asyncio.create_task(self.subagents.events.get())
+                    done, _ = await asyncio.wait((execution, queued), return_when=asyncio.FIRST_COMPLETED)
+                    if queued in done:
+                        event = queued.result()
+                        if not isinstance(event, AgentPermissionRequest) or not event.future.done():
+                            yield event
+                    else:
+                        queued.cancel()
+                        await asyncio.gather(queued, return_exceptions=True)
+                if self.subagents is not None:
+                    while not self.subagents.events.empty():
+                        event = self.subagents.events.get_nowait()
+                        if not isinstance(event, AgentPermissionRequest) or not event.future.done():
+                            yield event
+                executed = execution.result()
+            finally:
+                if queued is not None and not queued.done():
+                    queued.cancel()
+                    await asyncio.gather(queued, return_exceptions=True)
+                if not execution.done():
+                    execution.cancel()
+                    await asyncio.gather(execution, return_exceptions=True)
             for call, result in zip(executable_calls, executed, strict=True):
                 immediate_results[call.id] = result
 
@@ -363,6 +469,7 @@ class Agent:
                 for attachment in result.attachments
             )
             self.session.add_tool_result_blocks(result_blocks)
+            await self._checkpoint()
 
             for call, result in ordered_results:
                 yield AgentToolResult(call=call, result=result)
@@ -399,14 +506,23 @@ class Agent:
         chunks.clear()
         reasoning_chunks.clear()
 
-    def _maybe_compact_session(self) -> None:
+    def _maybe_compact_session(self, provider: LLMProvider | None = None) -> None:
+        provider = provider or self.provider
         estimated_tokens = estimate_context_tokens(
             self.session.messages,
             summary=self.session.summary,
             extra_texts=(self._build_system_prompt(), self._serialized_tool_schemas),
         )
         estimated_tokens = max(estimated_tokens, self._last_provider_input_tokens)
-        threshold = max(1, int(self.context_window_tokens * self.auto_compact_threshold))
+        model_info = getattr(provider, "model_info", None)
+        discovered_context = getattr(model_info, "context_window_tokens", None)
+        context_window = (
+            discovered_context
+            if getattr(provider, "auto_context_window", True)
+            and isinstance(discovered_context, int) and discovered_context > 0
+            else self.context_window_tokens
+        )
+        threshold = max(1, int(context_window * self.auto_compact_threshold))
         if estimated_tokens >= threshold:
             self.session.compact(keep_last=self.compact_keep_last)
             self._last_provider_input_tokens = 0
@@ -415,6 +531,12 @@ class Agent:
         parts = [self.system_prompt]
         if self.system_prompt_extra:
             parts.append(self.system_prompt_extra)
+        control_prompt = self.session.control_prompt()
+        if control_prompt:
+            parts.append(control_prompt)
+        instructions = render_instructions(self._active_instructions)
+        if instructions:
+            parts.append(instructions)
         if self._active_soul:
             parts.append(
                 "Libre Claw soul/persona customization. These notes may shape voice, style, taste, "
@@ -438,6 +560,10 @@ class Agent:
             for schema in self._tool_schemas
             if str(schema.get("name", "")).strip()
         ]
+        if "task_history" in tool_names:
+            parts.append("Use task_history to retrieve original requirements, decisions or tool results when the compacted context is incomplete; do not guess omitted details.")
+        if "task_checkpoint" in tool_names:
+            parts.append("For complex work, maintain task_checkpoint after important decisions and verification so requirements and unfinished work survive compaction.")
         if tool_names:
             parts.append("Available tools for this run: " + ", ".join(tool_names) + ".")
         else:
@@ -458,62 +584,124 @@ class Agent:
             )
         return "\n\n".join(parts)
 
+    async def _refresh_instructions(self, paths: Sequence[Path] = ()) -> bool:
+        if self._instruction_loader is None:
+            return False
+        for path in paths:
+            if path not in self._instruction_paths:
+                self._instruction_paths.append(path)
+        self._instruction_paths = self._instruction_paths[-32:]
+        instructions = await asyncio.to_thread(self._instruction_loader.load, self._instruction_paths)
+        current = {item.path: item.fingerprint for item in instructions}
+        changed = any(self._known_instructions.get(path) != digest for path, digest in current.items())
+        self._active_instructions = instructions
+        self._known_instructions = current
+        return changed
+
     async def _execute_tools(self, calls: list[ToolCall]) -> list[ToolResult]:
         if not calls:
             return []
-        remaining = self._remaining_seconds()
-        if remaining is None:
-            return list(
-                await asyncio.gather(*(self.tool_registry.execute(call) for call in calls))
-            )
-        available = remaining - self.deadline_reserve_seconds
-        if available <= 0:
-            return [
-                ToolResult(
-                    error=(
-                        "Run deadline is near. Do not call more tools; return the best final answer now."
-                    )
-                )
-                for _ in calls
-            ]
-        tasks = [
-            asyncio.create_task(self.tool_registry.execute(call))
-            for call in calls
-        ]
-        try:
-            _, pending = await asyncio.wait(tasks, timeout=available)
-        except asyncio.CancelledError:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        context = self.tool_registry.context
+        paths = [path for call in calls for path in tool_paths(call.arguments, context.working_directory)] if context else []
+        instructions_changed = await self._refresh_instructions(paths)
 
-        results: list[ToolResult] = []
-        for task in tasks:
-            if task in pending:
-                results.append(
-                    ToolResult(
-                        error=(
-                            "Tool execution was stopped to preserve time for a final answer "
-                            "before the run deadline."
-                        )
-                    )
-                )
-                continue
+        async def execute_one(call: ToolCall) -> ToolResult:
+            if self.session.pending_steering:
+                return ToolResult(error="New user guidance is pending. Reconsider this action after reading the next user message.")
+            tool = self.tool_registry.get(call.name)
+            if getattr(self.session, "mode", "default") == "plan" and not tool.is_read_only(call.arguments):
+                return ToolResult(error="Plan mode permits read-only tools. Switch to default mode to make changes.")
+            if not tool.is_read_only(call.arguments):
+                refreshed = await self._refresh_instructions()
+                if instructions_changed or refreshed:
+                    return ToolResult(error="Additional or changed project instructions were loaded for these paths. Review the scoped instructions in the system prompt and retry this action.")
+            if self.subagents is not None:
+                error = self.subagents.ownership_error(call)
+                if error:
+                    return ToolResult(error=error)
+            if call.name in {"write_file", "edit_file", "apply_patch"}:
+                # File writes run in worker threads; cancellation cannot stop those threads.
+                # Finish the in-flight operation before releasing worker ownership.
+                operation = asyncio.create_task(self.tool_registry.execute(call))
+                try:
+                    return await asyncio.shield(operation)
+                except asyncio.CancelledError:
+                    await operation
+                    raise
+            return await self.tool_registry.execute(call)
+
+        async def execute_group(group: list[ToolCall]) -> list[ToolResult]:
+            remaining = self._remaining_seconds()
+            available = None if remaining is None else remaining - self.deadline_reserve_seconds
+            if available is not None and available <= 0:
+                return [ToolResult(error="Run deadline is near. Do not call more tools; return the best final answer now.") for _ in group]
+            tasks = [asyncio.create_task(execute_one(call)) for call in group]
             try:
-                results.append(task.result())
-            except Exception as exc:
-                results.append(ToolResult(error=str(exc)))
+                _, pending = await asyncio.wait(tasks, timeout=available)
+            except asyncio.CancelledError:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            results = []
+            for task in tasks:
+                if task in pending:
+                    results.append(ToolResult(error="Tool execution was stopped to preserve time for a final answer before the run deadline."))
+                else:
+                    try:
+                        results.append(task.result())
+                    except Exception as exc:
+                        results.append(ToolResult(error=str(exc)))
+            return results
+
+        # A mixed batch may contain dependencies through filesystem or process state.
+        # Only explicitly read-only batches run concurrently; shared browser/control state is serial.
+        concurrent = all(
+            self.tool_registry.get(call.name).is_read_only(call.arguments)
+            and not call.name.startswith(("subagent_", "browser_"))
+            for call in calls
+        )
+        if concurrent:
+            return await execute_group(calls)
+        results = []
+        for call in calls:
+            results.extend(await execute_group([call]))
         return results
+
+    async def _ensure_provider_metadata(self, provider: LLMProvider) -> None:
+        ensure = getattr(provider, "ensure_model_info", None)
+        if not callable(ensure):
+            return
+        remaining = self._remaining_seconds()
+        if remaining is not None and remaining <= 0:
+            raise _AgentDeadlineReached
+        try:
+            result = ensure()
+            if inspect.isawaitable(result):
+                await asyncio.wait_for(result, timeout=min(15.0, remaining) if remaining is not None else 15.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._logger.warning("model_metadata_unavailable", error=str(exc))
 
     async def _stream_provider(
         self,
         provider: LLMProvider,
     ) -> AsyncIterator[StreamEvent]:
+        if getattr(self.session, "mode", "default") == "plan":
+            from libre_claw.providers.codex import CodexProvider
+            if isinstance(provider, CodexProvider):
+                provider = copy.copy(provider)
+                provider.sandbox = "read-only"
+            elif hasattr(provider, "sandbox") or hasattr(provider, "approval_policy"):
+                yield ProviderError("Plan mode cannot enforce read-only execution for this native-tool provider.")
+                return
+        info = getattr(provider, "model_info", None)
+        self._tool_schemas = [] if getattr(info, "supports_tools", None) is False else self.tool_registry.schemas()
         stream = provider.complete(
             messages=self.session.messages,
             tools=self._tool_schemas,

@@ -4,12 +4,17 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 from uuid import uuid4
+
+from libre_claw.core.session import Session, session_from_payload, session_to_payload
 
 
 RunState = Literal["queued", "running", "blocked", "done", "failed", "cancelled"]
@@ -96,6 +101,116 @@ class RunStore:
     async def load_events(self, run_id: str) -> list[RunEvent]:
         return await asyncio.to_thread(self._load_events_sync, run_id)
 
+    async def save_session(self, run_id: str, session: Session) -> None:
+        payload = copy.deepcopy(session_to_payload(session))
+        async with self._lock:
+            record = await asyncio.to_thread(self._load_run_or_raise, run_id)
+            await asyncio.to_thread(_write_json, record.path / "session.json", payload)
+
+    async def load_session(self, run_id: str, *, recover: bool = False) -> Session:
+        record = await asyncio.to_thread(self._load_run_or_raise, run_id)
+        try:
+            text = await asyncio.to_thread((record.path / "session.json").read_text, encoding="utf-8")
+            session = session_from_payload(json.loads(text))
+        except (OSError, ValueError):
+            session = Session()
+            chunks: list[str] = []
+            for event in await self.load_events(run_id):
+                if event.type == "user_message":
+                    if chunks:
+                        session.add_assistant_message("".join(chunks))
+                        chunks.clear()
+                    session.add_user_message(str(event.data.get("content", "")))
+                elif event.type == "assistant_delta":
+                    chunks.append(str(event.data.get("text", "")))
+            if chunks:
+                session.add_assistant_message("".join(chunks))
+        if recover:
+            session.recover_interrupted_tools()
+        return session
+
+    async def set_workspace(self, run_id: str, working_directory: Path) -> RunRecord:
+        async with self._lock:
+            record = await asyncio.to_thread(self._load_run_or_raise, run_id)
+            payload = _record_to_json(record)
+            payload["working_directory"] = str(working_directory.resolve())
+            await asyncio.to_thread(_write_json, record.path / "meta.json", payload)
+            return await asyncio.to_thread(self._load_run_or_raise, run_id)
+
+    async def set_runtime(self, run_id: str, *, provider: str, model: str) -> RunRecord:
+        async with self._lock:
+            record = await asyncio.to_thread(self._load_run_or_raise, run_id)
+            payload = _record_to_json(record)
+            payload.update(provider=provider, model=model)
+            await asyncio.to_thread(_write_json, record.path / "meta.json", payload)
+            return await asyncio.to_thread(self._load_run_or_raise, run_id)
+
+    async def queue_message(self, run_id: str, message: str) -> dict[str, Any]:
+        if not message.strip() or len(message) > 100_000:
+            raise ValueError("Queued messages must contain between 1 and 100,000 characters.")
+        async with self._lock:
+            return await _settled_io(self._queue_message_sync, run_id, message)
+
+    async def queued_messages(self, run_id: str) -> list[dict[str, Any]]:
+        record = await asyncio.to_thread(self._load_run_or_raise, run_id)
+        return await asyncio.to_thread(_read_queue, record.path)
+
+    async def take_queued_message(self, run_id: str) -> dict[str, Any] | None:
+        async with self._lock:
+            return await _settled_io(self._take_queued_message_sync, run_id)
+
+    async def finish_turn(
+        self, run_id: str, state: RunState, *, plan: str = "", summary: str = "",
+        verification: str = "", diff: str = "", browser: str = "",
+        drain_queue: bool = True, hold_final_state: bool = False,
+    ) -> dict[str, Any] | None:
+        """Atomically choose a queued turn or publish completion after the session was saved."""
+        async with self._lock:
+            return await _settled_io(
+                self._finish_turn_sync, run_id, state, plan, summary, verification, diff, browser,
+                drain_queue, hold_final_state,
+            )
+
+    def _queue_message_sync(self, run_id: str, message: str) -> dict[str, Any]:
+        record = self._load_run_or_raise(run_id)
+        with _queue_file_lock(record.path):
+            items = _read_queue(record.path)
+            if len(items) >= 100:
+                raise ValueError("This task already has 100 queued messages.")
+            item = {"id": uuid4().hex, "message": message.strip(), "created_at": _now()}
+            items.append(item)
+            _write_json(record.path / "queue.json", {"messages": items})
+            return item
+
+    def _take_queued_message_sync(self, run_id: str) -> dict[str, Any] | None:
+        record = self._load_run_or_raise(run_id)
+        with _queue_file_lock(record.path):
+            return self._claim_queued_message_sync(record)
+
+    def _claim_queued_message_sync(self, record: RunRecord) -> dict[str, Any] | None:
+        items = _read_queue(record.path)
+        if not items:
+            return None
+        item = items.pop(0)
+        # A crash after this journal entry must not replay an unknown side effect.
+        self._append_event_sync(record.run_id, "queued_message_started", item)
+        _write_json(record.path / "queue.json", {"messages": items})
+        return item
+
+    def _finish_turn_sync(
+        self, run_id: str, state: RunState, plan: str, summary: str, verification: str,
+        diff: str, browser: str, drain_queue: bool, hold_final_state: bool,
+    ) -> dict[str, Any] | None:
+        record = self._load_run_or_raise(run_id)
+        with _queue_file_lock(record.path):
+            queued = self._claim_queued_message_sync(record) if state == "done" and drain_queue and not hold_final_state else None
+            self._append_event_sync(run_id, "turn_finished", {"state": state, "queued_message_id": queued["id"] if queued else None})
+            if queued is None and not hold_final_state:
+                self._append_event_sync(run_id, "run_finished", {"state": state})
+            final_state: RunState = "running" if queued is not None or hold_final_state else state
+            self._finish_run_sync(run_id, final_state, plan, summary, verification, diff, browser)
+            return queued
+
     def _create_run_sync(
         self,
         title: str,
@@ -168,13 +283,13 @@ class RunStore:
         diff: str,
         browser: str,
     ) -> RunRecord:
-        record = self._update_state_sync(run_id, state)
+        record = self._load_run_or_raise(run_id)
         _write_text(record.path / "plan.md", plan)
         _write_text(record.path / "summary.md", summary)
         _write_text(record.path / "verification.md", verification or f"Run finished with state: {state}\n")
         _write_text(record.path / "diff.patch", diff)
         _write_text(record.path / "browser.md", browser)
-        return record
+        return self._update_state_sync(run_id, state)
 
     def _list_runs_sync(self, limit: int) -> list[RunRecord]:
         if not self.root.exists():
@@ -233,6 +348,60 @@ class RunStore:
 
 def default_runs_path() -> Path:
     return Path.home() / ".libre-claw" / "runs"
+
+
+async def _settled_io(function: Any, *arguments: Any) -> Any:
+    operation = asyncio.create_task(asyncio.to_thread(function, *arguments))
+    try:
+        return await asyncio.shield(operation)
+    except asyncio.CancelledError:
+        await operation
+        raise
+
+
+@contextmanager
+def _queue_file_lock(path: Path) -> Iterator[None]:
+    """Coordinate queue claims across the TUI, daemon, and CLI RunStore instances."""
+    with (path / "queue.lock").open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _read_queue(path: Path) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads((path / "queue.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    started: set[str] = set()
+    try:
+        for line in (path / "events.jsonl").read_text(encoding="utf-8").splitlines():
+            try:
+                event = json.loads(line)
+                if event.get("type") == "queued_message_started":
+                    started.add(str(event.get("data", {}).get("id", "")))
+            except (ValueError, AttributeError):
+                continue
+    except OSError:
+        pass
+    return [item for item in payload.get("messages", []) if isinstance(item, dict) and isinstance(item.get("message"), str) and item.get("id") not in started]
 
 
 def _new_run_id() -> str:

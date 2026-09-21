@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 
 from libre_claw.config import LibreClawConfig
 from libre_claw.core.memory import MemoryStore
@@ -21,13 +22,24 @@ from libre_claw.tools_builtin import schedule as _schedule  # noqa: F401
 from libre_claw.tools_builtin import search as _search  # noqa: F401
 from libre_claw.tools_builtin import shell as _shell  # noqa: F401
 from libre_claw.tools_builtin import skills as _skills  # noqa: F401
+from libre_claw.tools_builtin import subagents as _subagents  # noqa: F401
 from libre_claw.tools_builtin import think as _think  # noqa: F401
 from libre_claw.tools_builtin import web_search as _web_search  # noqa: F401
 
 
 def create_builtin_registry(config: LibreClawConfig, memory_store: MemoryStore | None = None) -> ToolRegistry:
+    def subagent_provider_factory(provider: str, model: str, scope: Path, read_only: bool):
+        from libre_claw.providers.factory import create_provider
+        child_config = replace(config, general=replace(
+            config.general, working_directory=scope,
+            default_provider=provider or config.general.default_provider,
+            default_model=model,
+        ))
+        return create_provider(child_config, provider_name=provider or None, model=model or None)
+
     context = ToolContext(
         working_directory=Path(config.general.working_directory).resolve(),
+        subagent_provider_factory=subagent_provider_factory,
         restrict_to_working_dir=config.sandbox.restrict_to_working_dir,
         command_timeout=config.sandbox.command_timeout,
         allow_sudo=config.sandbox.allow_sudo,

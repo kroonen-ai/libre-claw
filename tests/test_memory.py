@@ -204,8 +204,9 @@ def test_session_repeated_compaction_bounds_the_rolling_summary() -> None:
 
     assert summary is not None
     assert len(summary) <= 120
-    assert summary.startswith("[Earlier compacted context omitted]\n")
-    assert "recent message 3" in summary
+    assert summary.startswith("Objective:\nrecent message 0")
+    assert session.checkpoint["prior_context"].startswith("old context")
+    assert "recent message 3" in session.archived_messages[-1].content[0]["text"]
     assert len(session.messages) == 2
 
 

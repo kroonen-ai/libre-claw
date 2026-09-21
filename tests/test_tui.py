@@ -9,6 +9,8 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from rich.console import Console
 from rich.segment import Segment
 from textual.geometry import Offset
@@ -30,6 +32,7 @@ from libre_claw.core.agent import (
 from libre_claw.core.runs import RunEvent, RunStore
 from libre_claw.core.tools import ToolCall, ToolResult
 from libre_claw.providers import Usage
+from libre_claw.providers.model_catalog import ModelCatalog, ModelInfo, cached_models
 from libre_claw.tui.app import (
     ASSISTANT_ACCENT,
     ContextMeter,
@@ -76,6 +79,13 @@ from libre_claw.updater import UpdateError, UpdateResult
 TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
+
+
+@pytest.fixture(autouse=True)
+def configured_model_discovery(monkeypatch):
+    async def discover(config, provider, **kwargs):
+        return ModelCatalog(cached_models(config, provider), "configured")
+    monkeypatch.setattr("libre_claw.tui.app.discover_models", discover)
 
 
 class FakeDaemonClient:
@@ -201,7 +211,7 @@ def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
     assert app._slash_suggestion_matches("/g")[0].name == "/goal"
     assert app._slash_suggestion_matches("/memory ")[0].name == "/memory status"
     assert app._slash_suggestion_matches("/update ")[0].name == "/update --dry-run"
-    assert app._slash_suggestion_matches("/w")[0].name == "/workspace"
+    assert {item.name for item in app._slash_suggestion_matches("/w")} == {"/workspace", "/worktree"}
     assert app._slash_suggestion_matches("/workspace ")[0].name == "/workspace status"
 
 
@@ -363,7 +373,7 @@ async def test_slash_suggestions_support_arrow_selection(monkeypatch, tmp_path: 
 
         app.action_accept_suggestion()
 
-    assert input_widget.value == "/models"
+    assert input_widget.value == "/models "
 
 
 async def test_command_palette_supports_arrow_selection(monkeypatch, tmp_path: Path) -> None:
@@ -470,34 +480,70 @@ def test_model_help_includes_enrollment_commands(monkeypatch, tmp_path: Path) ->
 
     assert "Current model: anthropic:claude-opus-5" in help_text
     assert "Add `--global`" in help_text
-    assert "libre-claw auth set-key openrouter" in help_text
-    assert "libre-claw auth set-key moonshot" in help_text
-    assert "/model openrouter:openrouter/auto" in help_text
-    assert "/model moonshot:k3" in help_text
+    assert "libre-claw auth set-key <provider>" in help_text
+    assert "/models [provider] [search]" in help_text
+    assert "including unlisted IDs" in help_text
 
 
 def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    models = {
+        "openrouter": (ModelInfo("openrouter", "lab/future-agent", "Future Agent"),),
+        "ollama": (ModelInfo("ollama", "custom-local:latest", "Custom Local"),),
+    }
+    monkeypatch.setattr("libre_claw.tui.app.cached_models", lambda config, provider: models.get(provider, ()))
     app = LibreClawApp(config=load_config())
+    first = app._slash_suggestion_matches("/model openr")[0]
 
-    suggestions = app._slash_suggestion_matches("/model openr")
-    first = suggestions[0]
-
-    assert first.name == "/model openrouter:deepseek/deepseek-v4-flash"
-    assert app._completion_text(first) == "/model openrouter:deepseek/deepseek-v4-flash"
+    assert first.name == "/model openrouter:lab/future-agent"
+    assert app._completion_text(first) == first.name
     app._slash_suggestions = [first]
     assert app._should_complete_on_submit("/model openr") is True
-    assert app._should_complete_on_submit("/model openrouter:deepseek/deepseek-v4-flash") is False
+    assert app._should_complete_on_submit(first.name) is False
+    assert app._slash_suggestion_matches("/model custom-local")[0].name == "/model ollama:custom-local:latest"
 
-    ollama_suggestions = app._slash_suggestion_matches("/model minimax-m3")
-    assert any(suggestion.name == "/model ollama:minimax-m3:cloud" for suggestion in ollama_suggestions)
-    assert any(suggestion.name == "/model openrouter:minimax/minimax-m3" for suggestion in ollama_suggestions)
-    glm_suggestions = app._slash_suggestion_matches("/model glm-5.2")
-    assert any(suggestion.name == "/model ollama:glm-5.2:cloud" for suggestion in glm_suggestions)
-    kimi_suggestions = app._slash_suggestion_matches("/model moonshot:k3")
-    assert any(suggestion.name == "/model moonshot:k3" for suggestion in kimi_suggestions)
+
+async def test_models_discovers_filters_refreshes_and_accepts_unlisted_ids(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    app = LibreClawApp(config=load_config())
+    calls = []
+
+    async def discover(config, provider, **kwargs):
+        calls.append((provider, kwargs.get("refresh", False)))
+        return ModelCatalog(tuple(ModelInfo(provider, f"lab/model-{i:03}", f"Model {i}") for i in range(80)), "live")
+
+    monkeypatch.setattr("libre_claw.tui.app.discover_models", discover)
+    async with app.run_test():
+        await app._handle_command("/models openrouter --refresh")
+        await app.workers.wait_for_complete(worker for worker in app.workers if worker.group == "model-catalog")
+        assert "Showing 40 of 80 models" in app.transcript[-1].content
+        await app._handle_command("/model list openrouter model-079")
+        await app.workers.wait_for_complete(worker for worker in app.workers if worker.group == "model-catalog")
+        text = app.transcript[-1].content
+        assert "/model openrouter:lab/model-079 --global" in text
+        assert "lab/model-000" not in text
+        await app._handle_command("/model openai:unlisted-future-model")
+    assert calls[:2] == [("openrouter", True), ("openrouter", False)]
+    assert app.config.general.default_model == "unlisted-future-model"
+
+
+async def test_models_discovery_failure_keeps_manual_entry_help(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    app = LibreClawApp(config=load_config())
+
+    async def discover(config, provider, **kwargs):
+        return ModelCatalog((), "configured", "Connection failed")
+
+    monkeypatch.setattr("libre_claw.tui.app.discover_models", discover)
+    async with app.run_test():
+        await app._handle_command("/models openrouter")
+        await app.workers.wait_for_complete(worker for worker in app.workers if worker.group == "model-catalog")
+    assert "Connection failed" in app.transcript[-1].content
+    assert "enter a model ID directly" in app.transcript[-1].content
 
 
 def test_tui_parses_pasted_image_path(tmp_path: Path) -> None:
@@ -869,6 +915,7 @@ async def test_tui_accepts_telegram_style_status_and_alias_commands(monkeypatch,
         await app._handle_command("/new")
         await app._handle_command("/status")
         await app._handle_command("/models")
+        await app.workers.wait_for_complete(worker for worker in app.workers if worker.group == "model-catalog")
         await app._handle_command("/daemon")
 
     system_text = "\n".join(entry.content for entry in app.transcript if entry.role == "system")
@@ -876,7 +923,7 @@ async def test_tui_accepts_telegram_style_status_and_alias_commands(monkeypatch,
     assert "- Provider: `openrouter`" in system_text
     assert "Daemon" in system_text
     assert "- Telegram bridge: running" in system_text
-    assert "Suggested models:" in system_text
+    assert "models (configured):" in system_text
     assert "Transcript cleared." in system_text
 
 
@@ -1108,13 +1155,14 @@ async def test_usage_command_reports_openrouter_run_rollups(monkeypatch, tmp_pat
         await app._handle_command("/usage openrouter")
         await app._handle_command("/usage openrouter attribution")
         await app._handle_command("/usage openrouter presets")
+        await app.workers.wait_for_complete(worker for worker in app.workers if worker.group == "model-catalog")
 
     system_text = "\n".join(entry.content for entry in app.transcript if entry.role == "system")
     assert "OpenRouter usage" in system_text
     assert "qwen/qwen3.7-max" in system_text
     assert "tui:chat" in system_text
     assert "https://openrouter.ai/apps?url=https://libreclaw.sh" in system_text
-    assert "/model openrouter:qwen/qwen3.7-max --global" in system_text
+    assert "openrouter models (configured):" in system_text
 
 
 async def test_setup_key_flow_hides_and_stores_provider_key(monkeypatch, tmp_path: Path) -> None:
@@ -2059,3 +2107,29 @@ async def test_tui_permission_panel_warns_for_dangerous_commands(monkeypatch, tm
 
         assert future.result() == "allow_once"
         assert app.query_one("#permission-panel").has_class("hidden")
+
+
+async def test_model_discovery_keeps_terminal_responsive(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    app = LibreClawApp(config=load_config())
+
+    async def discover(config, provider, **kwargs):
+        started.set()
+        await release.wait()
+        return ModelCatalog((ModelInfo(provider, "future-model", "Future Model"),), "live")
+
+    monkeypatch.setattr("libre_claw.tui.app.discover_models", discover)
+    async with app.run_test() as pilot:
+        app.query_one("#input").value = "/models"
+        await pilot.press("enter")
+        await asyncio.wait_for(started.wait(), timeout=1)
+        try:
+            await pilot.press("x")
+            assert app.query_one("#input").value == "x"
+        finally:
+            release.set()
+        await app.workers.wait_for_complete(worker for worker in app.workers if worker.group == "model-catalog")
+    assert "future-model" in app.transcript[-1].content

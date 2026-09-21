@@ -103,6 +103,7 @@ class AttachmentTool(BaseTool):
 
 
 class BarrierTool(BaseTool):
+    read_only = True
     name = "barrier"
     description = "Track concurrent execution."
     parameters = {"value": {"type": "string"}}
@@ -120,6 +121,7 @@ class BarrierTool(BaseTool):
 
 
 class DelayTool(BaseTool):
+    read_only = True
     name = "delay"
     description = "Return a value after a delay."
     parameters = {
@@ -731,3 +733,177 @@ async def test_agent_retry_backoff_does_not_outlive_deadline() -> None:
 
     assert events == [AgentError("Run deadline reached before a final response was produced.")]
     assert len(provider.received_messages) == 1
+
+
+async def test_agent_mutations_in_one_batch_run_sequentially(tmp_path: Path) -> None:
+    from libre_claw.tools_builtin.filesystem import ReadFileTool, WriteFileTool
+    context = ToolContext(working_directory=tmp_path)
+    registry = ToolRegistry([WriteFileTool(context), ReadFileTool(context)])
+    provider = ScriptedProvider([
+        [ToolCallReady("write", "write_file", {"path": "sample", "content": "fresh"}),
+         ToolCallReady("read", "read_file", {"path": "sample"}), Done()],
+        [TextDelta("done"), Done()],
+    ])
+    agent = make_agent(provider, registry)
+    agent.permission_manager.always_allowed_tools.add("write_file")
+    events = await collect_events(agent, "write then read")
+    results = [event.result for event in events if isinstance(event, AgentToolResult)]
+    assert all(not result.is_error for result in results)
+    assert "fresh" in results[1].content
+
+
+async def test_agent_plan_mode_blocks_preapproved_mutations(tmp_path: Path) -> None:
+    from libre_claw.tools_builtin.filesystem import WriteFileTool
+    provider = ScriptedProvider([
+        [ToolCallReady("write", "write_file", {"path": "sample", "content": "no"}), Done()],
+        [TextDelta("plan"), Done()],
+    ])
+    agent = make_agent(provider, ToolRegistry([WriteFileTool(ToolContext(working_directory=tmp_path))]))
+    agent.session.mode = "plan"
+    agent.permission_manager.always_allowed_tools.add("write_file")
+    events = await collect_events(agent, "plan only")
+    assert not (tmp_path / "sample").exists()
+    assert any(isinstance(event, AgentToolResult) and "Plan mode" in (event.result.error or "") for event in events)
+
+
+async def test_agent_loads_nested_instructions_before_editing(tmp_path: Path) -> None:
+    from libre_claw.tools_builtin.filesystem import WriteFileTool
+    nested = tmp_path / "src"
+    nested.mkdir()
+    (nested / "AGENTS.md").write_text("Use a greeting in new files.")
+    provider = ScriptedProvider([
+        [ToolCallReady("first", "write_file", {"path": "src/new.txt", "content": "bad"}), Done()],
+        [ToolCallReady("retry", "write_file", {"path": "src/new.txt", "content": "hello"}), Done()],
+        [TextDelta("done"), Done()],
+    ])
+    agent = make_agent(provider, ToolRegistry([WriteFileTool(ToolContext(working_directory=tmp_path))]))
+    agent.permission_manager.always_allowed_tools.add("write_file")
+    events = await collect_events(agent, "write a file")
+    results = [event.result for event in events if isinstance(event, AgentToolResult)]
+    assert "project instructions" in (results[0].error or "")
+    assert not results[1].is_error
+    assert (nested / "new.txt").read_text() == "hello"
+    assert "Use a greeting" in (provider.received_system or "")
+
+
+async def test_agent_applies_steering_after_complete_tool_protocol(tmp_path: Path) -> None:
+    class SteeringTool(EchoTool):
+        async def execute(self, value: str) -> ToolResult:
+            agent.session.queue_steering("Also explain the result")
+            return await super().execute(value)
+    provider = ScriptedProvider([
+        [ToolCallReady("tool", "echo", {"value": "yes"}), Done()],
+        [TextDelta("done"), Done()],
+    ])
+    agent = make_agent(provider, ToolRegistry([SteeringTool(ToolContext(working_directory=tmp_path))]))
+    await collect_events(agent, "do the work")
+    received = provider.received_messages[1]
+    assert received[-2].content[0]["type"] == "tool_result"
+    assert received[-1].content[0]["text"] == "Also explain the result"
+    assert not agent.session.pending_steering
+
+
+async def test_agent_checkpoint_precedes_side_effects(tmp_path: Path) -> None:
+    from libre_claw.tools_builtin.filesystem import WriteFileTool
+    provider = ScriptedProvider([[ToolCallReady("write", "write_file", {"path": "sample", "content": "x"}), Done()]])
+    agent = make_agent(provider, ToolRegistry([WriteFileTool(ToolContext(working_directory=tmp_path))]))
+    agent.permission_manager.always_allowed_tools.add("write_file")
+    snapshots = []
+    async def checkpoint(session: Session) -> None:
+        snapshots.append(list(session.messages))
+        if session.messages[-1].content[0]["type"] == "tool_use":
+            raise OSError("disk full")
+    agent.checkpoint_callback = checkpoint
+    import pytest
+    with pytest.raises(OSError, match="disk full"):
+        await collect_events(agent, "write")
+    assert not (tmp_path / "sample").exists()
+    assert snapshots
+
+
+async def test_plan_mode_enforces_native_codex_sandbox_without_mutating_provider(tmp_path: Path) -> None:
+    from libre_claw.providers.codex import CodexProvider
+    observed = []
+    class FakeNativeProvider(CodexProvider):
+        async def complete(self, *args, **kwargs):
+            observed.append(self.sandbox)
+            yield TextDelta("plan")
+            yield Done()
+    provider = FakeNativeProvider(model="future-model", working_directory=tmp_path)
+    agent = make_agent(provider)
+    agent.session.mode = "plan"
+    await collect_events(agent, "review")
+    assert observed == ["read-only"]
+    assert provider.sandbox == "workspace-write"
+
+
+async def test_known_tool_incapable_provider_gets_no_tool_schemas(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+    provider = ScriptedProvider([[TextDelta("reply"), Done()]])
+    provider.model_info = SimpleNamespace(supports_tools=False, context_window_tokens=200000)
+    agent = make_agent(provider, ToolRegistry([EchoTool(ToolContext(working_directory=tmp_path))]))
+    await collect_events(agent, "talk")
+    assert provider.received_tools == [[]]
+    assert "No tools are enabled" in provider.received_system
+
+
+async def test_agent_repairs_tool_protocol_on_next_turn_after_interrupt(tmp_path: Path) -> None:
+    session = Session()
+    session.add_user_message("do the work")
+    session.add_assistant_blocks([tool_use_block("interrupted", "write_file", {"path": "file", "content": "x"})])
+    provider = ScriptedProvider([[TextDelta("checked current state"), Done()]])
+    agent = make_agent(provider)
+    agent.session = session
+    await collect_events(agent, "continue")
+    messages = provider.received_messages[0]
+    assert messages[-2].content[0]["tool_use_id"] == "interrupted"
+    assert messages[-2].content[0]["is_error"]
+    assert messages[-1].content[0]["text"] == "continue"
+
+
+async def test_agent_steering_prevents_obsolete_pending_write(tmp_path: Path) -> None:
+    from libre_claw.tools_builtin.filesystem import WriteFileTool
+    class SteeredProvider(ScriptedProvider):
+        async def complete(self, *args, **kwargs):
+            if not self.received_messages:
+                agent.session.queue_steering("Do not write the file; explain the plan.")
+            async for event in super().complete(*args, **kwargs):
+                yield event
+    provider = SteeredProvider([
+        [ToolCallReady("write", "write_file", {"path": "sample", "content": "obsolete"}), Done()],
+        [TextDelta("plan"), Done()],
+    ])
+    agent = make_agent(provider, ToolRegistry([WriteFileTool(ToolContext(working_directory=tmp_path))]))
+    agent.permission_manager.always_allowed_tools.add("write_file")
+    await collect_events(agent, "write")
+    assert not (tmp_path / "sample").exists()
+    assert provider.received_messages[1][-2].content[0]["is_error"]
+    assert provider.received_messages[1][-1].content[0]["text"] == "Do not write the file; explain the plan."
+
+
+async def test_agent_discovers_selected_model_once_before_requests(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+    provider = ScriptedProvider([
+        [ToolCallReady("echo", "echo", {"value": "ok"}), Done()],
+        [TextDelta("done"), Done()],
+    ])
+    calls = []
+    async def discover():
+        calls.append(True)
+        provider.model_info = SimpleNamespace(supports_tools=True, context_window_tokens=200000)
+        return provider.model_info
+    provider.ensure_model_info = discover
+    agent = make_agent(provider, ToolRegistry([EchoTool(ToolContext(working_directory=tmp_path))]))
+    await collect_events(agent, "work")
+    assert calls == [True]
+    assert len(provider.received_messages) == 2
+
+
+async def test_agent_can_run_when_model_discovery_is_unavailable() -> None:
+    provider = ScriptedProvider([[TextDelta("done"), Done()]])
+    async def discover():
+        raise RuntimeError("catalog offline")
+    provider.ensure_model_info = discover
+    agent = make_agent(provider)
+    events = await collect_events(agent, "work")
+    assert events[-1] == AgentDone(None)
