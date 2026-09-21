@@ -50,6 +50,9 @@ jobs:
       - name: Run pytest
         run: python -m pytest
 
+      - name: Validate fixed coding workflows without model credentials
+        run: python -m benchmarks.coding_workflow.runner --offline --output artifacts/coding-workflow
+
       - name: Compile source and tests
         run: python -m compileall src tests
 

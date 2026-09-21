@@ -1,32 +1,55 @@
+<!--
+Copyright 2026 Kroonen AI (https://kroonen.ai)
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Libre Claw Roadmap
 
-Libre Claw is built as a competitive, terminal-native agent harness. The first
-release focuses on durable local autonomy and provider choice.
+Libre Claw is a terminal-native agent harness focused on durable local tasks
+and provider choice. The current release is 0.1.0; the sections below distinguish
+its existing features from additions available on the main branch.
 
-## Completed in 0.1.0
+## Existing foundation
 
-- Durable runs with append-only event logs and artifacts.
-- Human review cockpit with timeline replay and artifact panels.
-- Background daemon API for runs, permissions, Telegram, and automations.
-- User/project skills with AgentSkills-style `SKILL.md` support.
-- MCP stdio integration with allowlisted external tools.
-- Recurring automations and saved reports.
-- Browser/computer-use tools with persistent profiles and screenshots.
-- Provider usage analytics and model presets.
-- First-run setup flow, one-command installer, and security documentation.
+- Durable runs with append-only events, artifacts, and timeline replay.
+- A daemon API, local dashboard, Telegram bridge, and scheduled automations.
+- User/project skills, `SOUL.md` customization, and MCP stdio tools.
+- Browser tools with persistent profiles and screenshots.
+- Provider usage analytics, setup commands, and installation helpers.
 
-## Next Priorities
+## Implemented on the main branch
 
+- Shared live model discovery, manual model IDs, capability metadata, and overrides.
+- Resume with conversation, model, workspace, plans, structured checkpoints, and
+  retrievable original history after compaction.
+- Hierarchical project instructions with source attribution and scoped refresh.
+- Opt-in task worktrees, explicit setup, reviewed transfers, and protected cleanup.
+- Git review scopes, line comments, file/hunk actions, and independent read-only review.
+- Plan-only execution, editable steps, queued follow-ups, and live steering.
+- Scoped subagents with separate sessions, inherited permissions, bounded work,
+  cancellation, and coordinated file ownership.
+- Fixed coding fixtures, offline harness checks in CI, and an initial two-task
+  live smoke test with separate scripted recovery validation.
+
+Command syntax and current limits are in the [coding workflow guide](docs/CODING_WORKFLOWS.md).
+The [implementation checklist](docs/CODING_WORKFLOW_CHECKLIST.md) records final
+integration verification. These additions have not been published as a new release.
+
+## Next priorities
+
+- Run broader repeated coding evaluations across configured providers; the small
+  smoke suite does not establish comparative model quality.
+- Extend delegated execution beyond scoped file tools while preserving ownership
+  and permission guarantees, and recover interrupted worker processes.
 - Harden daemon authentication for remote deployments.
 - Add packaged releases and signed binaries.
 - Expand MCP interoperability tests with common local servers.
-- Improve browser previews in the TUI artifact panel.
-- Add richer provider usage exports.
-- Publish polished demo videos and GIFs.
+- Improve browser previews and provider usage exports.
 
-## Design Principles
+## Design principles
 
-- The agent reads before editing.
-- Write, shell, browser, git, and external MCP actions are permissioned.
-- Runs survive UI restarts.
-- Provider credentials never live in project config.
+- Read before editing and preserve unrelated changes.
+- Enforce permissions and workspace boundaries at execution time.
+- Keep task state durable and incomplete work retrievable.
+- Discover model capabilities where possible; leave missing metadata unknown.
+- Keep credentials out of project configuration.

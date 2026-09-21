@@ -1,0 +1,3 @@
+<!-- Copyright 2026 Kroonen AI (https://kroonen.ai); SPDX-License-Identifier: Apache-2.0 -->
+
+Remove the hardcoded model lists from this small application. `available(entries)` must return distinct nonempty string IDs from provider entries in encounter order, stripping whitespace around IDs and ignoring invalid entries. Preserve ID case. `select(entries, model=None)` must choose the first discovered model when model is None, and otherwise accept any nonempty manually entered model ID after trimming whitespace. Empty discovery without a manual selection and blank manual IDs must raise ValueError. Preserve public signatures. Follow the project instructions and run the unittest suite. Change only application source and the changelog.

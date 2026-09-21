@@ -1,0 +1,92 @@
+{
+  "copyright": "Copyright 2026 Kroonen AI (https://kroonen.ai)",
+  "license": "Apache-2.0",
+  "suite_version": "coding-workflow-v1",
+  "recorded_at": "2026-09-19T12:49:17.766645+00:00",
+  "evaluation_type": "two-task coding smoke",
+  "scope_note": "One attempt on each of two small coding tasks in an uncommitted working tree. This is not a comparative provider benchmark or a validation of changes made after the run.",
+  "agent": {
+    "name": "libre-claw",
+    "version": "0.1.0"
+  },
+  "trajectory_schema": "ATIF-v1.7",
+  "provider": "codex",
+  "model": "gpt-6-astra",
+  "revision": {
+    "commit": "7900255bafff9122fed3c47285627c655d165722",
+    "dirty": true,
+    "tracked_diff_sha256": "525209e39eb4e14387085bee2734c5bc260da6570104f6a2df1c3961cd5476ed"
+  },
+  "reproduction_command": "python -m benchmarks.coding_workflow.runner --provider codex --model gpt-6-astra --timeout 180",
+  "runtime": {
+    "provider_runtime": "installed Codex CLI with existing ChatGPT login",
+    "sandbox": "workspace-write",
+    "per_task_deadline_seconds": 180,
+    "attempts_per_task": 1
+  },
+  "model_results": [
+    {
+      "task_id": "pagination",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "fixture_sha256": "342bfcf51538018dbab94a4535838a3024d0bb9d58340ccdbbc67c931dfc4a07",
+      "passed": true,
+      "baseline_failed": true,
+      "elapsed_seconds": 59.53,
+      "input_tokens": 125204,
+      "output_tokens": 966,
+      "cached_tokens": 111232,
+      "cost_usd": null,
+      "error": null,
+      "verification": {
+        "tests_passed": true,
+        "protected_files_unchanged": true
+      }
+    },
+    {
+      "task_id": "catalog",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "fixture_sha256": "267ad21aecbe4e97b6a780e1beb29ba4ab9c65268edeeb3707d4739915f02fdf",
+      "passed": true,
+      "baseline_failed": true,
+      "elapsed_seconds": 57.801,
+      "input_tokens": 91313,
+      "output_tokens": 1154,
+      "cached_tokens": 82688,
+      "cost_usd": null,
+      "error": null,
+      "verification": {
+        "tests_passed": true,
+        "protected_files_unchanged": true
+      }
+    }
+  ],
+  "model_summary": {
+    "tasks_passed": 2,
+    "tasks_total": 2,
+    "completion_rate": 1.0,
+    "elapsed_seconds": 117.331,
+    "input_tokens": 216517,
+    "output_tokens": 2120,
+    "cached_tokens": 193920,
+    "cost_usd": null
+  },
+  "recovery_check": {
+    "task_id": "interrupted-recovery",
+    "kind": "harness_validation",
+    "passed": true,
+    "elapsed_seconds": 0.016,
+    "checks": {
+      "first_phase_preserved": true,
+      "requirement_restored": true
+    }
+  },
+  "measurement_notes": [
+    "Completion is based on passing fixture tests with protected files unchanged, not on the model final response.",
+    "Tokens are provider-reported aggregate counts. Cached tokens are a subset of input tokens.",
+    "Cost was not reported and remains null.",
+    "Interrupted-session recovery uses scripted providers through the real Agent and persistence path; it is excluded from model completion rate.",
+    "Only sanitized metrics are stored here; local workspace paths, credentials, prompts, and raw trajectories are omitted."
+  ]
+}

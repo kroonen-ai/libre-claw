@@ -1,3 +1,5 @@
+<!-- Copyright 2026 Kroonen AI (https://kroonen.ai); SPDX-License-Identifier: Apache-2.0 -->
+
 # Libre Claw Benchmarks
 
 Libre Claw can be evaluated as a real installed agent through
@@ -94,3 +96,35 @@ and only then upload the completed job:
 Always record the Libre Claw commit, Harbor version, dataset version, task IDs,
 trial count, and model identifier alongside a score. A small sample is a smoke
 evaluation, not a leaderboard-comparable result.
+
+## Fixed coding workflow regression suite
+
+Run the small versioned suite before comparing harness changes:
+
+```bash
+.venv/bin/python -m benchmarks.coding_workflow.runner --offline
+.venv/bin/python -m benchmarks.coding_workflow.runner --provider openrouter --model vendor/model-id
+```
+
+The two coding tasks cover pagination boundaries and a change across multiple
+modules with nested project instructions. Their starters must fail their tests;
+completion requires passing the tests while preserving test and instruction files.
+The runner also cancels a real agent turn, reloads its saved conversation and
+checkpoint, and completes the unfinished phase as a structural recovery check.
+
+Offline mode feeds checked-in solutions through the real headless agent and file
+tools. CI runs this as a fixture and harness gate. It does not measure model quality.
+Live mode uses the configured provider through the same `run_headless` entry point
+and ATIF v1.7 trajectories used by the Harbor adapter; it requires explicit provider
+and model IDs and accepts `--config`, `--task`, `--timeout` (at most 180 seconds per
+coding task), and `--output` for a new results directory. It disables fallback so a
+score is attributed to the requested model. Codex uses its installed CLI and login;
+API providers use the normal configured credentials. Runs approve coding tools only
+inside disposable fixture workspaces.
+
+The printed results path contains JSON with task checks, fixture hashes, source
+revision, configuration, elapsed time, provider token usage, and cost when reported.
+Unknown token usage or cost stays null. Model completion rate includes only live
+coding tasks; scripted recovery is reported separately. Workspaces and trajectories
+remain available beside the report for inspection. These tiny tasks are regression
+checks, not a substitute for a larger Harbor evaluation or a leaderboard score.

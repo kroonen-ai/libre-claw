@@ -31,6 +31,14 @@ Current release: Version `0.1.0`.
 The evaluation adapter, reproduction commands, and recorded smoke results are
 documented in [benchmarks/README.md](benchmarks/README.md).
 
+## Coding Workflows
+
+Continue saved conversations, load scoped `AGENTS.md` instructions, isolate tasks
+in Git worktrees, review files and hunks, edit plans, steer or queue follow-ups,
+and delegate scoped work. Model discovery also exposes provider capabilities.
+See the [coding workflow guide](docs/CODING_WORKFLOWS.md) for commands and limits,
+and the [implementation checklist](docs/CODING_WORKFLOW_CHECKLIST.md) for verification.
+
 ## Install
 
 Recommended local install:
@@ -179,49 +187,27 @@ Key lookup order:
 2. OS keyring.
 3. Encrypted local fallback file at `~/.libre-claw/.keys`.
 
-### Common Model Commands
+### Choose A Model
+
+Libre Claw discovers models from your provider instead of maintaining a list of
+model releases. The TUI, Telegram picker, and dashboard use the same catalog.
 
 ```text
-/model list
-/model openrouter:qwen/qwen3.7-max --global
-/model openrouter:qwen/qwen3.7-flash --global
-/model openrouter:sakana/fugu-ultra --global
-/model openrouter:poolside/laguna-s-2.1 --global
-/model openrouter:poolside/laguna-s-2.1:free --global
-/model openrouter:deepseek/deepseek-v4-flash --global
-/model openrouter:deepseek/deepseek-v4-flash-0731 --global
-/model openrouter:~deepseek/deepseek-v4-flash-latest --global
-/model openrouter:moonshotai/kimi-k3 --global
-/model openrouter:moonshotai/kimi-k2.7-code --global
-/model openrouter:z-ai/glm-5.2 --global
-/model openrouter:minimax/minimax-m3 --global
-/model openrouter:google/gemini-3.6-flash --global
-/model openrouter:google/gemini-3.5-flash-lite --global
-/model openrouter:anthropic/claude-opus-5 --global
-/model openrouter:anthropic/claude-opus-5-fast --global
-/model openrouter:anthropic/claude-sonnet-5 --global
-/model openrouter:nvidia/nemotron-3-ultra-550b-a55b:free --global
-/model moonshot:k3 --global
-/model moonshot:kimi-for-coding --global
-/model moonshot:kimi-for-coding-highspeed --global
-/model ollama:glm-5.2:cloud --global
-/model ollama:minimax-m3:cloud --global
-/model ollama:kimi-k2.6:cloud --global
-/model anthropic:claude-opus-5 --global
-/model anthropic:claude-sonnet-5 --global
-/model anthropic:claude-opus-4-8 --global
-/model openai:gpt-5.5 --global
-/model codex:gpt-5.6-sol --global
+/models
+/models openrouter
+/models openrouter <search>
+/models ollama --refresh
+/model <provider>:<model-id> --global
 ```
 
-Claude Opus 5 is the default direct Anthropic model. Libre Claw uses its
-documented one-million-token context window with a conservative 65,536-token
-output cap (the model supports up to 128,000), leaves adaptive thinking at the
-provider default, omits unsupported sampling parameters, and privately
-round-trips signed thinking blocks across tool calls. The OpenRouter routes
-preserve the corresponding ordered `reasoning_details` blocks. See the
-[Anthropic model overview](https://platform.claude.com/docs/en/about-claude/models/overview)
-and [OpenRouter reasoning guide](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+`/models` uses the current provider; `/model list` is an alias. Results are cached,
+and `--refresh` fetches the latest catalog. Autocomplete uses discovered models
+alongside your configured IDs. You can always enter an ID directly, even when
+the provider is offline or does not expose a model list.
+
+Discovery uses the configured endpoint and credentials for each provider. Codex
+uses its installed CLI and local model metadata. Provider availability and model
+capabilities depend on your account and endpoint.
 
 Fallback slots let Libre Claw keep working if the primary provider is rate-limited
 or down before it starts streaming. Configure up to three ordered backups:
@@ -322,22 +308,8 @@ Or inside the TUI:
 /model codex:gpt-5.6-sol --global
 ```
 
-Libre Claw's OAuth picker follows
-[OpenAI's current Codex model guide](https://developers.openai.com/codex/models):
-
-| Model | Best fit |
-| --- | --- |
-| `gpt-5.6-sol` | Flagship model for complex coding, computer use, research, and cybersecurity. |
-| `gpt-5.6-terra` | Balanced everyday work with strong reasoning and tool use at a lower cost. |
-| `gpt-5.6-luna` | Fast, affordable execution for clear, repeatable, high-volume tasks. |
-| `gpt-5.5` | Previous-generation frontier model for complex coding and knowledge work. |
-| `gpt-5.3-codex-spark` | Text-only, near-instant coding research preview for ChatGPT Pro users. |
-| `gpt-5.4` | Professional work with strong coding, reasoning, tool use, and agentic workflows. |
-| `gpt-5.4-mini` | Fast, efficient coding tasks and subagents. |
-
-OpenAI marks `gpt-5.2` and `gpt-5.3-codex` as deprecated for ChatGPT
-sign-in, so Libre Claw excludes them from the OAuth picker. Model availability
-still depends on the signed-in ChatGPT account and workspace.
+Use `/models codex` to discover models available through the installed CLI.
+Model availability depends on the signed-in ChatGPT account and workspace.
 
 ## Run Surfaces
 

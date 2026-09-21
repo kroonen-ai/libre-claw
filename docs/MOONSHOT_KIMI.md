@@ -1,3 +1,8 @@
+<!--
+Copyright 2026 Kroonen AI (https://kroonen.ai)
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Kimi Code and Moonshot
 
 Libre Claw uses Kimi Code by default for direct Kimi access. This is the coding
@@ -32,21 +37,14 @@ the global model.
 
 ## Kimi Code Models
 
-Use the model ID, not the marketing or version name:
+Use `/models moonshot` to fetch the IDs exposed by your configured service.
+Add `--refresh` to reload the list, then select an ID with
+`/model moonshot:<model-id> --global`. You can also enter an ID directly when
+model discovery is unavailable. New provider model IDs need no Libre Claw update.
 
-| Model ID | Context | Notes |
-| --- | ---: | --- |
-| `k3` | Up to 1,048,576 | Kimi K3; `low`, `high`, and `max` reasoning effort. Availability and maximum context depend on membership tier. |
-| `kimi-for-coding` | 262,144 | Kimi K2.7 Code; available to all Kimi Code members with thinking enabled. |
-| `kimi-for-coding-highspeed` | 262,144 | Same K2.7 Code capability at higher output speed; requires an eligible membership tier. |
-
-Libre Claw accepts its former aliases and migrates them automatically:
-
-| Legacy Libre Claw name | Official Kimi Code ID |
-| --- | --- |
-| `kimi-k3` | `k3` |
-| `kimi-k2.7-code` | `kimi-for-coding` |
-| `kimi-k2.7-code-highspeed` | `kimi-for-coding-highspeed` |
+Legacy Libre Claw aliases remain accepted for existing configurations. Model
+availability, context limits, and reasoning options depend on your membership
+and the selected model.
 
 ## Default Configuration
 
@@ -127,9 +125,9 @@ belong to the same service. Check these pairs first:
 - Kimi Code key: `https://api.kimi.com/coding/v1`
 - Moonshot Platform key: the Platform endpoint assigned to that account
 
-For Kimi Code, use only `k3`, `kimi-for-coding`, or
-`kimi-for-coding-highspeed`. A 401 can also indicate that the selected model or
-context size is not included in the membership tier.
+Use an ID returned by `/models moonshot` or listed in your account. A 401 can
+also indicate that the selected model or context size is not included in your
+membership tier.
 
 ## Official References
 
