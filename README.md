@@ -41,6 +41,10 @@ and the [implementation checklist](docs/CODING_WORKFLOW_CHECKLIST.md) for verifi
 
 ## Install
 
+Libre Claw uses Python 3.11+ and pip. Run the commands below from the app
+repository. `npm install` is for the separate [website repository](https://github.com/kroonen-ai/libreclaw);
+running it here can select an unrelated `package.json` in a parent directory.
+
 Recommended local install:
 
 ```bash

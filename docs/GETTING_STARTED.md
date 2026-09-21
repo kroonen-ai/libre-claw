@@ -4,6 +4,9 @@ Libre Claw is a terminal-native coding agent harness built by Kroonen AI.
 
 ## 1. Install
 
+Libre Claw is a Python application. Use the installer below or the pip setup in
+the [README](../README.md#install); `npm install` does not install the app.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kroonen-ai/libre-claw/main/scripts/install.sh | sh
 ```
