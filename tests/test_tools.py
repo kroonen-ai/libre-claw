@@ -64,7 +64,7 @@ class ExampleTool(BaseTool):
         return ToolResult(content=value)
 
 
-def context(tmp_path: Path, timeout: int = 120) -> ToolContext:
+def create_test_tool_context(tmp_path: Path, timeout: int = 120) -> ToolContext:
     return ToolContext(
         working_directory=tmp_path,
         restrict_to_working_dir=True,
@@ -75,7 +75,7 @@ def context(tmp_path: Path, timeout: int = 120) -> ToolContext:
 
 
 async def test_tool_registry_schema_duplicate_missing_and_execute(tmp_path: Path) -> None:
-    tool = ExampleTool(context(tmp_path))
+    tool = ExampleTool(create_test_tool_context(tmp_path))
     registry = ToolRegistry([tool])
 
     assert registry.schemas() == [
@@ -94,7 +94,7 @@ async def test_tool_registry_schema_duplicate_missing_and_execute(tmp_path: Path
     )
 
     with pytest.raises(ToolRegistryError):
-        registry.register(ExampleTool(context(tmp_path)))
+        registry.register(ExampleTool(create_test_tool_context(tmp_path)))
     with pytest.raises(ToolRegistryError):
         registry.get("missing")
 
@@ -109,9 +109,9 @@ def test_tool_requires_a_handler_and_preserves_subclass_abstract_methods(tmp_pat
             """Prepare tool-specific resources."""
 
     with pytest.raises(TypeError, match="must define a callable execute handler"):
-        MissingHandlerTool(context(tmp_path))
+        MissingHandlerTool(create_test_tool_context(tmp_path))
     with pytest.raises(TypeError, match="abstract"):
-        AbstractTool(context(tmp_path))
+        AbstractTool(create_test_tool_context(tmp_path))
 
 
 async def test_schema_handlers_preserve_required_and_keyword_only_arguments(tmp_path: Path) -> None:
@@ -129,7 +129,7 @@ async def test_schema_handlers_preserve_required_and_keyword_only_arguments(tmp_
             text = first + second
             return ToolResult(content=text.upper() if uppercase else text)
 
-    tool = JoinTool(context(tmp_path))
+    tool = JoinTool(create_test_tool_context(tmp_path))
     direct = await tool.execute("hello", " world")
     invoked = await tool.invoke({"first": "hello", "second": " world", "uppercase": True})
     registry = ToolRegistry([tool])
@@ -239,7 +239,7 @@ async def test_read_file_with_offset_and_limit(tmp_path: Path) -> None:
     path = tmp_path / "sample.txt"
     path.write_text("a\nb\nc\n", encoding="utf-8")
 
-    result = await ReadFileTool(context(tmp_path)).execute(path="sample.txt", offset=1, limit=1)
+    result = await ReadFileTool(create_test_tool_context(tmp_path)).execute(path="sample.txt", offset=1, limit=1)
 
     assert result.content == "1: b"
     assert result.metadata["returned_lines"] == 1
@@ -249,7 +249,7 @@ async def test_read_file_reports_truncation_and_can_hide_line_numbers(tmp_path: 
     path = tmp_path / "sample.txt"
     path.write_text("a\nb\nc\n", encoding="utf-8")
 
-    result = await ReadFileTool(context(tmp_path)).execute(
+    result = await ReadFileTool(create_test_tool_context(tmp_path)).execute(
         path="sample.txt",
         offset=0,
         limit=2,
@@ -264,7 +264,7 @@ async def test_view_image_attaches_bounded_visual_preview(tmp_path: Path) -> Non
     path = tmp_path / "large.png"
     Image.new("RGBA", (320, 160), (255, 0, 0, 128)).save(path)
 
-    result = await ViewImageTool(context(tmp_path)).execute(
+    result = await ViewImageTool(create_test_tool_context(tmp_path)).execute(
         path="large.png",
         max_dimension=64,
     )
@@ -287,7 +287,7 @@ async def test_view_image_attaches_bounded_visual_preview(tmp_path: Path) -> Non
 async def test_view_image_validates_files_frames_and_dimensions(tmp_path: Path) -> None:
     path = tmp_path / "image.png"
     Image.new("RGB", (10, 10), "blue").save(path)
-    tool = ViewImageTool(context(tmp_path))
+    tool = ViewImageTool(create_test_tool_context(tmp_path))
 
     assert (await tool.execute(path="missing.png")).error is not None
     assert (await tool.execute(path="image.png", frame=1)).error == (
@@ -303,7 +303,7 @@ async def test_list_directory_with_depth(tmp_path: Path) -> None:
     (tmp_path / "dir" / "nested" / "deep.txt").write_text("x", encoding="utf-8")
     (tmp_path / "root.txt").write_text("x", encoding="utf-8")
 
-    result = await ListDirectoryTool(context(tmp_path)).execute(path=".", depth=1)
+    result = await ListDirectoryTool(create_test_tool_context(tmp_path)).execute(path=".", depth=1)
 
     assert "dir/" in result.content
     assert "  nested/" in result.content
@@ -316,8 +316,8 @@ async def test_list_directory_can_limit_entries_and_skip_hidden(tmp_path: Path) 
     (tmp_path / "a.txt").write_text("x", encoding="utf-8")
     (tmp_path / "b.txt").write_text("x", encoding="utf-8")
 
-    hidden = await ListDirectoryTool(context(tmp_path)).execute(path=".", include_hidden=False)
-    limited = await ListDirectoryTool(context(tmp_path)).execute(path=".", max_entries=1)
+    hidden = await ListDirectoryTool(create_test_tool_context(tmp_path)).execute(path=".", include_hidden=False)
+    limited = await ListDirectoryTool(create_test_tool_context(tmp_path)).execute(path=".", max_entries=1)
 
     assert ".hidden" not in hidden.content
     assert limited.metadata["truncated"] is True
@@ -330,8 +330,10 @@ async def test_glob_finds_paths_and_respects_hidden_and_limit(tmp_path: Path) ->
     (tmp_path / "src" / "nested" / "test_app.py").write_text("x", encoding="utf-8")
     (tmp_path / ".hidden.py").write_text("x", encoding="utf-8")
 
-    visible = await GlobTool(context(tmp_path)).execute(pattern="**/*.py")
-    limited = await GlobTool(context(tmp_path)).execute(pattern="*.py", max_results=1, include_hidden=True)
+    visible = await GlobTool(create_test_tool_context(tmp_path)).execute(pattern="**/*.py")
+    limited = await GlobTool(create_test_tool_context(tmp_path)).execute(
+        pattern="*.py", max_results=1, include_hidden=True
+    )
 
     assert "src/app.py" in visible.content
     assert "src/nested/test_app.py" in visible.content
@@ -339,12 +341,12 @@ async def test_glob_finds_paths_and_respects_hidden_and_limit(tmp_path: Path) ->
     assert limited.metadata["truncated"] is True
 
 
-async def test_search_files_uses_python_fallback_when_rg_is_unavailable(monkeypatch, tmp_path: Path) -> None:
+async def test_search_files_uses_python_fallback_when_ripgrep_is_unavailable(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(shutil, "which", lambda name: None)
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "app.py").write_text("Alpha\nbeta\nALPHA again\n", encoding="utf-8")
 
-    result = await SearchFilesTool(context(tmp_path)).execute(
+    result = await SearchFilesTool(create_test_tool_context(tmp_path)).execute(
         query="alpha",
         path="src",
         glob="*.py",
@@ -359,7 +361,7 @@ async def test_search_files_uses_python_fallback_when_rg_is_unavailable(monkeypa
 
 
 async def test_search_files_reports_validation_errors(tmp_path: Path) -> None:
-    tool = SearchFilesTool(context(tmp_path))
+    tool = SearchFilesTool(create_test_tool_context(tmp_path))
 
     assert (await tool.execute(query="")).error == "query must not be empty"
     assert (await tool.execute(query="x", context=99)).error == "context must be <= 5"
@@ -367,7 +369,7 @@ async def test_search_files_reports_validation_errors(tmp_path: Path) -> None:
 
 
 async def test_write_file(tmp_path: Path) -> None:
-    result = await WriteFileTool(context(tmp_path)).execute(path="new/file.txt", content="hello")
+    result = await WriteFileTool(create_test_tool_context(tmp_path)).execute(path="new/file.txt", content="hello")
 
     assert (tmp_path / "new" / "file.txt").read_text(encoding="utf-8") == "hello"
     assert "Created" in result.content
@@ -379,8 +381,10 @@ async def test_write_file_refuses_overwrite_and_detects_noop(tmp_path: Path) -> 
     path = tmp_path / "sample.txt"
     path.write_text("hello", encoding="utf-8")
 
-    refused = await WriteFileTool(context(tmp_path)).execute(path="sample.txt", content="new", overwrite=False)
-    noop = await WriteFileTool(context(tmp_path)).execute(path="sample.txt", content="hello")
+    refused = await WriteFileTool(create_test_tool_context(tmp_path)).execute(
+        path="sample.txt", content="new", overwrite=False
+    )
+    noop = await WriteFileTool(create_test_tool_context(tmp_path)).execute(path="sample.txt", content="hello")
 
     assert refused.error is not None
     assert "overwrite is false" in refused.error
@@ -392,7 +396,7 @@ async def test_edit_file_exact_match(tmp_path: Path) -> None:
     path = tmp_path / "sample.txt"
     path.write_text("hello world", encoding="utf-8")
 
-    result = await EditFileTool(context(tmp_path)).execute(
+    result = await EditFileTool(create_test_tool_context(tmp_path)).execute(
         path="sample.txt",
         old_text="world",
         new_text="Libre Claw",
@@ -409,7 +413,7 @@ async def test_edit_file_missing_match_returns_error(tmp_path: Path) -> None:
     path = tmp_path / "sample.txt"
     path.write_text("hello world", encoding="utf-8")
 
-    result = await EditFileTool(context(tmp_path)).execute(
+    result = await EditFileTool(create_test_tool_context(tmp_path)).execute(
         path="sample.txt",
         old_text="missing",
         new_text="Libre Claw",
@@ -422,12 +426,12 @@ async def test_edit_file_requires_precision_for_multiple_matches(tmp_path: Path)
     path = tmp_path / "sample.txt"
     path.write_text("same same same", encoding="utf-8")
 
-    ambiguous = await EditFileTool(context(tmp_path)).execute(
+    ambiguous = await EditFileTool(create_test_tool_context(tmp_path)).execute(
         path="sample.txt",
         old_text="same",
         new_text="changed",
     )
-    second = await EditFileTool(context(tmp_path)).execute(
+    second = await EditFileTool(create_test_tool_context(tmp_path)).execute(
         path="sample.txt",
         old_text="same",
         new_text="changed",
@@ -442,7 +446,7 @@ async def test_edit_file_requires_precision_for_multiple_matches(tmp_path: Path)
 async def test_apply_patch_batches_existing_and_new_file_edits(tmp_path: Path) -> None:
     first = tmp_path / "first.txt"
     first.write_text("alpha beta\n", encoding="utf-8")
-    tool = ApplyPatchTool(context(tmp_path))
+    tool = ApplyPatchTool(create_test_tool_context(tmp_path))
 
     result = await tool.execute(
         edits=[
@@ -482,7 +486,7 @@ async def test_apply_patch_validation_failure_leaves_every_file_unchanged(tmp_pa
     first.write_text("alpha\n", encoding="utf-8")
     second.write_text("beta\n", encoding="utf-8")
 
-    result = await ApplyPatchTool(context(tmp_path)).execute(
+    result = await ApplyPatchTool(create_test_tool_context(tmp_path)).execute(
         edits=[
             {
                 "path": "first.txt",
@@ -518,7 +522,7 @@ async def test_apply_patch_rolls_back_files_after_write_failure(monkeypatch, tmp
         real_write(path, content)
 
     monkeypatch.setattr(filesystem, "_write_text_atomic", flaky_write)
-    result = await ApplyPatchTool(context(tmp_path)).execute(
+    result = await ApplyPatchTool(create_test_tool_context(tmp_path)).execute(
         edits=[
             {
                 "path": "first.txt",
@@ -541,7 +545,7 @@ async def test_apply_patch_rolls_back_files_after_write_failure(monkeypatch, tmp
 async def test_apply_patch_requires_precise_matches(tmp_path: Path) -> None:
     path = tmp_path / "sample.txt"
     path.write_text("same same", encoding="utf-8")
-    tool = ApplyPatchTool(context(tmp_path))
+    tool = ApplyPatchTool(create_test_tool_context(tmp_path))
 
     ambiguous = await tool.execute(
         edits=[{"path": "sample.txt", "old_text": "same", "new_text": "changed"}]
@@ -564,7 +568,7 @@ async def test_apply_patch_requires_precise_matches(tmp_path: Path) -> None:
 
 
 async def test_bash_success_failure_and_timeout(tmp_path: Path) -> None:
-    tool = BashTool(context(tmp_path, timeout=1))
+    tool = BashTool(create_test_tool_context(tmp_path, timeout=1))
 
     success = await tool.execute(command="printf hello")
     failure = await tool.execute(command="exit 3")
@@ -579,7 +583,7 @@ async def test_bash_timeout_returns_partial_output(tmp_path: Path) -> None:
     script = "import time; print('before-timeout', flush=True); time.sleep(2)"
     command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
 
-    result = await BashTool(context(tmp_path)).execute(command=command, timeout=1)
+    result = await BashTool(create_test_tool_context(tmp_path)).execute(command=command, timeout=1)
 
     assert result.error is not None
     assert result.error.startswith("Command timed out after 1 seconds")
@@ -589,7 +593,7 @@ async def test_bash_timeout_returns_partial_output(tmp_path: Path) -> None:
 
 
 async def test_bash_validates_and_truncates_output(tmp_path: Path) -> None:
-    tool = BashTool(context(tmp_path))
+    tool = BashTool(create_test_tool_context(tmp_path))
 
     invalid_timeout = await tool.execute(command="printf hello", timeout=0)
     invalid_limit = await tool.execute(command="printf hello", max_output_chars=0)
@@ -611,7 +615,7 @@ async def test_bash_caps_large_stdout_stderr_metadata(tmp_path: Path) -> None:
     script = "import sys; sys.stdout.write('x' * 5000); sys.stderr.write('e' * 4000)"
     command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
 
-    result = await BashTool(context(tmp_path)).execute(command=command, max_output_chars=25)
+    result = await BashTool(create_test_tool_context(tmp_path)).execute(command=command, max_output_chars=25)
 
     assert result.error is None
     assert result.metadata["stdout_truncated"] is True
@@ -631,7 +635,7 @@ async def test_bash_caps_large_stdout_stderr_metadata(tmp_path: Path) -> None:
 
 
 async def test_bash_cancellation_cleans_up_reader_tasks(tmp_path: Path) -> None:
-    tool = BashTool(context(tmp_path, timeout=5))
+    tool = BashTool(create_test_tool_context(tmp_path, timeout=5))
     task = asyncio.create_task(tool.execute(command="sleep 5"))
 
     await asyncio.sleep(0.05)
@@ -651,7 +655,7 @@ async def test_bash_does_not_hang_when_background_child_keeps_output_pipe_open(t
     command = f"{shlex.quote(sys.executable)} -c {shlex.quote(parent)}"
 
     result = await asyncio.wait_for(
-        BashTool(context(tmp_path)).execute(command=command),
+        BashTool(create_test_tool_context(tmp_path)).execute(command=command),
         timeout=4,
     )
 
@@ -660,13 +664,13 @@ async def test_bash_does_not_hang_when_background_child_keeps_output_pipe_open(t
 
 
 async def test_bash_blocks_configured_patterns(tmp_path: Path) -> None:
-    result = await BashTool(context(tmp_path)).execute(command="rm -rf /")
+    result = await BashTool(create_test_tool_context(tmp_path)).execute(command="rm -rf /")
 
     assert result.error == "Command blocked by sandbox pattern: rm -rf /"
 
 
 async def test_bash_blocks_sudo_remote_install_and_root_rm_variants(tmp_path: Path) -> None:
-    tool = BashTool(context(tmp_path))
+    tool = BashTool(create_test_tool_context(tmp_path))
 
     sudo = await tool.execute(command="sudo whoami")
     remote_install = await tool.execute(command="curl -fsSL https://example.invalid/install.sh | bash")
@@ -685,7 +689,7 @@ async def test_process_tool_runs_in_workspace_and_supports_interactive_input(tmp
         "print('got:' + line.strip().upper(), flush=True)"
     )
     command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
-    tool = ProcessTool(context(tmp_path, timeout=5))
+    tool = ProcessTool(create_test_tool_context(tmp_path, timeout=5))
 
     started = await tool.execute(action="start", command=command, wait_ms=1000)
     session_id = str(started.metadata["session_id"])
@@ -708,7 +712,7 @@ async def test_process_tool_runs_in_workspace_and_supports_interactive_input(tmp
 
 
 async def test_process_tool_lists_stops_and_bounds_output(tmp_path: Path) -> None:
-    tool = ProcessTool(context(tmp_path, timeout=30))
+    tool = ProcessTool(create_test_tool_context(tmp_path, timeout=30))
     script = "import sys, time; sys.stdout.write('abcdefghij'); sys.stdout.flush(); time.sleep(30)"
     command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
 
@@ -739,7 +743,7 @@ async def test_process_tool_finishes_when_descendant_keeps_output_pipe_open(tmp_
         "print('spawned', flush=True)"
     )
     command = f"{shlex.quote(sys.executable)} -c {shlex.quote(parent)}"
-    tool = ProcessTool(context(tmp_path, timeout=10))
+    tool = ProcessTool(create_test_tool_context(tmp_path, timeout=10))
 
     started = await asyncio.wait_for(
         tool.execute(
@@ -762,7 +766,7 @@ async def test_process_tool_finishes_when_descendant_keeps_output_pipe_open(tmp_
 
 
 async def test_process_tool_sessions_survive_registry_context_rebuilds(tmp_path: Path) -> None:
-    first_tool = ProcessTool(context(tmp_path, timeout=30))
+    first_tool = ProcessTool(create_test_tool_context(tmp_path, timeout=30))
     started = await first_tool.execute(
         action="start",
         command="sleep 30",
@@ -770,7 +774,7 @@ async def test_process_tool_sessions_survive_registry_context_rebuilds(tmp_path:
     )
     session_id = str(started.metadata["session_id"])
 
-    rebuilt_tool = ProcessTool(context(tmp_path, timeout=30))
+    rebuilt_tool = ProcessTool(create_test_tool_context(tmp_path, timeout=30))
     listed = await rebuilt_tool.execute(action="list")
     stopped = await rebuilt_tool.execute(action="stop", session_id=session_id, wait_ms=0)
 
@@ -782,7 +786,7 @@ async def test_process_tool_sessions_survive_registry_context_rebuilds(tmp_path:
 async def test_process_tool_enforces_total_runtime_timeout(tmp_path: Path) -> None:
     script = "import time; print('started', flush=True); time.sleep(30)"
     command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
-    tool = ProcessTool(context(tmp_path, timeout=5))
+    tool = ProcessTool(create_test_tool_context(tmp_path, timeout=5))
     started = await tool.execute(
         action="start",
         command=command,
@@ -803,7 +807,7 @@ async def test_process_tool_enforces_total_runtime_timeout(tmp_path: Path) -> No
 
 
 async def test_process_tool_validates_actions_sessions_and_timeouts(tmp_path: Path) -> None:
-    tool = ProcessTool(context(tmp_path))
+    tool = ProcessTool(create_test_tool_context(tmp_path))
 
     assert (await tool.execute(action="missing")).error == "action must be start, poll, write, stop, or list"
     assert (await tool.execute(action="start")).error == "command is required for action=start"
@@ -839,9 +843,11 @@ async def test_git_status_and_commit_tools(tmp_path: Path) -> None:
     )
     (tmp_path / "README.md").write_text("hello\n", encoding="utf-8")
 
-    status = await GitStatusTool(context(tmp_path)).execute(show_diff=True, log_count=0)
-    commit = await GitCommitTool(context(tmp_path)).execute(message="Initial commit", paths=["README.md"])
-    clean = await GitStatusTool(context(tmp_path)).execute(show_diff=False, log_count=1)
+    status = await GitStatusTool(create_test_tool_context(tmp_path)).execute(show_diff=True, log_count=0)
+    commit = await GitCommitTool(create_test_tool_context(tmp_path)).execute(
+        message="Initial commit", paths=["README.md"]
+    )
+    clean = await GitStatusTool(create_test_tool_context(tmp_path)).execute(show_diff=False, log_count=1)
 
     assert status.error is None
     assert "README.md" in status.content
@@ -852,7 +858,7 @@ async def test_git_status_and_commit_tools(tmp_path: Path) -> None:
 
 
 async def test_git_commit_requires_paths_or_all(tmp_path: Path) -> None:
-    tool = GitCommitTool(context(tmp_path))
+    tool = GitCommitTool(create_test_tool_context(tmp_path))
     result = await tool.execute(message="nope")
     invalid_paths = await tool.execute(message="nope", paths="README.md")  # type: ignore[arg-type]
 
@@ -861,7 +867,7 @@ async def test_git_commit_requires_paths_or_all(tmp_path: Path) -> None:
 
 
 async def test_think_tool_has_no_side_effects(tmp_path: Path) -> None:
-    result = await ThinkTool(context(tmp_path)).execute(thought="Plan the next edit.")
+    result = await ThinkTool(create_test_tool_context(tmp_path)).execute(thought="Plan the next edit.")
 
     assert result.content == "Thought noted."
     assert result.metadata["side_effects"] is False
@@ -876,7 +882,7 @@ async def test_http_request_get_returns_response(monkeypatch, tmp_path: Path) ->
     client = FakeHTTPClient(response)
     monkeypatch.setattr("libre_claw.tools_builtin.http.httpx.AsyncClient", lambda **kwargs: client)
 
-    result = await HTTPRequestTool(context(tmp_path)).execute(
+    result = await HTTPRequestTool(create_test_tool_context(tmp_path)).execute(
         url="https://api.example.test/data",
         headers={"Accept": "application/json"},
         params={"query": "libre"},
@@ -897,7 +903,7 @@ async def test_http_request_can_save_download(monkeypatch, tmp_path: Path) -> No
     )
     monkeypatch.setattr("libre_claw.tools_builtin.http.httpx.AsyncClient", lambda **kwargs: FakeHTTPClient(response))
 
-    result = await HTTPRequestTool(context(tmp_path)).execute(
+    result = await HTTPRequestTool(create_test_tool_context(tmp_path)).execute(
         url="https://cdn.example.test/image.png",
         output_path="downloads/image.png",
     )
@@ -913,7 +919,7 @@ async def test_http_request_validates_inputs_and_sandbox(monkeypatch, tmp_path: 
         "libre_claw.tools_builtin.http.httpx.AsyncClient",
         lambda **kwargs: FakeHTTPClient(FakeHTTPResponse(url="https://api.example.test")),
     )
-    tool = HTTPRequestTool(context(tmp_path))
+    tool = HTTPRequestTool(create_test_tool_context(tmp_path))
 
     invalid_method = await tool.execute(url="https://api.example.test", method="TRACE")
     body_conflict = await tool.execute(url="https://api.example.test", body="raw", json_body={"ok": True})
@@ -949,7 +955,7 @@ async def test_web_search_returns_normalized_searxng_results(monkeypatch, tmp_pa
     client = FakeWebSearchClient(response)
     monkeypatch.setattr("libre_claw.tools_builtin.web_search.httpx.AsyncClient", lambda **kwargs: client)
 
-    result = await WebSearchTool(context(tmp_path)).execute(
+    result = await WebSearchTool(create_test_tool_context(tmp_path)).execute(
         query="libre claw",
         max_results=1,
         categories=["general", "it"],
@@ -970,14 +976,14 @@ async def test_web_search_reports_json_disabled(monkeypatch, tmp_path: Path) -> 
         lambda **kwargs: FakeWebSearchClient(FakeWebSearchResponse({}, status_code=403, text="Forbidden")),
     )
 
-    result = await WebSearchTool(context(tmp_path)).execute(query="libre claw")
+    result = await WebSearchTool(create_test_tool_context(tmp_path)).execute(query="libre claw")
 
     assert result.error is not None
     assert "JSON search output" in result.error
 
 
 async def test_web_search_validates_inputs(tmp_path: Path) -> None:
-    tool = WebSearchTool(context(tmp_path))
+    tool = WebSearchTool(create_test_tool_context(tmp_path))
 
     assert (await tool.execute(query="")).error == "query must not be empty"
     assert (await tool.execute(query="x", max_results=0)).error == "max_results must be >= 1"
@@ -1013,7 +1019,7 @@ async def test_skills_search_uses_configured_cli(monkeypatch, tmp_path: Path) ->
 
 
 async def test_skills_search_requires_external_discovery(tmp_path: Path) -> None:
-    result = await SkillsSearchTool(context(tmp_path)).execute(query="react")
+    result = await SkillsSearchTool(create_test_tool_context(tmp_path)).execute(query="react")
 
     assert result.error == "skills_search is disabled by [skills].external_discovery_enabled"
 
@@ -1103,12 +1109,12 @@ async def test_browser_tools_gracefully_handle_missing_session_or_dependency(mon
 
     monkeypatch.setattr(browser_tools.importlib, "import_module", missing_playwright)
 
-    navigate = await BrowserNavigateTool(context(tmp_path)).execute(url="https://example.com")
-    read = await BrowserReadTool(context(tmp_path)).execute()
-    extract = await BrowserExtractTool(context(tmp_path)).execute()
-    execute = await BrowserExecuteTool(context(tmp_path)).execute(script="() => true")
-    dismiss = await BrowserDismissCookiesTool(context(tmp_path)).execute()
-    screenshot = await BrowserScreenshotTool(context(tmp_path)).execute()
+    navigate = await BrowserNavigateTool(create_test_tool_context(tmp_path)).execute(url="https://example.com")
+    read = await BrowserReadTool(create_test_tool_context(tmp_path)).execute()
+    extract = await BrowserExtractTool(create_test_tool_context(tmp_path)).execute()
+    execute = await BrowserExecuteTool(create_test_tool_context(tmp_path)).execute(script="() => true")
+    dismiss = await BrowserDismissCookiesTool(create_test_tool_context(tmp_path)).execute()
+    screenshot = await BrowserScreenshotTool(create_test_tool_context(tmp_path)).execute()
 
     assert navigate.error is not None
     assert "Playwright is not installed" in navigate.error or "Executable doesn't exist" in navigate.error
@@ -1118,7 +1124,7 @@ async def test_browser_tools_gracefully_handle_missing_session_or_dependency(mon
 
 
 async def test_browser_policy_blocks_denied_domains(tmp_path: Path) -> None:
-    ctx = context(tmp_path)
+    ctx = create_test_tool_context(tmp_path)
     ctx = ToolContext(
         working_directory=ctx.working_directory,
         restrict_to_working_dir=ctx.restrict_to_working_dir,
@@ -1160,7 +1166,7 @@ def test_browser_artifact_dirs_relocate_to_active_workspace(tmp_path: Path) -> N
 
 
 async def test_browser_selector_actions_and_artifacts_use_shared_profile(tmp_path: Path) -> None:
-    ctx = context(tmp_path)
+    ctx = create_test_tool_context(tmp_path)
     page = FakePage()
     read_tool = BrowserReadTool(ctx)
     state = BrowserState(read_tool, "default")
@@ -1194,8 +1200,8 @@ async def test_browser_selector_actions_and_artifacts_use_shared_profile(tmp_pat
 
 
 async def test_browser_state_survives_new_tool_context_for_same_profile(tmp_path: Path) -> None:
-    first_context = context(tmp_path)
-    second_context = context(tmp_path)
+    first_context = create_test_tool_context(tmp_path)
+    second_context = create_test_tool_context(tmp_path)
     page = FakePage()
     state = browser_tools._browser_state(BrowserReadTool(first_context), "default")
     state.page = page
@@ -1287,9 +1293,8 @@ class FakeSkillSearchProcess:
 
 
 class FakePage:
-    url = "https://kroonen.ai/app"
-
     def __init__(self) -> None:
+        self.url = "https://kroonen.ai/app"
         self.download = FakeDownload()
         self.clicked_selectors: list[str] = []
 
@@ -1383,7 +1388,7 @@ async def test_file_tools_restrict_paths_to_working_directory(tmp_path: Path) ->
     outside = tmp_path.parent / "outside-libre-claw-test.txt"
     outside.write_text("secret", encoding="utf-8")
 
-    result = await ReadFileTool(context(tmp_path)).execute(path=str(outside))
+    result = await ReadFileTool(create_test_tool_context(tmp_path)).execute(path=str(outside))
 
     assert result.error is not None
     assert "outside the working directory" in result.error

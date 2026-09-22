@@ -8,12 +8,15 @@ import subprocess
 
 from collections.abc import Iterable
 from pathlib import Path
+from typing import NoReturn
 
+from click import Context
 from click.testing import CliRunner
 
 from libre_claw import __version__
-from libre_claw.cli import main
-from libre_claw.headless import HeadlessRunResult
+from libre_claw.cli import StartedProcess, main
+from libre_claw.config import LibreClawConfig
+from libre_claw.headless import HeadlessRunResult, TextCallback
 
 
 class FakeLookup:
@@ -109,13 +112,22 @@ def test_cli_run_streams_headless_response(monkeypatch, tmp_path) -> None:
     seen: dict[str, object] = {}
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    async def fake_run_headless(config, message, **kwargs):  # type: ignore[no-untyped-def]
+    async def fake_run_headless(
+        config: LibreClawConfig,
+        message: str,
+        *,
+        auto_approve: bool,
+        deadline_seconds: float | None,
+        deadline_reserve_seconds: float,
+        on_text: TextCallback,
+        **kwargs: object,
+    ) -> HeadlessRunResult:
         seen["working_directory"] = config.general.working_directory
         seen["message"] = message
-        seen["auto_approve"] = kwargs["auto_approve"]
-        seen["deadline_seconds"] = kwargs["deadline_seconds"]
-        seen["deadline_reserve_seconds"] = kwargs["deadline_reserve_seconds"]
-        kwargs["on_text"]("benchmark ready")
+        seen["auto_approve"] = auto_approve
+        seen["deadline_seconds"] = deadline_seconds
+        seen["deadline_reserve_seconds"] = deadline_reserve_seconds
+        on_text("benchmark ready")
         return HeadlessRunResult(text="benchmark ready")
 
     monkeypatch.setattr("libre_claw.cli.run_headless", fake_run_headless)
@@ -151,7 +163,9 @@ def test_cli_run_accepts_leading_hyphen_prompt_from_stdin(monkeypatch, tmp_path)
     seen: dict[str, object] = {}
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    async def fake_run_headless(config, message, **kwargs):  # type: ignore[no-untyped-def]
+    async def fake_run_headless(
+        config: LibreClawConfig, message: str, **kwargs: object
+    ) -> HeadlessRunResult:
         seen["working_directory"] = config.general.working_directory
         seen["message"] = message
         return HeadlessRunResult(text="done")
@@ -171,14 +185,14 @@ def test_cli_run_accepts_leading_hyphen_prompt_from_stdin(monkeypatch, tmp_path)
     }
 
 
-def test_cli_tui_uses_native_terminal_selection_by_default(monkeypatch, tmp_path) -> None:
+def test_cli_tui_uses_default_mouse_and_inline_settings(monkeypatch, tmp_path) -> None:
     runner = CliRunner()
     seen: dict[str, object] = {}
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
 
     class FakeApp:
-        def __init__(self, config) -> None:  # type: ignore[no-untyped-def]
+        def __init__(self, config: LibreClawConfig) -> None:
             seen["config"] = config
 
         def run(self, *, mouse: bool = True, inline: bool = False, **kwargs: object) -> None:
@@ -202,7 +216,7 @@ def test_cli_tui_allows_mouse_and_inline_overrides(monkeypatch, tmp_path) -> Non
     monkeypatch.chdir(tmp_path)
 
     class FakeApp:
-        def __init__(self, config) -> None:  # type: ignore[no-untyped-def]
+        def __init__(self, config: LibreClawConfig) -> None:
             seen["config"] = config
 
         def run(self, *, mouse: bool = True, inline: bool = False, **kwargs: object) -> None:
@@ -226,7 +240,7 @@ def test_cli_tui_allows_fullscreen_override(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeApp:
-        def __init__(self, config) -> None:  # type: ignore[no-untyped-def]
+        def __init__(self, config: LibreClawConfig) -> None:
             seen["config"] = config
 
         def run(self, *, mouse: bool = True, inline: bool = False, **kwargs: object) -> None:
@@ -250,7 +264,7 @@ def test_cli_tui_allows_inline_override(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeApp:
-        def __init__(self, config) -> None:  # type: ignore[no-untyped-def]
+        def __init__(self, config: LibreClawConfig) -> None:
             seen["config"] = config
 
         def run(self, *, mouse: bool = True, inline: bool = False, **kwargs: object) -> None:
@@ -364,7 +378,7 @@ def test_cli_start_reports_already_running_daemon(monkeypatch, tmp_path) -> None
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("libre_claw.cli._running_daemon_url", lambda config, host, port: "http://127.0.0.1:8766")
 
-    def fail_daemon_server(config):  # type: ignore[no-untyped-def]
+    def fail_daemon_server(config: LibreClawConfig) -> NoReturn:
         del config
         raise AssertionError("start should not create a second daemon")
 
@@ -384,16 +398,23 @@ def test_cli_start_detached_uses_background_daemon(monkeypatch, tmp_path) -> Non
     selected_modes: list[str] = []
     monkeypatch.setattr("libre_claw.cli._running_daemon_url", lambda config, host, port: None)
 
-    def fake_start(ctx, config, mode, host, port):  # type: ignore[no-untyped-def]
+    def fake_start(
+        ctx: Context,
+        config: LibreClawConfig,
+        mode: str,
+        host: str | None,
+        port: int | None,
+    ) -> StartedProcess:
         del ctx, config
         selected_modes.append(mode)
         assert host == "127.0.0.1"
         assert port == 9876
-        return type(
-            "Started",
-            (),
-            {"pid": 5000, "base_url": "http://127.0.0.1:9876", "log_path": tmp_path / "daemon.log", "mode": mode},
-        )()
+        return StartedProcess(
+            pid=5000,
+            base_url="http://127.0.0.1:9876",
+            log_path=tmp_path / "daemon.log",
+            mode=mode,
+        )
 
     monkeypatch.setattr("libre_claw.cli._start_background_process", fake_start)
     monkeypatch.setattr("libre_claw.cli._wait_for_daemon_health", lambda base_url, timeout: True)
@@ -428,15 +449,22 @@ def test_cli_start_uses_configured_detach(monkeypatch, tmp_path) -> None:
     selected: list[tuple[str, str | None, int | None, str]] = []
     monkeypatch.setattr("libre_claw.cli._running_daemon_url", lambda config, host, port: None)
 
-    def fake_start(ctx, config, mode, host, port):  # type: ignore[no-untyped-def]
+    def fake_start(
+        ctx: Context,
+        config: LibreClawConfig,
+        mode: str,
+        host: str | None,
+        port: int | None,
+    ) -> StartedProcess:
         del ctx
         base_url = f"http://{config.daemon.host}:{config.daemon.port}"
         selected.append((mode, host, port, base_url))
-        return type(
-            "Started",
-            (),
-            {"pid": 5000, "base_url": base_url, "log_path": tmp_path / "daemon.log", "mode": mode},
-        )()
+        return StartedProcess(
+            pid=5000,
+            base_url=base_url,
+            log_path=tmp_path / "daemon.log",
+            mode=mode,
+        )
 
     monkeypatch.setattr("libre_claw.cli._start_background_process", fake_start)
     monkeypatch.setattr("libre_claw.cli._wait_for_daemon_health", lambda base_url, timeout: True)
@@ -451,10 +479,10 @@ def test_cli_start_uses_configured_detach(monkeypatch, tmp_path) -> None:
 
 def test_cli_start_reports_port_conflict_without_traceback(monkeypatch, tmp_path) -> None:
     class PortConflictServer:
-        def __init__(self, config):  # type: ignore[no-untyped-def]
+        def __init__(self, config: LibreClawConfig) -> None:
             del config
 
-        async def run(self, host=None, port=None):  # type: ignore[no-untyped-def]
+        async def run(self, host: str | None = None, port: int | None = None) -> None:
             del host, port
             raise OSError(errno.EADDRINUSE, "address already in use")
 
@@ -574,7 +602,7 @@ def test_cli_stop_cancels_latest_active_turn(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     requests: list[tuple[str, str, str]] = []
 
-    def fake_request(method: str, base_url: str, path: str, timeout: float):
+    def fake_request(method: str, base_url: str, path: str, timeout: float) -> dict[str, object] | None:
         requests.append((method, base_url, path))
         if method == "GET":
             return {"runs": [{"run_id": "run-1", "state": "done"}, {"run_id": "run-2", "state": "running"}]}
@@ -611,14 +639,21 @@ def test_cli_restart_reuses_previous_process_mode(monkeypatch, tmp_path) -> None
         )(),
     )
 
-    def fake_start(ctx, config, mode, host, port):  # type: ignore[no-untyped-def]
+    def fake_start(
+        ctx: Context,
+        config: LibreClawConfig,
+        mode: str,
+        host: str | None,
+        port: int | None,
+    ) -> StartedProcess:
         del ctx, config, host, port
         selected_modes.append(mode)
-        return type(
-            "Started",
-            (),
-            {"pid": 5000, "base_url": "http://127.0.0.1:8766", "log_path": tmp_path / "daemon.log", "mode": mode},
-        )()
+        return StartedProcess(
+            pid=5000,
+            base_url="http://127.0.0.1:8766",
+            log_path=tmp_path / "daemon.log",
+            mode=mode,
+        )
 
     monkeypatch.setattr("libre_claw.cli._start_background_process", fake_start)
     monkeypatch.setattr("libre_claw.cli._wait_for_daemon_health", lambda base_url, timeout: True)
@@ -645,14 +680,21 @@ def test_cli_restart_starts_after_clearing_stale_pid(monkeypatch, tmp_path) -> N
     monkeypatch.setattr("libre_claw.cli._daemon_health_ok", lambda base_url: False)
     monkeypatch.setattr("libre_claw.cli._is_pid_running", lambda pid: False)
 
-    def fake_start(ctx, config, mode, host, port):  # type: ignore[no-untyped-def]
+    def fake_start(
+        ctx: Context,
+        config: LibreClawConfig,
+        mode: str,
+        host: str | None,
+        port: int | None,
+    ) -> StartedProcess:
         del ctx, config, host, port
         selected_modes.append(mode)
-        return type(
-            "Started",
-            (),
-            {"pid": 5000, "base_url": "http://127.0.0.1:8766", "log_path": tmp_path / "daemon.log", "mode": mode},
-        )()
+        return StartedProcess(
+            pid=5000,
+            base_url="http://127.0.0.1:8766",
+            log_path=tmp_path / "daemon.log",
+            mode=mode,
+        )
 
     monkeypatch.setattr("libre_claw.cli._start_background_process", fake_start)
     monkeypatch.setattr("libre_claw.cli._wait_for_daemon_health", lambda base_url, timeout: True)

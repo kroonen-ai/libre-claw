@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+from importlib import resources
 from pathlib import Path
+from xml.etree import ElementTree
 
 import httpx
 import pytest
@@ -51,7 +53,8 @@ async def test_petdex_missing_token_skips(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_petdex_posts_authenticated_state(tmp_path: Path) -> None:
+@pytest.mark.parametrize("state", ["working", "running"], ids=["working-alias", "running-canonical"])
+async def test_petdex_posts_authenticated_normalized_state(tmp_path: Path, state: str) -> None:
     config = _config(tmp_path)
     config.token_path.write_text("secret-token\n", encoding="utf-8")
     requests: list[httpx.Request] = []
@@ -62,7 +65,7 @@ async def test_petdex_posts_authenticated_state(tmp_path: Path) -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         client = PetdexClient(config, http_client=http_client)
-        result = await client.send_state("working", message="Inspecting files", details={"tool": "read_file"})
+        result = await client.send_state(state, message="Inspecting files", details={"tool": "read_file"})
 
     assert result.ok is True
     assert len(requests) == 2
@@ -110,7 +113,12 @@ async def test_petdex_installs_lobster_agent_avatar(tmp_path: Path) -> None:
         result = await client.send_state("success", message="Run done")
 
     assert result.ok is True
-    assert "Libre Claw lobster" in (agents / "libre-claw.svg").read_text(encoding="utf-8")
+    avatar_svg = (agents / "libre-claw.svg").read_text(encoding="utf-8")
+    bundled_svg = resources.files("libre_claw.web.assets").joinpath("lobster-icon.svg").read_text(encoding="utf-8")
+    assert avatar_svg == bundled_svg
+    avatar = ElementTree.fromstring(avatar_svg)
+    assert avatar.tag == "{http://www.w3.org/2000/svg}svg"
+    assert len(avatar) > 0
     assert "'libre-claw': 'agents/libre-claw.svg'" in index.read_text(encoding="utf-8")
     assert json.loads(requests[1].content)["text"] == "Run done"
 

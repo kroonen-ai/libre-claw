@@ -15,3 +15,15 @@ their rules remain enabled for future scans.
 This disposition applies to the reviewed occurrences, not every future finding
 from these rules. In particular, new task-wait findings must be checked for
 their lifecycle and cancellation effects before dismissal.
+
+## Saved AI suggestions
+
+The eleven saved suggestions for CLI, daemon, Petdex, and tool tests were also
+reviewed. Nine led to clearer test names, typed helpers, named model-limit
+fixtures, explicit state-normalization coverage, SVG validation, or isolated
+page-fixture state.
+
+Two suggestions incorrectly claimed that `kimi-k2.6:cloud` was an invalid or
+inconsistent Ollama model name. [Ollama lists that exact cloud model](https://ollama.com/library/kimi-k2.6%3Acloud).
+The fallback-routing test intentionally retains it; substituting `:latest` or
+an unrelated Llama model would remove the cloud-routing example.

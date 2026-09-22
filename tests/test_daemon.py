@@ -120,6 +120,12 @@ def _response_payload(response: object) -> dict[str, Any]:
     return payload
 
 
+def _assert_detected_model_limits(payload: dict[str, Any], expected: OpenRouterModelLimits) -> None:
+    assert payload["context_window_tokens"] == expected.context_window_tokens
+    assert payload["detected_max_completion_tokens"] == expected.max_completion_tokens
+    assert payload["detected_context_source"] == expected.source
+
+
 async def _wait_for_state(server: DaemonServer, run_id: str, state: str) -> dict[str, Any]:
     for _ in range(100):
         response = await server.get_run(RequestStub(match_info={"run_id": run_id}))  # type: ignore[arg-type]
@@ -356,9 +362,14 @@ async def test_daemon_shutdown_endpoint_sets_shutdown_event(monkeypatch, tmp_pat
 async def test_daemon_updates_runtime_model(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
+    expected_limits = OpenRouterModelLimits(
+        context_window_tokens=1_048_576,
+        max_completion_tokens=32_768,
+        source="models",
+    )
 
     async def fake_limits(*_args: Any, **_kwargs: Any) -> OpenRouterModelLimits:
-        return OpenRouterModelLimits(context_window_tokens=1_048_576, max_completion_tokens=32_768, source="models")
+        return expected_limits
 
     monkeypatch.setattr("libre_claw.daemon.detect_openrouter_model_limits", fake_limits)
     server = DaemonServer(
@@ -379,12 +390,10 @@ async def test_daemon_updates_runtime_model(monkeypatch, tmp_path: Path) -> None
     assert response.status == 200
     assert after["provider"] == "openrouter"
     assert after["model"] == "deepseek/deepseek-v4-pro"
-    assert after["context_window_tokens"] == 1_048_576
-    assert after["detected_max_completion_tokens"] == 32_768
-    assert after["detected_context_source"] == "models"
+    _assert_detected_model_limits(after, expected_limits)
     assert server.config.general.default_provider == "openrouter"
     assert server.config.general.default_model == "deepseek/deepseek-v4-pro"
-    assert server.config.agent.context_window_tokens == 1_048_576
+    assert server.config.agent.context_window_tokens == expected_limits.context_window_tokens
     assert server.config.providers["openrouter"]["default_model"] == "deepseek/deepseek-v4-pro"
 
 
@@ -420,9 +429,14 @@ async def test_daemon_openrouter_metadata_failure_is_nonfatal(monkeypatch, tmp_p
 async def test_daemon_global_model_update_updates_scheduled_automations(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
+    expected_limits = OpenRouterModelLimits(
+        context_window_tokens=262_144,
+        max_completion_tokens=16_384,
+        source="models",
+    )
 
     async def fake_limits(*_args: Any, **_kwargs: Any) -> OpenRouterModelLimits:
-        return OpenRouterModelLimits(context_window_tokens=262_144, max_completion_tokens=16_384, source="models")
+        return expected_limits
 
     monkeypatch.setattr("libre_claw.daemon.detect_openrouter_model_limits", fake_limits)
     server = DaemonServer(
@@ -449,6 +463,7 @@ async def test_daemon_global_model_update_updates_scheduled_automations(monkeypa
     assert response.status == 200
     assert payload["provider"] == "openrouter"
     assert payload["model"] == "xiaomi/mimo-v2.5-pro"
+    _assert_detected_model_limits(payload, expected_limits)
     assert payload["automations_updated"] == 1
     assert updated is not None
     assert updated.provider == "openrouter"
@@ -473,6 +488,7 @@ async def test_daemon_updates_runtime_fallback_and_persists_global_config(monkey
                 "persist_global": True,
                 "routes": [
                     {"provider": "openrouter", "model": "openrouter/auto", "api_key_env": "OPENROUTER_BACKUP_KEY"},
+                    # Ollama cloud model tags are valid fallback routes.
                     {"provider": "ollama", "model": "kimi-k2.6:cloud"},
                 ],
             }
@@ -692,9 +708,14 @@ async def test_daemon_automation_auto_approves_configured_tools(monkeypatch, tmp
 async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
+    expected_limits = OpenRouterModelLimits(
+        context_window_tokens=524_288,
+        max_completion_tokens=16_384,
+        source="models",
+    )
 
     async def fake_limits(*_args: Any, **_kwargs: Any) -> OpenRouterModelLimits:
-        return OpenRouterModelLimits(context_window_tokens=524_288, max_completion_tokens=16_384, source="models")
+        return expected_limits
 
     monkeypatch.setattr("libre_claw.daemon.detect_openrouter_model_limits", fake_limits)
     provider = ScriptedProvider([[TextDelta("ok"), Done()]])
@@ -742,7 +763,7 @@ async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> Non
     assert model_before["model"] == "claude-opus-5"
     assert model_after["provider"] == "openrouter"
     assert model_after["model"] == "deepseek/deepseek-v4-pro"
-    assert model_after["context_window_tokens"] == 524_288
+    _assert_detected_model_limits(model_after, expected_limits)
     assert fallback_before["enabled"] is False
     assert fallback_after["enabled"] is True
     assert fallback_after["routes"][0]["model"] == "openrouter/auto"
