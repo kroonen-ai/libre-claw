@@ -74,6 +74,12 @@ def provider_config(config, provider, **settings):
      "/v1/models", {"data": [{"id": "arbitrary-local-model"}]}),
     ("llamacpp", {"base_url": "http://local.test:8080"}, "/v1/models",
      {"data": [{"id": "models/custom-agent.gguf"}]}),
+    ("llamacpp", {"base_url": "http://local.test:8080/ui/"}, "/v1/models",
+     {"data": [{"id": "future-agent.gguf"}]}),
+    ("llamacpp", {"base_url": "http://local.test:8080/proxy/ui/index.html?model=future#chat"},
+     "/proxy/v1/models", {"data": [{"id": "future-agent.gguf"}]}),
+    ("llamacpp", {"base_url": "http://local.test:8080/proxy/v1/"}, "/proxy/v1/models",
+     {"data": [{"id": "future-agent.gguf"}]}),
 ])
 async def test_discovers_unknown_models_from_configured_provider(config, provider, settings, path, payload):
     config = provider_config(config, provider, **settings)
@@ -90,12 +96,31 @@ async def test_discovers_unknown_models_from_configured_provider(config, provide
     assert result.source == "live"
     assert not result.error
     assert requests[0].url.path == path
+    if provider == "llamacpp":
+        assert not requests[0].url.query
+        assert not requests[0].url.fragment
     assert requests[0].headers["authorization"] == "Bearer test-secret"
     model = next(iter(payload.values()))[0]
     model_id = model.get("id") or model.get("model") or model["name"]
     assert model_id in {item.model for item in result.models}
     if config.providers[provider]["default_model"]:
         assert config.providers[provider]["default_model"] in {item.model for item in result.models}
+
+
+async def test_llamacpp_catalog_reports_invalid_endpoint_without_network(config):
+    config = provider_config(config, "llamacpp", base_url="file:///tmp/models", default_model="future-model")
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"data": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        result = await discover_models(config, "llamacpp", api_key_store=KeyStore(None), client=client)
+    assert requests == []
+    assert result.source == "configured"
+    assert "HTTP or HTTPS server URL" in result.error
+    assert "future-model" in {item.model for item in result.models}
 
 
 async def test_anthropic_paginates_and_uses_versioned_auth(config):

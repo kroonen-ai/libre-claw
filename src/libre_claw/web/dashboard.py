@@ -295,15 +295,16 @@ _DASHBOARD_HTML = r"""<!doctype html>
           <div class="setting-row">
             <div class="copy">
               <strong>llama.cpp endpoint</strong>
-              <small>llama-server or llama-swap base URL; a trailing /v1 is fine.</small>
+              <small>Paste your llama-server or llama-swap URL. /ui and /v1 links work too.</small>
             </div>
           </div>
           <form id="llamacppForm" class="stack">
             <div class="endpoint-row">
-              <input id="llamacppBaseUrl" placeholder="http://localhost:8080" aria-label="llama.cpp base URL" spellcheck="false">
+              <input id="llamacppBaseUrl" placeholder="http://localhost:8080" aria-label="llama.cpp base URL" aria-describedby="llamacppStatus" spellcheck="false">
               <button id="llamacppDiscover" type="button">Discover</button>
-              <button class="primary" type="submit">Save endpoint</button>
+              <button id="llamacppSave" class="primary" type="submit">Save endpoint</button>
             </div>
+            <p id="llamacppStatus" class="hint" role="status" aria-live="polite">Discover models before choosing one.</p>
             <div id="llamacppDiscovered" class="row"></div>
           </form>
           </section>
@@ -1575,64 +1576,110 @@ _DASHBOARD_HTML = r"""<!doctype html>
       }
     }
 
+    let llamacppGeneration = 0, llamacppPending = false;
+
+    function setLlamacppStatus(message, error = false) {
+      $("llamacppStatus").textContent = message;
+      $("llamacppStatus").className = error ? "hint danger" : "hint";
+    }
+
+    function setLlamacppPending(pending, action = "") {
+      llamacppPending = pending;
+      $("llamacppDiscover").disabled = pending;
+      $("llamacppSave").disabled = pending;
+      $("llamacppForm").setAttribute("aria-busy", String(pending));
+      $("llamacppDiscover").textContent = pending && action === "discover" ? "Discovering…" : "Discover";
+      $("llamacppSave").textContent = pending && action === "save" ? "Saving…" : "Save endpoint";
+    }
+
+    $("llamacppBaseUrl").addEventListener("input", () => {
+      ++llamacppGeneration;
+      $("llamacppDiscovered").replaceChildren();
+      setLlamacppStatus("Endpoint changed. Discover models or save this connection.");
+    });
+
     async function loadLlamacppConfig() {
+      const generation = llamacppGeneration, value = $("llamacppBaseUrl").value;
       try {
         const payload = await request("/config/llamacpp");
+        if (generation !== llamacppGeneration || value !== $("llamacppBaseUrl").value || llamacppPending) return;
         $("llamacppBaseUrl").value = payload.base_url || "";
       } catch (_error) {
         /* endpoint config is optional */
       }
     }
 
-    function renderDiscoveredChips(models) {
+    function renderDiscoveredChips(payload) {
       const box = $("llamacppDiscovered");
       box.replaceChildren();
-      if (!models.length) {
-        box.append(empty("No models reported by this endpoint."));
-        return;
-      }
-      for (const item of models) {
+      for (const item of payload.models || []) {
         const chip = document.createElement("button");
         chip.type = "button";
         chip.className = "model-chip";
-        chip.textContent = item.label;
+        chip.textContent = item.label || item.model;
         chip.title = `Use ${item.model}`;
         chip.addEventListener("click", () => {
           $("configProvider").value = "llamacpp";
           $("configProvider").dispatchEvent(new Event("change"));
+          modelPickers.get("configModel")?.accept(payload, "llamacpp");
           $("configModel").value = item.model;
           $("configModel").dispatchEvent(new Event("input"));
+          $("configModel").dispatchEvent(new Event("change"));
         });
         box.append(chip);
       }
     }
 
     $("llamacppDiscover").addEventListener("click", async () => {
+      if (llamacppPending) return;
+      const generation = ++llamacppGeneration;
       const base = $("llamacppBaseUrl").value.trim();
       const query = base ? `?base_url=${encodeURIComponent(base)}` : "";
+      setLlamacppPending(true, "discover");
+      $("llamacppDiscovered").replaceChildren();
+      setLlamacppStatus("Connecting and discovering models…");
       try {
         const payload = await request(`/models/llamacpp${query}`);
-        renderDiscoveredChips(payload.models || []);
+        if (generation !== llamacppGeneration || base !== $("llamacppBaseUrl").value.trim()) return;
+        if (payload.error) throw new Error(payload.error);
+        $("llamacppBaseUrl").value = payload.base_url || base;
+        renderDiscoveredChips(payload);
         const count = (payload.models || []).length;
-        setNotice(`${count} ${count === 1 ? "model" : "models"} discovered from ${payload.base_url}.`);
+        setLlamacppStatus(count
+          ? `${count} ${count === 1 ? "model" : "models"} found at ${payload.base_url || base}. Choose a model and save this endpoint to use it.`
+          : "Connected, but this endpoint did not report any models. Check the server's loaded models.");
       } catch (error) {
-        renderDiscoveredChips([]);
-        setNotice(String(error.message || error), true);
+        if (generation !== llamacppGeneration || base !== $("llamacppBaseUrl").value.trim()) return;
+        setLlamacppStatus(`Could not discover models: ${error.message || error}`, true);
+      } finally {
+        setLlamacppPending(false);
       }
     });
 
     $("llamacppForm").addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (llamacppPending) return;
+      const generation = ++llamacppGeneration;
+      const base = $("llamacppBaseUrl").value.trim();
+      setLlamacppPending(true, "save");
+      setLlamacppStatus("Saving endpoint…");
       try {
         const payload = await request("/config/llamacpp", {
           method: "PATCH",
-          body: JSON.stringify({ base_url: $("llamacppBaseUrl").value.trim(), persist_global: true }),
+          body: JSON.stringify({ base_url: base, persist_global: true }),
         });
-        $("llamacppBaseUrl").value = payload.base_url;
-        document.querySelectorAll("input[data-model-provider=llamacpp]").forEach((input) => input.dispatchEvent(new Event("focus")));
-        setNotice(`llama.cpp endpoint saved: ${payload.base_url}`);
+        if (payload.error) throw new Error(payload.error);
+        for (const [id, picker] of modelPickers) {
+          if ($(id).dataset.modelProvider === "llamacpp") void picker.refresh(true);
+        }
+        if (generation !== llamacppGeneration || base !== $("llamacppBaseUrl").value.trim()) return;
+        $("llamacppBaseUrl").value = payload.base_url || base;
+        setLlamacppStatus(`Endpoint saved: ${payload.base_url || base}. Choose a model, then Save default.`);
       } catch (error) {
-        setNotice(String(error.message || error), true);
+        if (generation !== llamacppGeneration || base !== $("llamacppBaseUrl").value.trim()) return;
+        setLlamacppStatus(`Could not save endpoint: ${error.message || error}`, true);
+      } finally {
+        setLlamacppPending(false);
       }
     });
 
@@ -1783,12 +1830,32 @@ _DASHBOARD_HTML = r"""<!doctype html>
       input.addEventListener("input", showCapabilities);
       input.addEventListener("change", showCapabilities);
       showCapabilities();
+      const isConfig = input.id === "configModel";
+      const applyCatalog = (payload) => {
+        models = payload.models || [];
+        discoveredDefault = payload.default_model || "";
+        list.replaceChildren();
+        for (const item of models) {
+          const option = document.createElement("option");
+          option.value = item.model;
+          option.label = item.label || item.model;
+          list.append(option);
+        }
+        updatePlaceholder(); showCapabilities();
+        input.title = payload.error
+          ? "Discovery unavailable. You can still enter a model ID."
+          : "Choose a discovered model or enter any model ID.";
+        if (isConfig) {
+          $("modelDiscoveryStatus").textContent = payload.error
+            ? "Discovery unavailable. Check your provider connection or enter a model ID."
+            : `${models.length} ${models.length === 1 ? "model" : "models"} ${payload.source === "configured" ? "from configuration" : "available"} · Manual IDs supported`;
+        }
+      };
       const update = async (refresh = false) => {
         const requestId = ++generation;
         const provider = effectiveProvider();
         input.dataset.modelProvider = provider;
         list.replaceChildren(); models = []; discoveredDefault = ""; updatePlaceholder(); showCapabilities();
-        const isConfig = input.id === "configModel";
         if (isConfig) {
           $("modelDiscoveryStatus").textContent = `Loading models from ${providerLabel(provider)}…`;
           $("refreshModels").disabled = true;
@@ -1799,23 +1866,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           if (refresh) query.set("refresh", "1");
           const payload = await request(`/models${query.size ? `?${query}` : ""}`);
           if (requestId !== generation) return;
-          models = payload.models || [];
-          discoveredDefault = payload.default_model || "";
-          for (const item of models) {
-            const option = document.createElement("option");
-            option.value = item.model;
-            option.label = item.label;
-            list.append(option);
-          }
-          updatePlaceholder(); showCapabilities();
-          input.title = payload.error
-            ? "Discovery unavailable. You can still enter a model ID."
-            : "Choose a discovered model or enter any model ID.";
-          if (isConfig) {
-            $("modelDiscoveryStatus").textContent = payload.error
-              ? "Discovery unavailable. Check your provider connection or enter a model ID."
-              : `${models.length} ${models.length === 1 ? "model" : "models"} ${payload.source === "configured" ? "from configuration" : "available"} · Manual IDs supported`;
-          }
+          applyCatalog(payload);
         } catch (_error) {
           if (requestId === generation) {
             input.title = "Discovery unavailable. Enter a model ID.";
@@ -1834,7 +1885,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
         void update();
       });
       input.addEventListener("focus", () => { void update(); });
-      modelPickers.set(input.id, {refresh: update});
+      modelPickers.set(input.id, {
+        refresh: update,
+        accept: (payload, provider) => {
+          if (effectiveProvider() !== provider) return;
+          ++generation;
+          applyCatalog(payload);
+          if (isConfig) $("refreshModels").disabled = false;
+        },
+      });
     }
 
     syncModelDatalist($("runProvider"), $("runModel"));

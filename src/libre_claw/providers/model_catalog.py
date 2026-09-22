@@ -26,6 +26,7 @@ from libre_claw.auth.api_keys import ApiKeyStore
 from libre_claw.config import LibreClawConfig
 from libre_claw.kimi import normalize_moonshot_selection
 from libre_claw.providers.capabilities import apply_model_overrides, parse_capabilities
+from libre_claw.providers.llamacpp import normalize_llamacpp_base_url
 from libre_claw.providers.local import _ollama_api_url, _openai_base_url
 
 
@@ -419,7 +420,12 @@ async def _discover_http(
         url = base_url + "/v1/models"
     elif provider == "ollama" and _text(settings.get("api_format"), "ollama").lower() == "ollama":
         url = _ollama_api_url(base_url, "tags")
-    elif provider in {"ollama", "llamacpp"}:
+    elif provider == "llamacpp":
+        try:
+            url = normalize_llamacpp_base_url(base_url) + "/v1/models"
+        except ValueError as exc:
+            raise _DiscoveryError(str(exc)) from exc
+    elif provider == "ollama":
         url = _openai_base_url(base_url) + "models"
     else:
         url = base_url + "/models"

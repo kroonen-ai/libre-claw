@@ -11,7 +11,9 @@ import httpx
 import pytest
 
 from libre_claw.config import load_config
+from libre_claw.core.session import ChatMessage, text_block
 from libre_claw.providers import ProviderConfigurationError, create_provider
+from libre_claw.providers.base import Done, TextDelta
 from libre_claw.providers.factory import _canonical_provider_name
 from libre_claw.providers.llamacpp import (
     DEFAULT_LLAMACPP_BASE_URL,
@@ -19,6 +21,7 @@ from libre_claw.providers.llamacpp import (
     LlamaCppModel,
     LlamaCppProvider,
     discover_llamacpp_models,
+    normalize_llamacpp_base_url,
 )
 
 
@@ -135,6 +138,16 @@ async def test_discover_llamacpp_models_wraps_http_errors() -> None:
         await discover_llamacpp_models("http://localhost:8080", client=client)
 
 
+@pytest.mark.parametrize("error", [httpx.ConnectTimeout(""), httpx.ReadTimeout("")])
+async def test_discovery_explains_timeouts_with_empty_exception_messages(error) -> None:
+    def timeout(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(timeout)) as client:
+        with pytest.raises(LlamaCppDiscoveryError, match="Timed out.*local.test/v1/models.*reachable"):
+            await discover_llamacpp_models("http://local.test/ui/", client=client)
+
+
 @pytest.mark.asyncio
 async def test_discover_llamacpp_models_rejects_invalid_json() -> None:
     client = FakeClient(FakeResponse(json.JSONDecodeError("bad", "", 0)))
@@ -175,13 +188,99 @@ async def test_daemon_lists_llamacpp_models(monkeypatch, tmp_path: Path) -> None
     assert payload["models"] == [{"model": "qwen3-30b", "label": "qwen3-30b"}]
 
 
-def test_normalize_llamacpp_base_url_strips_v1() -> None:
-    from libre_claw.providers.llamacpp import normalize_llamacpp_base_url
+@pytest.mark.parametrize(("url", "expected"), [
+    ("http://stargate.local:8080/v1", "http://stargate.local:8080"),
+    ("http://stargate.local:8080/v1/", "http://stargate.local:8080"),
+    ("http://localhost:8080/", "http://localhost:8080"),
+    (" https://swap.example/v1 ", "https://swap.example"),
+    ("http://192.168.1.188:8080/ui/", "http://192.168.1.188:8080"),
+    ("http://localhost:8080/ui/index.html?model=future#chat", "http://localhost:8080"),
+    ("https://swap.example/llama/ui/?theme=dark#models", "https://swap.example/llama"),
+    ("https://swap.example/llama/v1/", "https://swap.example/llama"),
+    ("http://[::1]:8080/ui/", "http://[::1]:8080"),
+    ("https://swap.example/ui/proxy/", "https://swap.example/ui/proxy"),
+    ("https://swap.example/my-ui/", "https://swap.example/my-ui"),
+    ("https://swap.example/proxy?model=ignored#ignored", "https://swap.example/proxy"),
+])
+def test_normalize_llamacpp_base_url(url: str, expected: str) -> None:
+    assert normalize_llamacpp_base_url(url) == expected
 
-    assert normalize_llamacpp_base_url("http://stargate.local:8080/v1") == "http://stargate.local:8080"
-    assert normalize_llamacpp_base_url("http://stargate.local:8080/v1/") == "http://stargate.local:8080"
-    assert normalize_llamacpp_base_url("http://localhost:8080/") == "http://localhost:8080"
-    assert normalize_llamacpp_base_url(" https://swap.example/v1 ") == "https://swap.example"
+
+@pytest.mark.parametrize("url", [
+    "", "localhost:8080", "file:///tmp/models", "ftp://local.test/", "http:///ui/",
+    "http://[::1", "http://localhost:invalid", "http://localhost:99999",
+    "http://local host:8080", "http://local\nhost:8080",
+])
+def test_normalize_llamacpp_base_url_rejects_invalid_urls(url: str) -> None:
+    with pytest.raises(ValueError, match="HTTP or HTTPS server URL"):
+        normalize_llamacpp_base_url(url)
+    with pytest.raises(ProviderConfigurationError, match="HTTP or HTTPS server URL"):
+        LlamaCppProvider(url, model="future-model", max_tokens=4096)
+
+
+@pytest.mark.parametrize("suffix", ["/ui/", "/ui/index.html?model=future#chat", "/v1/"])
+async def test_discovery_uses_api_from_copied_ui_url(suffix: str) -> None:
+    requests = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": [{"id": "future-local-model"}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        models = await discover_llamacpp_models("http://local.test/proxy" + suffix, client=client)
+    assert [model.model for model in models] == ["future-local-model"]
+    assert [str(request.url) for request in requests] == ["http://local.test/proxy/v1/models"]
+
+
+@pytest.mark.parametrize("payload", [{}, {"data": None}, {"data": {}}, []])
+async def test_discovery_rejects_invalid_model_lists(payload: Any) -> None:
+    client = FakeClient(FakeResponse(payload))
+    with pytest.raises(LlamaCppDiscoveryError, match="invalid model list"):
+        await discover_llamacpp_models("http://local.test/ui/", client=client)
+
+
+async def test_discovery_rejects_invalid_url_without_request() -> None:
+    client = FakeClient(FakeResponse({"data": []}))
+    with pytest.raises(LlamaCppDiscoveryError, match="HTTP or HTTPS server URL"):
+        await discover_llamacpp_models("file:///tmp/models", client=client)
+    assert client.requested_url == ""
+
+
+@pytest.mark.parametrize("suffix", ["/ui/", "/ui/index.html?model=future#chat", "/v1/"])
+async def test_factory_inference_normalizes_saved_browser_url(monkeypatch, tmp_path: Path, suffix: str) -> None:
+    from openai import AsyncOpenAI
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[general]\ndefault_provider = "llamacpp"\n'
+        '[providers.llamacpp]\ndefault_model = "future-model"\n'
+        f'base_url = "http://local.test/proxy{suffix}"\n',
+        encoding="utf-8",
+    )
+    requests = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        chunk = {"id": "local-test", "object": "chat.completion.chunk", "created": 0,
+                 "model": "future-model", "choices": [{"index": 0,
+                 "delta": {"content": "Connected"}, "finish_reason": "stop"}]}
+        return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                              text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr("libre_claw.providers.openai.AsyncOpenAI",
+                            lambda **kwargs: AsyncOpenAI(http_client=client, **kwargs))
+        provider = create_provider(load_config(config_path=config_path))
+        events = [event async for event in provider.complete(
+            [ChatMessage(role="user", content=[text_block("Hello")])]
+        )]
+    assert provider.base_url == "http://local.test/proxy"
+    assert [str(request.url) for request in requests] == ["http://local.test/proxy/v1/chat/completions"]
+    assert json.loads(requests[0].content)["model"] == "future-model"
+    assert events[0] == TextDelta("Connected")
+    assert isinstance(events[-1], Done)
 
 
 @pytest.mark.asyncio

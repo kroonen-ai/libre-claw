@@ -394,9 +394,10 @@ class DaemonServer:
         """
         requested = str(request.query.get("base_url", "")).strip()
         configured = str(self._llamacpp_config().get("base_url") or DEFAULT_LLAMACPP_BASE_URL)
-        base_url = normalize_llamacpp_base_url(requested or configured)
-        if not base_url.lower().startswith(("http://", "https://")):
-            return _json_error("Field 'base_url' must be an http(s) URL.")
+        try:
+            base_url = normalize_llamacpp_base_url(requested or configured)
+        except ValueError as exc:
+            return _json_error(f"Invalid base_url: {exc}")
         try:
             models = await discover_llamacpp_models(base_url)
         except LlamaCppDiscoveryError as exc:
@@ -425,9 +426,10 @@ class DaemonServer:
         if not isinstance(payload, Mapping):
             return _json_error("Request body must be a JSON object.")
 
-        base_url = normalize_llamacpp_base_url(str(payload.get("base_url", "")))
-        if not base_url.lower().startswith(("http://", "https://")):
-            return _json_error("Field 'base_url' must be an http(s) URL.")
+        try:
+            base_url = normalize_llamacpp_base_url(str(payload.get("base_url", "")))
+        except ValueError as exc:
+            return _json_error(f"Invalid base_url: {exc}")
 
         persisted_path: str | None = None
         if bool(payload.get("persist_global", False)):
