@@ -6,11 +6,12 @@ default_provider = "anthropic"
 default_model = "claude-opus-5"
 working_directory = "."
 # Theme controls the TUI and the dashboard default.
-# Supported: lobster, lobster-light, dark, light, libre-default, github-dark, github-light,
+# Supported: libre, libre-light, lobster, lobster-light, harness, harness-light,
+# github-dark, github-light,
 # monokai-pro, night-owl, tokyo-night, ayu, dracula, catppuccin-mocha,
 # catppuccin-latte, gruvbox-dark, nord, solarized-dark, solarized-light,
 # one-dark-pro, rose-pine, kanagawa, matrix.
-theme = "lobster"
+theme = "libre"
 log_level = "info"
 
 [agent]

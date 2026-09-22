@@ -29,6 +29,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
 
     assert config.general.default_provider == "anthropic"
     assert config.general.default_model == "claude-opus-5"
+    assert config.general.theme == "libre"
     assert config.general.working_directory == tmp_path.resolve()
     assert config.tui.show_status_bar is True
     assert config.tui.show_file_tree is False
@@ -546,6 +547,7 @@ def test_deepseek_defaults_survive_missing_default_resources(monkeypatch, tmp_pa
 
     monkeypatch.setattr(config_module, "packaged_default_config_text", missing_package)
     assert load_config().providers["deepseek"] == expected
+    assert load_config().general.theme == "libre"
 
 
 def test_deepseek_global_selection_preserves_controls_and_capabilities(monkeypatch, tmp_path):

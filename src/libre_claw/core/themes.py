@@ -27,20 +27,25 @@ class ThemePalette:
     danger: str
     ok: str
     warn: str
+    line: str = ""
+    line_strong: str = ""
+    soft: str = ""
+    panel_strong: str = ""
+    on_accent: str = ""
+    code: str = ""
 
 
 THEME_ALIASES: dict[str, str] = {
-    "": "lobster",
-    "default": "lobster",
-    "dark": "lobster",
-    "libre": "lobster",
-    "libre-dark": "lobster",
-    "libre-default": "lobster",
+    "": "libre",
+    "default": "libre",
+    "dark": "libre",
+    "libre-dark": "libre",
+    "libre-default": "libre",
     "codex-lobster": "lobster",
     "clear": "lobster-light",
     "lobster-clear": "lobster-light",
     "codex-lobster-light": "lobster-light",
-    "light": "github-light",
+    "light": "libre-light",
     "ayu-mirage": "ayu",
     "rosepine": "rose-pine",
     "rose-pine-moon": "rose-pine",
@@ -49,6 +54,56 @@ THEME_ALIASES: dict[str, str] = {
 
 
 THEME_PALETTES: dict[str, ThemePalette] = {
+    "libre": ThemePalette(
+        theme_id="libre",
+        label="Libre Claw",
+        is_light=False,
+        background="#11110f",
+        surface="#191916",
+        surface_2="#22221e",
+        panel="#191916",
+        sidebar="#191916",
+        status_bg="#171714",
+        text="#e8e4da",
+        muted="#a19e94",
+        accent="#d98c7c",
+        accent_strong="#e8a294",
+        tool="#a9c4b7",
+        danger="#e1a094",
+        ok="#afc69c",
+        warn="#d4b57c",
+        line="#33332c",
+        line_strong="#4a493f",
+        soft="#c4c0b5",
+        panel_strong="#262621",
+        on_accent="#19130f",
+        code="#171714",
+    ),
+    "libre-light": ThemePalette(
+        theme_id="libre-light",
+        label="Libre Claw Light",
+        is_light=True,
+        background="#f3f0e7",
+        surface="#f9f6ef",
+        surface_2="#e9e5da",
+        panel="#f9f6ef",
+        sidebar="#f9f6ef",
+        status_bg="#e9e5da",
+        text="#24231f",
+        muted="#69665c",
+        accent="#973e30",
+        accent_strong="#7b2f23",
+        tool="#2d6959",
+        danger="#973e30",
+        ok="#4e6b33",
+        warn="#805b1d",
+        line="#d6d1c4",
+        line_strong="#bcb5a5",
+        soft="#504d44",
+        panel_strong="#e3dfd3",
+        on_accent="#fffaf2",
+        code="#f9f6ef",
+    ),
     "harness": ThemePalette(
         theme_id="harness",
         label="Harness",
@@ -457,7 +512,7 @@ def normalize_theme(theme: str | None) -> str:
     value = THEME_ALIASES.get(value, value)
     if value in THEME_PALETTES:
         return value
-    return "lobster"
+    return "libre"
 
 
 def dashboard_theme_id(theme: str | None) -> str:

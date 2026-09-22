@@ -13,6 +13,7 @@ import time
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import unquote, urlparse
@@ -30,6 +31,8 @@ from textual.binding import Binding
 from textual.color import Color
 from textual.containers import Horizontal, Vertical
 from textual.selection import Selection
+from textual.message import Message
+from textual.theme import Theme
 from textual.widgets import Button, DirectoryTree, Input, RichLog, Static
 
 from libre_claw import __version__
@@ -95,7 +98,8 @@ from libre_claw.core.session import session_from_payload
 from libre_claw.core.session import ChatMessage, UserAttachment, estimate_context_tokens, session_to_payload
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
 from libre_claw.core.soul import SoulError, SoulStore
-from libre_claw.core.themes import THEME_ALIASES, THEME_PALETTES, normalize_theme, tui_theme_palette
+from libre_claw.core.themes import THEME_ALIASES, THEME_PALETTES, ThemePalette, normalize_theme, tui_theme_palette
+from libre_claw.tui.branding import PixelWordmark, pixel_wordmark_text
 from libre_claw.core.tools import ToolCall, ToolResult
 from libre_claw.core.usage import (
     load_usage_records,
@@ -184,6 +188,17 @@ class SelectableRichLog(RichLog):
     """RichLog variant that exposes rendered lines to Textual text selection."""
 
     ALLOW_SELECT = True
+
+    class WidthChanged(Message):
+        """The transcript has received its new width after layout."""
+
+    def on_resize(self, event: events.Resize) -> None:
+        if self.id != "chat":
+            return
+        width = self.content_size.width
+        if width > 0 and width != getattr(self, "_transcript_width", 0):
+            self._transcript_width = width
+            self.post_message(self.WidthChanged())
 
     def get_selection(self, selection: Selection) -> tuple[str, str] | None:
         text = _rich_log_selection_text(self.lines)
@@ -333,7 +348,7 @@ PERMISSION_KEYS: dict[str, PermissionResolution] = {
     "exclamation_mark": "always_allow_call",
 }
 
-ASSISTANT_ACCENT = "#FF5C5C"
+ASSISTANT_ACCENT = "#d98c7c"
 PROJECT_NOTICE = "Apache-2.0 | Kroonen AI | hello@kroonen.ai"
 PROJECT_LINKS = "Website: https://libreclaw.sh | GitHub: https://github.com/kroonen-ai/libre-claw"
 LOBSTER_CODE_BACKGROUND = "#0b1020"
@@ -369,7 +384,7 @@ TUI_CLIPBOARD_IMAGE_DIR = Path.home() / ".libre-claw" / "tui" / "uploads"
 
 
 class LobsterSyntaxTheme(SyntaxTheme):
-    """Rich syntax theme matching Libre Claw's Lobster website code blocks."""
+    """Rich token styles for terminal code blocks and change previews."""
 
     def __init__(
         self,
@@ -494,17 +509,42 @@ def _lobster_syntax(code: str, lexer: str, *, light: bool = False, word_wrap: bo
     )
 
 
-STARTUP_ASCII = r"""
- █████        ███  █████                             █████████  ████
-░░███        ░░░  ░░███                             ███░░░░░███░░███
- ░███        ████  ░███████  ████████   ██████     ███     ░░░  ░███   ██████   █████ ███ █████
- ░███       ░░███  ░███░░███░░███░░███ ███░░███   ░███          ░███  ░░░░░███ ░░███ ░███░░███
- ░███        ░███  ░███ ░███ ░███ ░░░ ░███████    ░███          ░███   ███████  ░███ ░███ ░███
- ░███      █ ░███  ░███ ░███ ░███     ░███░░░     ░░███     ███ ░███  ███░░███  ░░███████████
- ███████████ █████ ████████  █████    ░░██████     ░░█████████  █████░░████████  ░░████░████
-░░░░░░░░░░░ ░░░░░ ░░░░░░░░  ░░░░░      ░░░░░░       ░░░░░░░░░  ░░░░░  ░░░░░░░░    ░░░░ ░░░░
-"""
+@lru_cache(maxsize=32)
+def _palette_code_theme(palette: ThemePalette) -> LobsterSyntaxTheme:
+    if palette.theme_id in {"lobster", "lobster-light"}:
+        return _lobster_code_theme(light=palette.is_light)
+    background = palette.code or palette.background
+    base = Color.parse(background)
+    return LobsterSyntaxTheme(
+        background=background,
+        text=palette.text,
+        muted=palette.muted,
+        orange=palette.accent,
+        cyan=palette.tool,
+        red=palette.danger,
+        green=palette.ok,
+        purple=palette.warn,
+        diff_added_background=base.blend(Color.parse(palette.ok), 0.12).hex,
+        diff_removed_background=base.blend(Color.parse(palette.danger), 0.12).hex,
+    )
 
+
+def _themed_markdown(markup: str, *, palette: ThemePalette) -> Markdown:
+    code_theme = _palette_code_theme(palette)
+    return Markdown(
+        markup,
+        code_theme=code_theme,  # type: ignore[arg-type]
+        inline_code_lexer="text",
+        inline_code_theme=code_theme,  # type: ignore[arg-type]
+    )
+
+
+def _themed_syntax(code: str, lexer: str, *, palette: ThemePalette, word_wrap: bool = True) -> Syntax:
+    code_theme = _palette_code_theme(palette)
+    return Syntax(code, lexer, theme=code_theme, word_wrap=word_wrap, padding=1, background_color=code_theme.background_color)
+
+
+STARTUP_ASCII = pixel_wordmark_text()
 
 class LibreClawApp(App[None]):
     """Textual application with streaming providers, tools, memory, and Telegram status."""
@@ -515,431 +555,162 @@ class LibreClawApp(App[None]):
     CSS = """
     Screen {
         layout: vertical;
-        background: #0b1020;
-        color: #e4e4e7;
-        scrollbar-color: #FF5C5C;
-        scrollbar-color-hover: #FF5C5C;
-        scrollbar-color-active: #FF5C5C;
-        scrollbar-background: #0b1020;
-        scrollbar-background-hover: #0b1020;
-        scrollbar-background-active: #0b1020;
-        scrollbar-corner-color: #0b1020;
-        scrollbar-size-vertical: 1;
-        scrollbar-size-horizontal: 1;
-    }
-
-    Screen.light {
-        background: #f7f7f2;
-        color: #111827;
-        scrollbar-color: #FF5C5C;
-        scrollbar-color-hover: #FF5C5C;
-        scrollbar-color-active: #FF5C5C;
-        scrollbar-background: #f7f7f2;
-        scrollbar-background-hover: #f7f7f2;
-        scrollbar-background-active: #f7f7f2;
-        scrollbar-corner-color: #f7f7f2;
+        background: $background;
+        color: $foreground;
+        scrollbar-color: $primary;
+        scrollbar-color-hover: $primary;
+        scrollbar-color-active: $primary;
+        scrollbar-background: $background;
         scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 1;
     }
 
     #status {
         height: 1;
-        background: #111827;
-        color: #f2f5f8;
-        padding: 0 1;
-    }
-
-    Screen.light #status {
-        background: #d9e2ec;
-        color: #0b1020;
+        padding: 0 2;
+        text-overflow: ellipsis;
     }
 
     #workspace {
         height: 1fr;
-        border: none;
-        border-top: solid #FF5C5C;
-        border-bottom: solid #FF5C5C;
-        background: #111827;
-    }
-
-    Screen.light #workspace {
-        background: #ffffff;
-        border-top: solid #a8b3bd;
-        border-bottom: solid #a8b3bd;
+        border-top: solid $lc-line;
+        border-bottom: solid $lc-line;
     }
 
     #sidebar {
         width: 30;
-        min-width: 22;
+        min-width: 20;
         height: 1fr;
-        border: none;
-        background: #0b1020;
+        padding-top: 1;
     }
 
     #sidebar-rail {
         width: 8;
         height: 1fr;
-        background: #0b1020;
-        border: none;
         padding: 1 0;
     }
 
-    #sidebar-actions {
-        height: 1;
-        padding: 0 1;
-    }
-
-    #sidebar-show,
-    #sidebar-hide,
-    #sidebar-up {
-        height: 1;
-        min-width: 6;
-    }
-
-    #sidebar-hide {
-        margin-right: 1;
-    }
-
-    #sidebar-up {
-        min-width: 8;
-    }
-
-    #sidebar-root {
-        height: auto;
-        padding: 0 1;
-        color: #8a96a3;
-    }
-
-    #file-tree {
-        height: 1fr;
-        background: #0b1020;
-    }
-
-    Screen.light #sidebar {
-        background: #eef2f6;
-        border: none;
-    }
-
-    Screen.light #sidebar-rail {
-        background: #eef2f6;
-        border: none;
-    }
-
-    Screen.light #file-tree {
-        background: #eef2f6;
-    }
-
-    #main {
-        width: 1fr;
-        height: 1fr;
-        border: none;
-        background: #111827;
-    }
+    #sidebar-actions { height: 1; padding: 0 1; }
+    #sidebar-show, #sidebar-hide, #sidebar-up { height: 1; min-width: 6; }
+    #sidebar-hide { margin-right: 1; }
+    #sidebar-root { height: auto; padding: 1; }
+    #file-tree { height: 1fr; padding: 0 1; }
+    #main { width: 1fr; height: 1fr; }
 
     #workspace-bar {
         height: 2;
         padding: 0 2;
         content-align: left middle;
-        border-bottom: solid #FF5C5C;
-        background: #1f2937;
-        color: #a1a1aa;
+        border-bottom: solid $lc-line;
+        text-overflow: ellipsis;
     }
 
     #palette {
         height: auto;
         max-height: 10;
         padding: 1 2;
-        border: solid #c6a15b;
-        background: #17140d;
-        color: #f6e9c5;
-    }
-
-    #palette.hidden {
-        display: none;
+        border: solid $primary;
     }
 
     #suggestions {
         height: auto;
         max-height: 8;
         padding: 0 2;
-        border: solid #FF5C5C;
-        background: #111827;
-        color: #dbeafe;
-    }
-
-    #suggestions.hidden {
-        display: none;
+        border: solid $lc-line;
     }
 
     #petdex-panel {
         height: auto;
         max-height: 14;
         padding: 1 2;
-        border-bottom: solid #FF5C5C;
-        background: #111827;
-        color: #e4e4e7;
+        border-bottom: solid $lc-line;
     }
 
-    #petdex-panel.hidden {
-        display: none;
-    }
-
-    .reviewing-changes #petdex-panel {
-        display: none;
-    }
-
-    Screen.light #petdex-panel {
-        background: #ffffff;
-        color: #111827;
-    }
+    #palette.hidden, #suggestions.hidden, #petdex-panel.hidden,
+    #permission-panel.hidden, #change-panel.hidden, #artifact-panel.hidden,
+    .reviewing-changes #petdex-panel { display: none; }
 
     #chat {
         height: 1fr;
         padding: 1 2;
         border: none;
-        background: #111827;
-    }
-
-    Screen.light #main {
-        background: #ffffff;
-        border: none;
-    }
-
-    Screen.light #chat {
-        background: #ffffff;
-        border: none;
+        scrollbar-size-vertical: 0;
+        scrollbar-size-horizontal: 0;
     }
 
     #permission-panel {
         height: auto;
         max-height: 22;
         padding: 1 2;
-        border-top: solid #FF5C5C;
-        background: #111827;
-        color: #dbeafe;
+        border-top: solid $primary;
     }
 
-    #permission-panel.hidden {
-        display: none;
-    }
-
-    #permission-title {
-        height: auto;
-        color: #ffffff;
-        text-style: bold;
-    }
-
+    #permission-title { height: auto; color: $foreground; text-style: bold; }
     #permission-preview {
         height: auto;
         max-height: 10;
         margin-top: 1;
         padding: 0 1;
-        border-left: solid #FF5C5C;
-        background: #0b1020;
+        border-left: solid $primary;
     }
-
-    #permission-warning {
-        height: auto;
-        color: #ffcc66;
-        text-style: bold;
-    }
-
-    #permission-actions {
-        height: 3;
-        padding-top: 1;
-    }
-
-    #permission-actions Button {
-        margin-right: 1;
-        min-width: 14;
-    }
-
-    Screen.light #permission-panel {
-        background: #edf5ff;
-        color: #0b1020;
-    }
-
-    Screen.light #permission-title {
-        color: #0b1020;
-    }
-
-    Screen.light #permission-preview {
-        background: #fffaf0;
-    }
+    #permission-warning { height: auto; color: $warning; text-style: bold; }
+    #permission-actions { height: 2; padding-top: 1; }
+    #permission-actions Button { margin-right: 1; min-width: 13; }
 
     #change-panel {
         height: 40%;
         min-height: 10;
         max-height: 19;
-        border-top: solid #FF5C5C;
-        background: #0b1020;
+        border-top: solid $lc-line;
         padding: 0 1;
     }
+    #change-toolbar { height: 3; padding-top: 1; }
+    #change-title { width: 1fr; height: 2; content-align: left middle; text-style: bold; }
+    #change-toolbar Button { min-width: 7; margin-left: 1; }
+    #change-content { height: 1fr; border: none; }
 
-    #change-panel.hidden {
-        display: none;
-    }
+    #artifact-panel { height: 16; border-top: solid $lc-line; padding: 0 1; }
+    #artifact-tabs { height: 3; padding-top: 1; overflow-x: auto; scrollbar-size-horizontal: 1; }
+    #artifact-tabs Button { margin-right: 1; min-width: 9; }
+    #artifact-title { height: 1; text-style: bold; }
+    #artifact-content { height: 1fr; border: none; }
 
-    #change-toolbar {
-        height: 3;
-        padding-top: 1;
-    }
+    #composer { height: 4; border-top: solid $lc-line; }
+    #composer-meta { height: 1; padding: 0 2; text-overflow: ellipsis; }
+    #input { height: 2; border: none; padding: 0 2; }
+    #input:focus { background-tint: transparent; }
+    #input > .input--placeholder, #input > .input--suggestion { color: $lc-muted; }
+    #input > .input--cursor { background: $primary; color: $lc-on-accent; }
+    #input > .input--selection { background: $primary 30%; color: $foreground; }
 
-    #change-title {
-        width: 1fr;
-        height: 2;
-        content-align: left middle;
-        color: #fecaca;
-        text-style: bold;
-    }
+    Button { background: $lc-panel-strong; color: $foreground; text-style: none; }
+    Button.-primary, Button.-success { background: $primary; color: $lc-on-accent; }
+    Button.-error { background: $lc-panel-strong; color: $error; }
+    Button:hover { background: $primary 20%; color: $foreground; }
+    Button:focus { text-style: bold underline; }
 
-    #change-toolbar Button {
-        min-width: 8;
-        margin-left: 1;
-    }
+    DirectoryTree > .directory-tree--folder { color: $foreground; text-style: bold; }
+    DirectoryTree > .directory-tree--file { color: $lc-muted; }
+    DirectoryTree > .directory-tree--extension { color: $lc-muted; }
+    DirectoryTree > .tree--guides { color: $lc-line; }
+    DirectoryTree > .tree--cursor { background: $primary 18%; color: $foreground; }
+    DirectoryTree:focus > .tree--cursor { background: $primary 25%; color: $foreground; }
 
-    #change-content {
-        height: 1fr;
-        border: none;
-        background: #0b1020;
-    }
+    .narrow #status { padding: 0 1; }
+    .narrow #sidebar { width: 22; }
+    .narrow #chat, .narrow #workspace-bar, .narrow #composer-meta, .narrow #input { padding-left: 1; padding-right: 1; }
+    .narrow #permission-panel { padding: 1; }
+    .narrow #permission-actions { layout: grid; grid-size: 2; grid-rows: 1; grid-gutter: 1; height: 3; padding-top: 0; }
+    .narrow #permission-actions Button { width: 1fr; min-width: 0; margin-right: 0; }
+    .narrow #artifact-tabs Button { min-width: 8; }
 
-    Screen.light #change-panel,
-    Screen.light #change-content {
-        background: #fffaf0;
-        color: #0b1020;
-    }
-
-    #artifact-panel {
-        height: 16;
-        border-top: solid #FF5C5C;
-        background: #0b1020;
-        padding: 0 1;
-    }
-
-    #artifact-panel.hidden {
-        display: none;
-    }
-
-    #artifact-tabs {
-        height: 3;
-        padding-top: 1;
-    }
-
-    #artifact-tabs Button {
-        margin-right: 1;
-        min-width: 10;
-    }
-
-    #artifact-title {
-        height: 1;
-        color: #dbeafe;
-        text-style: bold;
-    }
-
-    #artifact-content {
-        height: 1fr;
-        background: #0b1020;
-        border: none;
-    }
-
-    Screen.light #artifact-panel,
-    Screen.light #artifact-content {
-        background: #f8fbff;
-        color: #0b1020;
-    }
-
-    #composer {
-        height: 4;
-        border-top: solid #FF5C5C;
-        background: #1f2937;
-    }
-
-    #composer-meta {
-        height: 1;
-        padding: 0 2;
-        color: #a1a1aa;
-    }
-
-    #workspace,
-    #sidebar-rail,
-    #sidebar,
-    #file-tree,
-    #main,
-    #workspace-bar,
-    #palette,
-    #suggestions,
-    #permission-panel,
-    #permission-preview,
-    #change-panel,
-    #change-content,
-    #artifact-panel,
-    #artifact-content,
-    #chat,
-    #petdex-panel,
-    #composer,
-    #input {
-        scrollbar-color: #FF5C5C;
-        scrollbar-color-hover: #FF5C5C;
-        scrollbar-color-active: #FF5C5C;
-        scrollbar-background: #0b1020;
-        scrollbar-background-hover: #0b1020;
-        scrollbar-background-active: #0b1020;
-        scrollbar-corner-color: #0b1020;
-        scrollbar-size-vertical: 1;
-        scrollbar-size-horizontal: 1;
-    }
-
-    Screen.light #workspace,
-    Screen.light #sidebar-rail,
-    Screen.light #sidebar,
-    Screen.light #file-tree,
-    Screen.light #main,
-    Screen.light #workspace-bar,
-    Screen.light #palette,
-    Screen.light #suggestions,
-    Screen.light #permission-panel,
-    Screen.light #permission-preview,
-    Screen.light #change-panel,
-    Screen.light #change-content,
-    Screen.light #artifact-panel,
-    Screen.light #artifact-content,
-    Screen.light #chat,
-    Screen.light #petdex-panel,
-    Screen.light #composer,
-    Screen.light #input {
-        scrollbar-color: #FF5C5C;
-        scrollbar-color-hover: #FF5C5C;
-        scrollbar-color-active: #FF5C5C;
-        scrollbar-background: #f7f7f2;
-        scrollbar-background-hover: #f7f7f2;
-        scrollbar-background-active: #f7f7f2;
-        scrollbar-corner-color: #f7f7f2;
-        scrollbar-size-vertical: 1;
-        scrollbar-size-horizontal: 1;
-    }
-
-    #chat {
-        scrollbar-size-vertical: 0;
-        scrollbar-size-horizontal: 0;
-    }
-
-    #input {
-        height: 3;
-        border: none;
-        background: #1f2937;
-        padding: 0 1;
-    }
-
-    Screen.light #input {
-        background: #ffffff;
-    }
-
-    Screen.light #workspace-bar,
-    Screen.light #composer {
-        background: #eee8d5;
-        color: #657b83;
-    }
+    .short.approving #chat, .short.approving #petdex-panel,
+    .short.approving #artifact-panel, .short.approving #change-panel,
+    .short.approving #suggestions, .short.approving #palette { display: none; }
+    .short.approving #permission-panel { height: 1fr; min-height: 0; max-height: 100%; padding: 0 1; }
+    .short.approving #permission-preview { height: 1fr; min-height: 1; max-height: 100%; margin-top: 0; }
+    .short.approving #composer { height: 3; }
+    .short.approving #composer-meta { display: none; }
     """
 
     BINDINGS = [
@@ -963,6 +734,7 @@ class LibreClawApp(App[None]):
         if _canonical_tui_provider(self.config.general.default_provider) == "moonshot":
             self.config = apply_moonshot_model_limits(self.config)
         self._theme = tui_theme_palette(self.config.general.theme)
+        self._register_palette_theme()
         self.session = Session()
         self.memory_store = MemoryStore()
         self.skill_store = SkillStore(self.config.general.working_directory, skills_config=self.config.skills)
@@ -1038,7 +810,7 @@ class LibreClawApp(App[None]):
                 yield Static("", id="workspace-bar")
                 yield Static("", id="palette", classes="hidden")
                 yield Static("", id="petdex-panel", classes="hidden")
-                yield SelectableRichLog(id="chat", wrap=True, highlight=True, markup=True)
+                yield SelectableRichLog(id="chat", min_width=1, wrap=True, highlight=False, markup=True)
                 with Vertical(id="permission-panel", classes="hidden"):
                     yield Static("", id="permission-title")
                     yield SelectableRichLog(id="permission-preview", wrap=False, highlight=True, markup=True)
@@ -1075,11 +847,15 @@ class LibreClawApp(App[None]):
         if self._theme.is_light:
             self.add_class("light")
         self._apply_tui_theme()
+        self.set_class(self.size.width < 90, "narrow")
+        self.set_class(self.size.height < 30, "short")
         input_widget = self.query_one("#input", Input)
         input_widget.cursor_blink = False
         input_widget.focus()
         self._sync_sidebar_visibility()
         self._update_shell_chrome()
+        if self.config.tui.show_status_bar:
+            self.query_one("#status", Static).update(self._status_text())
         self._append_startup_entry()
         self._update_palette()
         self._update_slash_suggestions("")
@@ -1087,7 +863,6 @@ class LibreClawApp(App[None]):
         self.set_interval(0.75, self._update_petdex_panel)
         self._update_petdex_panel()
         await self._initialize_memory()
-        self._append_system(f"Libre Claw v{__version__} ready. Type /help for commands.")
         if self.daemon_client is not None:
             self._append_system(f"TUI daemon mode enabled: {daemon_base_url(self.config)}")
         if self.provider_error is not None:
@@ -1111,8 +886,39 @@ class LibreClawApp(App[None]):
         for task in self._model_catalog_tasks.values():
             task.cancel()
 
-    def _apply_tui_theme(self) -> None:
+    def _register_palette_theme(self) -> None:
         palette = self._theme
+        name = f"libre-claw-{palette.theme_id}"
+        self.register_theme(Theme(
+            name=name,
+            primary=palette.accent,
+            secondary=palette.tool,
+            accent=palette.accent,
+            foreground=palette.text,
+            background=palette.background,
+            surface=palette.surface,
+            panel=palette.panel,
+            warning=palette.warn,
+            error=palette.danger,
+            success=palette.ok,
+            dark=not palette.is_light,
+            variables={
+                "lc-line": palette.line or palette.accent,
+                "lc-muted": palette.muted,
+                "lc-panel-strong": palette.panel_strong or palette.surface_2,
+                "lc-on-accent": palette.on_accent or palette.background,
+                "input-cursor-background": palette.accent,
+                "input-cursor-foreground": palette.on_accent or palette.background,
+                "block-cursor-background": palette.accent,
+                "block-cursor-foreground": palette.on_accent or palette.background,
+            },
+        ))
+        self.theme = name
+
+    def _apply_tui_theme(self) -> None:
+        self._register_palette_theme()
+        palette = self._theme
+        line = Color.parse(palette.line or palette.accent)
         accent = Color.parse(palette.accent)
         text = Color.parse(palette.text)
         muted = Color.parse(palette.muted)
@@ -1122,6 +928,9 @@ class LibreClawApp(App[None]):
         panel = Color.parse(palette.panel)
         sidebar = Color.parse(palette.sidebar)
         status_bg = Color.parse(palette.status_bg)
+        branded = palette.theme_id in {"libre", "libre-light"}
+        canvas = background if branded else surface
+        composer = surface if branded else surface_2
 
         self.styles.background = background
         self.styles.color = text
@@ -1135,18 +944,18 @@ class LibreClawApp(App[None]):
 
         themed_nodes: tuple[tuple[str, Color, Color], ...] = (
             ("#status", status_bg, text),
-            ("#workspace", surface, text),
+            ("#workspace", canvas, text),
             ("#sidebar-rail", sidebar, text),
             ("#sidebar", sidebar, text),
             ("#sidebar-root", sidebar, muted),
             ("#file-tree", sidebar, text),
-            ("#main", surface, text),
-            ("#workspace-bar", surface_2, muted),
-            ("#chat", surface, text),
+            ("#main", canvas, text),
+            ("#workspace-bar", canvas if branded else surface_2, muted),
+            ("#chat", canvas, text),
             ("#petdex-panel", surface, text),
-            ("#composer", surface_2, text),
-            ("#composer-meta", surface_2, muted),
-            ("#input", surface_2, text),
+            ("#composer", composer, text),
+            ("#composer-meta", composer, muted),
+            ("#input", composer, text),
             ("#suggestions", panel, text),
             ("#permission-panel", panel, text),
             ("#permission-preview", sidebar, text),
@@ -1167,25 +976,43 @@ class LibreClawApp(App[None]):
                 widget.styles.scrollbar_background_hover = background
                 widget.styles.scrollbar_background_active = background
                 widget.styles.scrollbar_corner_color = background
+                widget.styles.scrollbar_size_vertical = 0 if selector == "#chat" else 1
+                widget.styles.scrollbar_size_horizontal = 0 if selector == "#chat" else 1
 
-        for selector in ("#workspace", "#composer", "#permission-panel", "#change-panel", "#artifact-panel", "#suggestions"):
+        for selector in ("#workspace", "#composer", "#change-panel", "#artifact-panel", "#suggestions"):
             for widget in self.query(selector):
-                widget.styles.border_top = ("solid", accent)
+                widget.styles.border_top = ("solid", line)
         for selector in ("#petdex-panel", "#workspace-bar"):
             for widget in self.query(selector):
-                widget.styles.border_bottom = ("solid", accent)
+                widget.styles.border_bottom = ("solid", line)
         for widget in self.query("#permission-preview"):
             widget.styles.border_left = ("solid", accent)
         for widget in self.query("#workspace"):
-            widget.styles.border_bottom = ("solid", accent)
-        for selector in ("#suggestions", "#palette"):
-            for widget in self.query(selector):
-                widget.styles.border = ("solid", accent)
+            widget.styles.border_bottom = ("solid", line)
+        for widget in self.query("#suggestions"):
+            widget.styles.border = ("solid", line)
+        for widget in self.query("#palette"):
+            widget.styles.border = ("solid", accent)
+        for widget in self.query("#permission-panel"):
+            widget.styles.border_top = ("solid", accent)
 
         self.query_one("#permission-warning", Static).styles.color = Color.parse(palette.warn)
         self.query_one("#artifact-title", Static).styles.color = Color.parse(palette.accent_strong)
         self.query_one("#change-title", Static).styles.color = Color.parse(palette.accent_strong)
         self._update_shell_chrome()
+
+    def on_resize(self, event: events.Resize) -> None:
+        self.set_class(event.size.width < 90, "narrow")
+        self.set_class(event.size.height < 30, "short")
+        if self.is_mounted and self.transcript:
+            self._update_shell_chrome()
+            if self.config.tui.show_status_bar:
+                self.query_one("#status", Static).update(self._status_text())
+
+    def on_selectable_rich_log_width_changed(self, event: SelectableRichLog.WidthChanged) -> None:
+        event.stop()
+        if self.transcript:
+            self._render_transcript()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -2404,6 +2231,7 @@ class LibreClawApp(App[None]):
             enabled=self.config.petdex.enabled,
             accent=self._theme.accent,
             light=self._theme.is_light,
+            background=self._theme.surface,
         )
         if renderable is None:
             panel.add_class("hidden")
@@ -2603,6 +2431,7 @@ class LibreClawApp(App[None]):
         self._end_key_setup()
 
     def _show_permission_prompt(self, request: AgentPermissionRequest) -> None:
+        self.add_class("approving")
         panel = self.query_one("#permission-panel", Vertical)
         title = self.query_one("#permission-title", Static)
         preview = self.query_one("#permission-preview", RichLog)
@@ -2628,6 +2457,7 @@ class LibreClawApp(App[None]):
         allow_once.focus()
 
     def _hide_permission_prompt(self) -> None:
+        self.remove_class("approving")
         panel = self.query_one("#permission-panel", Vertical)
         panel.add_class("hidden")
         self.query_one("#permission-title", Static).update("")
@@ -2647,23 +2477,23 @@ class LibreClawApp(App[None]):
             diff = self._diff_text(before, after, path or "file")
             return Group(
                 Text(f"EDIT  {path or 'file'}", style=f"bold {self._theme.accent}"),
-                _lobster_syntax(diff or "No textual change.", "diff", light=self._theme.is_light, word_wrap=False),
+                _themed_syntax(diff or "No textual change.", "diff", palette=self._theme, word_wrap=False),
             )
         if call.name == "write_file":
             content = str(arguments.get("content", ""))
             return Group(
                 Text(f"WRITE  {path or 'file'} · {len(content)} characters", style=f"bold {self._theme.accent}"),
-                _lobster_syntax(content or "<empty file>", _lexer_for_path(path), light=self._theme.is_light, word_wrap=False),
+                _themed_syntax(content or "<empty file>", _lexer_for_path(path), palette=self._theme, word_wrap=False),
             )
         if call.name == "bash":
             command = str(arguments.get("command", ""))
             return Group(
                 Text("SHELL", style=f"bold {self._theme.accent}"),
-                _lobster_syntax(command, "bash", light=self._theme.is_light, word_wrap=False),
+                _themed_syntax(command, "bash", palette=self._theme, word_wrap=False),
             )
         return Group(
             Text(call.name.upper(), style=f"bold {self._theme.accent}"),
-            _lobster_syntax(self._format_arguments(arguments), "json", light=self._theme.is_light, word_wrap=False),
+            _themed_syntax(self._format_arguments(arguments), "json", palette=self._theme, word_wrap=False),
         )
 
     def _resolve_pending_permission(self, resolution: PermissionResolution) -> None:
@@ -2858,6 +2688,13 @@ class LibreClawApp(App[None]):
             self.add_class("light")
         self._apply_tui_theme()
         self._render_transcript()
+        self._refresh_change_review()
+        if self._artifact_visible:
+            self.run_worker(self._refresh_artifact_panel(), group="artifact-theme", exclusive=True)
+        if self._pending_permission is not None:
+            preview = self.query_one("#permission-preview", RichLog)
+            preview.clear()
+            preview.write(self._permission_preview(self._pending_permission.call))
         self._update_status()
 
     def _start_model_discovery(self, argument: str = "") -> None:
@@ -3849,16 +3686,18 @@ class LibreClawApp(App[None]):
             return
 
         title = self.query_one("#artifact-title", Static)
+        for tab in ("plan", "summary", "verify", "diff", "browser"):
+            self.query_one(f"#artifact-{tab}", Button).variant = "primary" if tab == self._artifact_tab else "default"
         content = self.query_one("#artifact-content", RichLog)
         text = await asyncio.to_thread(_read_artifact_text, run, self._artifact_tab)
         title.update(f"{run.run_id} [{run.state}] {self._artifact_tab}")
         content.clear()
         if self._artifact_tab == "diff":
             content.wrap = False
-            content.write(_lobster_syntax(text or "No diff artifact.", "diff", light=self._theme.is_light))
+            content.write(_themed_syntax(text or "No diff artifact.", "diff", palette=self._theme))
         else:
             content.wrap = True
-            content.write(_lobster_markdown(text or f"No {self._artifact_tab} artifact.", light=self._theme.is_light))
+            content.write(_themed_markdown(text or f"No {self._artifact_tab} artifact.", palette=self._theme))
 
     def _handle_artifact_button(self, button_id: str) -> None:
         if button_id == "artifact-close":
@@ -3957,7 +3796,7 @@ class LibreClawApp(App[None]):
         self.query_one("#change-title", Static).update(f"CHANGE {position} · {title}")
         content = self.query_one("#change-content", RichLog)
         content.clear()
-        content.write(_lobster_syntax(entry.content or "No diff available.", "diff", light=self._theme.is_light, word_wrap=False))
+        content.write(_themed_syntax(entry.content or "No diff available.", "diff", palette=self._theme, word_wrap=False))
         self.query_one("#change-previous", Button).disabled = len(changes) < 2
         self.query_one("#change-next", Button).disabled = len(changes) < 2
         self._update_shell_chrome()
@@ -4294,7 +4133,7 @@ class LibreClawApp(App[None]):
 
     def _format_entry(self, entry: TranscriptEntry, index: int = 0) -> RenderableType:
         if entry.role == "startup":
-            return _startup_renderable(self.startup_expanded, accent=self._theme.accent, light=self._theme.is_light)
+            return _startup_renderable(self.startup_expanded, palette=self._theme)
         if entry.role == "user":
             return Text.assemble(("User: ", f"bold {self._theme.accent}"), entry.content)
         if entry.role == "assistant":
@@ -4302,13 +4141,13 @@ class LibreClawApp(App[None]):
                 return Text("Libre Claw: streaming...", style=f"bold {self._theme.accent} dim")
             return Group(
                 Text("Libre Claw:", style=f"bold {self._theme.accent}"),
-                _lobster_markdown(entry.content, light=self._theme.is_light),
+                _themed_markdown(entry.content, palette=self._theme),
             )
         if entry.role == "tool":
             title = entry.title or "Tool"
             metadata = entry.metadata or {}
             status = str(metadata.get("status", ""))
-            style = _tool_style(status)
+            style = _tool_style(status, self._theme)
             if entry.collapsed:
                 label = "Change" if metadata.get("syntax") == "diff" else "Tool"
                 return Text.assemble(
@@ -4323,23 +4162,23 @@ class LibreClawApp(App[None]):
                         f"Change {self._tool_display_index(index)}: {title} · Ctrl+E focused review",
                         style=f"bold {style}",
                     ),
-                    _lobster_syntax(entry.content, "diff", light=self._theme.is_light, word_wrap=False),
+                    _themed_syntax(entry.content, "diff", palette=self._theme, word_wrap=False),
                 )
             return Text.assemble(
                 (f"Tool {self._tool_display_index(index)}: {title}\n", f"bold {style}"),
                 _compact_tool_output(entry.content, expanded=True),
             )
         if entry.role == "permission":
-            return Text.assemble(("Permission: ", "bold yellow"), entry.content)
+            return Text.assemble(("Approval: ", f"bold {self._theme.warn}"), entry.content)
         if entry.role == "attachment":
             return _attachment_renderable(entry, accent=self._theme.accent)
         if entry.role == "file":
             title = entry.title or "File"
             return Group(
                 Text(f"File: {title}", style=f"bold {self._theme.accent}"),
-                _lobster_syntax(entry.content, "text", light=self._theme.is_light),
+                _themed_syntax(entry.content, "text", palette=self._theme),
             )
-        return Text("System: " + entry.content, style="dim")
+        return Text(entry.content, style=self._theme.muted)
 
     def _tool_display_index(self, transcript_index: int) -> int:
         return sum(1 for entry in self.transcript[: transcript_index + 1] if entry.role == "tool") - 1
@@ -4500,7 +4339,7 @@ class LibreClawApp(App[None]):
         self._render_transcript()
 
     def _sidebar_root_text(self) -> str:
-        return f"cwd: {self.config.general.working_directory}"
+        return str(self.config.general.working_directory)
 
     def _update_shell_chrome(self) -> None:
         if not self.is_mounted:
@@ -4515,6 +4354,8 @@ class LibreClawApp(App[None]):
         run = _short_run_id(self._active_run_id) if self._active_run_id else "idle"
         change_count = len(self._change_entries())
         change_label = f"{change_count} edit{'s' if change_count != 1 else ''}"
+        if 0 < self.size.width < 100:
+            return f"WORKSPACE  {workspace}   ·   {change_label}"
         return f"WORKSPACE  {workspace}   ·   {mode}   ·   RUN  {run}   ·   {change_label}   ·   Ctrl+E review"
 
     def _composer_meta_text(self) -> str:
@@ -4527,7 +4368,7 @@ class LibreClawApp(App[None]):
         if self._pending_attachments:
             count = len(self._pending_attachments)
             return f"MESSAGE  {count} image{'s' if count != 1 else ''} attached · Enter sends · /attach clear removes"
-        return "MESSAGE  Enter sends · / opens commands · paste an image path to attach"
+        return "MESSAGE  Enter send  ·  / commands  ·  Ctrl+B files"
 
     def _update_palette(self, query: str = "", *, reset_selection: bool = True) -> None:
         palette = self.query_one("#palette", Static)
@@ -5100,6 +4941,16 @@ class LibreClawApp(App[None]):
         else:
             active = "running" if self._active_task is not None and not self._active_task.done() else "idle"
         activity = f"{elapsed}s | {active}" if active != "idle" else "idle"
+        if self.is_running and 0 < self.size.width < 140:
+            suffix = f"{_format_usage_cost(self.usage)}  ·  {active}"
+            if self.size.width >= 100:
+                suffix = f"ctx {meter.display_percent}  ·  " + suffix
+            brand = "LIBRE CLAW"
+            route = f"{provider}:{model}"
+            available = max(8, self.size.width - len(brand) - len(suffix) - 14)
+            if len(route) > available:
+                route = route[:available - 1] + "…"
+            return f"{brand}  ·  {route}  ·  {suffix}"
         return (
             f"Libre Claw v{__version__} | {provider}:{model} | {_format_usage_cost(self.usage)} | "
             f"{_token_status_text(self.usage, meter)} | ctx {_context_status_text(meter)} | {activity}"
@@ -5205,7 +5056,7 @@ class LibreClawApp(App[None]):
             return "Permission prompt active: click a choice or press y/n/a/!"
         if self._goal_description is not None:
             return "Goal mode active... (/goal status, /goal stop)"
-        return "Type a message... (/help, PageUp/PageDown scroll, Ctrl+R release, Ctrl+C exit)"
+        return "What would you like to work on?"
 
 
 def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig:
@@ -6337,8 +6188,8 @@ def _theme_help_text(current_theme: str) -> str:
     lines.extend(
         [
             "",
-            "Aliases: `dark`, `default`, and `libre-default` = `lobster`; "
-            "`clear` and `lobster-clear` = `lobster-light`; `light` = `github-light`.",
+            "Aliases: `dark`, `default`, and `libre-default` = `libre`; "
+            "`clear` and `lobster-clear` = `lobster-light`; `light` = `libre-light`.",
         ]
     )
     return "\n".join(lines)
@@ -6459,12 +6310,12 @@ def _parse_compact_options(argument: str) -> CompactOptions:
     return CompactOptions(keep_last=keep_last, force=force)
 
 
-def _tool_style(status: str) -> str:
+def _tool_style(status: str, palette: ThemePalette) -> str:
     if status == "error":
-        return "red"
+        return palette.danger
     if status == "pending":
-        return "#3b82f6"
-    return "#FF5C5C"
+        return palette.tool
+    return palette.accent
 
 
 def _tool_timeline_title(name: str, *, is_error: bool, metadata: dict[str, Any]) -> str:
@@ -6501,27 +6352,31 @@ def _compact_tool_output(content: str, expanded: bool) -> str:
     return f"{shown}\n... {hidden} more lines hidden; use /tools expand <index> to show all"
 
 
-def _startup_renderable(expanded: bool, accent: str = ASSISTANT_ACCENT, *, light: bool = False) -> RenderableType:
-    banner = Text(STARTUP_ASCII.strip(), style=accent)
+def _startup_renderable(
+    expanded: bool,
+    accent: str = ASSISTANT_ACCENT,
+    *,
+    light: bool = False,
+    palette: ThemePalette | None = None,
+) -> RenderableType:
+    palette = palette or tui_theme_palette("libre-light" if light else "libre")
+    banner = PixelWordmark(palette)
     if not expanded:
         return Group(
             banner,
-            Text(PROJECT_LINKS, style="dim"),
-            Text(
-                f"Libre Claw v{__version__} - release notes collapsed. Press Ctrl+R to expand.",
-                style="dim",
-            ),
-            Text(PROJECT_NOTICE, style="dim"),
+            Text(""),
+            Text.assemble((f"v{__version__}  ", palette.muted), ("Your machine. Your models.", palette.text)),
+            Text("/help commands  ·  /model switch  ·  Ctrl+R release notes", style=palette.muted),
+            Text(""),
         )
     return Group(
         banner,
-        Text(PROJECT_LINKS, style="dim"),
-        Text(f"Libre Claw v{__version__}", style=f"bold {accent}"),
-        Text(PROJECT_NOTICE, style="dim"),
-        _lobster_markdown(latest_release_notes(), light=light),
-        Text("Press Ctrl+R to collapse. Type /help for commands.", style="dim"),
+        Text(f"Libre Claw v{__version__}", style=f"bold {palette.accent}"),
+        Text(PROJECT_LINKS, style=palette.muted),
+        Text(PROJECT_NOTICE, style=palette.muted),
+        _themed_markdown(latest_release_notes(), palette=palette),
+        Text("Press Ctrl+R to collapse. Type /help for commands.", style=palette.muted),
     )
-
 
 def _startup_message() -> str:
     return f"{STARTUP_ASCII.strip()}\n\n{PROJECT_LINKS}\n\n{latest_release_notes()}\n\nType /help for commands."
@@ -6840,7 +6695,9 @@ def _attachment_preview_renderable(attachment: UserAttachment) -> RenderableType
     return _image_preview_renderable(Path(attachment.path), max_size=(56, 32))
 
 
-def _petdex_panel_renderable(*, enabled: bool, accent: str, light: bool) -> RenderableType | None:
+def _petdex_panel_renderable(
+    *, enabled: bool, accent: str, light: bool, background: str | None = None,
+) -> RenderableType | None:
     if not enabled:
         return None
     snapshot = _petdex_runtime_snapshot()
@@ -6853,7 +6710,7 @@ def _petdex_panel_renderable(*, enabled: bool, accent: str, light: bool) -> Rend
         (f" · {snapshot.display_name}", "bold"),
         (f" · {snapshot.state}", "dim"),
     )
-    preview = _petdex_sprite_renderable(snapshot.spritesheet_path, snapshot.state, light=light)
+    preview = _petdex_sprite_renderable(snapshot.spritesheet_path, snapshot.state, light=light, background=background)
     bubble = Text(snapshot.bubble_text, style="dim") if snapshot.bubble_text else Text("Companion ready", style="dim")
     if preview is None:
         return Group(header, bubble)
@@ -6888,8 +6745,10 @@ def _petdex_runtime_snapshot(home: Path | None = None) -> PetdexTUISnapshot | No
     )
 
 
-def _petdex_sprite_renderable(path: Path, state: str, *, light: bool) -> RenderableType | None:
-    background = "#fdf6e3" if light else "#111827"
+def _petdex_sprite_renderable(
+    path: Path, state: str, *, light: bool, background: str | None = None,
+) -> RenderableType | None:
+    background = background or tui_theme_palette("libre-light" if light else "libre").surface
     return _image_preview_renderable(
         path,
         max_size=(22, 14),

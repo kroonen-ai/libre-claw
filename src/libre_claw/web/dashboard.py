@@ -4,22 +4,53 @@
 from __future__ import annotations
 
 import json
+import re
+from html import escape
 
-from libre_claw.core.themes import dashboard_theme_id
+from libre_claw.core.branding import WORDMARK_ROWS
+from libre_claw.core.themes import THEME_ALIASES, THEME_PALETTES, dashboard_theme_id
 from libre_claw.web.dashboard_styles import DASHBOARD_CSS
 
 
-def dashboard_html(theme: str = "lobster") -> str:
+def dashboard_html(theme: str = "libre") -> str:
     """Return the self-contained local daemon dashboard."""
-    fallback_theme = json.dumps(dashboard_theme_id(theme))
+    theme_id = dashboard_theme_id(theme)
+    fallback_theme = json.dumps(theme_id)
+    theme_options = "\n".join(
+        f'<option value="{escape(name)}">{escape(palette.label)}</option>'
+        for name, palette in THEME_PALETTES.items()
+    )
     return (
         _DASHBOARD_HTML.replace("__LIBRE_CLAW_DASHBOARD_THEME__", fallback_theme)
+        .replace("__LIBRE_CLAW_DASHBOARD_THEME_ID__", theme_id)
+        .replace("__LIBRE_CLAW_THEME_IDS__", json.dumps(list(THEME_PALETTES)))
+        .replace("__LIBRE_CLAW_THEME_ALIASES__", json.dumps(THEME_ALIASES))
+        .replace("__LIBRE_CLAW_THEME_OPTIONS__", theme_options)
+        .replace("__LIBRE_CLAW_WORDMARK__", _pixel_wordmark())
         .replace("__LIBRE_CLAW_DASHBOARD_CSS__", DASHBOARD_CSS)
     )
 
 
+def _pixel_wordmark() -> str:
+    """Render the shared terminal and website glyphs without a remote font."""
+    path = "".join(
+        f"M{match.start() + 1} {row + 1}h{len(match[0])}v1h-{len(match[0])}z"
+        for row, pixels in enumerate(WORDMARK_ROWS)
+        for match in re.finditer("1+", pixels)
+    )
+    width = len(WORDMARK_ROWS[0]) + 2
+    return f'''<svg class="pixel-wordmark" viewBox="0 0 {width} 12" role="img" aria-label="Libre Claw" focusable="false" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="dashboard-wordmark-face" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" class="wordmark-top"/><stop offset=".5" class="wordmark-middle"/><stop offset="1" class="wordmark-bottom"/>
+      </linearGradient></defs>
+      <path d="{path}" class="wordmark-shadow" transform="translate(.35 .75)"/>
+      <path d="{path}" class="wordmark-depth" transform="translate(.18 .35)"/>
+      <path d="{path}" fill="url(#dashboard-wordmark-face)"/>
+    </svg>'''
+
+
 _DASHBOARD_HTML = r"""<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="__LIBRE_CLAW_DASHBOARD_THEME_ID__">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -29,28 +60,25 @@ _DASHBOARD_HTML = r"""<!doctype html>
     (() => {
       const key = "libre-claw-dashboard-theme";
       const fallback = __LIBRE_CLAW_DASHBOARD_THEME__;
-      const aliases = {
-        "": "lobster",
-        "default": "lobster",
-        "dark": "lobster",
-        "libre-default": "lobster",
-        "clear": "lobster-light",
-        "lobster-clear": "lobster-light",
-        "codex-lobster-light": "lobster-light",
-      };
-      const raw = localStorage.getItem(key) || fallback;
-      const value = aliases[raw] || raw;
+      const aliases = __LIBRE_CLAW_THEME_ALIASES__;
+      const themes = new Set(__LIBRE_CLAW_THEME_IDS__);
+      let stored = "";
+      try { stored = localStorage.getItem(key) || ""; } catch { /* Storage may be disabled. */ }
+      const raw = String(stored || fallback).trim().toLowerCase();
+      const normalized = aliases[raw] || raw;
+      const value = themes.has(normalized) ? normalized : fallback;
       document.documentElement.dataset.theme = value;
     })();
   </script>
   <style>__LIBRE_CLAW_DASHBOARD_CSS__</style>
 </head>
 <body>
+  <template id="wordmarkTemplate">__LIBRE_CLAW_WORDMARK__</template>
   <div class="app" id="appFrame">
     <aside class="sidebar" id="taskSidebar" aria-label="Tasks">
       <div class="logo-row">
         <button class="brand" id="brandHome" type="button" title="Libre Claw Dashboard">
-          <span class="logo-wrap" role="img" aria-label="Libre Claw lobster">🦞</span>
+          <span class="logo-wrap" aria-hidden="true"><img src="/assets/lobster-icon.svg" width="26" height="26" alt=""></span>
           <span>Libre Claw</span>
           <span class="harness-tag">LOCAL</span>
         </button>
@@ -223,27 +251,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
               <small>Saved for this browser and your local daemon.</small>
             </div>
             <select id="themeSelect" aria-label="Dashboard theme">
-              <option value="harness">Harness</option>
-              <option value="harness-light">Harness Light</option>
-              <option value="lobster">Lobster</option>
-              <option value="lobster-light">Lobster Light</option>
-              <option value="github-dark">GitHub Dark</option>
-              <option value="github-light">GitHub Light</option>
-              <option value="monokai-pro">Monokai Pro</option>
-              <option value="night-owl">Night Owl</option>
-              <option value="tokyo-night">Tokyo Night</option>
-              <option value="ayu">Ayu Mirage</option>
-              <option value="dracula">Dracula</option>
-              <option value="catppuccin-mocha">Catppuccin Mocha</option>
-              <option value="catppuccin-latte">Catppuccin Latte</option>
-              <option value="gruvbox-dark">Gruvbox Dark</option>
-              <option value="nord">Nord</option>
-              <option value="solarized-dark">Solarized Dark</option>
-              <option value="solarized-light">Solarized Light</option>
-              <option value="one-dark-pro">One Dark Pro</option>
-              <option value="rose-pine">Rose Pine</option>
-              <option value="kanagawa">Kanagawa</option>
-              <option value="matrix">Matrix</option>
+              __LIBRE_CLAW_THEME_OPTIONS__
             </select>
           </div>
           <div class="metric-grid">
@@ -350,7 +358,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           <div class="usage-table-wrap"><table class="usage-table" id="usageRecent" aria-label="Usage for recent runs"></table></div>
         </div>
         <div class="settings-body" id="paneAbout" role="tabpanel" aria-labelledby="settingsTabAbout" tabindex="0" hidden>
-          <div class="about-brand"><span class="logo-wrap" aria-hidden="true">🦞</span><div><h3>Libre Claw</h3><p class="panel-description">Your workspace. Your models. Your agent.</p></div></div>
+          <div class="about-brand"><span class="logo-wrap" aria-hidden="true"><img src="/assets/lobster-icon.svg" width="26" height="26" alt=""></span><div><h3>Libre Claw</h3><p class="panel-description">Your workspace. Your models. Your agent.</p></div></div>
           <section class="section-card"><h4>Built to run locally</h4><p class="hint">Manage tasks, review code, and control what your agent can do from one workspace.</p></section>
           <nav class="about-links" aria-label="Dashboard footer links">
             <a href="https://libreclaw.sh" target="_blank" rel="noreferrer">libreclaw.sh</a>
@@ -368,48 +376,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
     const $ = (id) => document.getElementById(id);
     const THEME_KEY = "libre-claw-dashboard-theme";
     const RAIL_KEY = "libre-claw-dashboard-rail";
-    const THEMES = new Set([
-      "harness",
-      "harness-light",
-      "lobster",
-      "lobster-light",
-      "github-dark",
-      "github-light",
-      "monokai-pro",
-      "night-owl",
-      "tokyo-night",
-      "ayu",
-      "dracula",
-      "catppuccin-mocha",
-      "catppuccin-latte",
-      "gruvbox-dark",
-      "nord",
-      "solarized-dark",
-      "solarized-light",
-      "one-dark-pro",
-      "rose-pine",
-      "kanagawa",
-      "matrix",
-    ]);
-    const THEME_ALIASES = new Map([
-      ["", "lobster"],
-      ["default", "lobster"],
-      ["dark", "lobster"],
-      ["libre", "lobster"],
-      ["libre-dark", "lobster"],
-      ["libre-default", "lobster"],
-      ["codex-lobster", "lobster"],
-      ["clear", "lobster-light"],
-      ["lobster-clear", "lobster-light"],
-      ["codex-lobster-light", "lobster-light"],
-      ["light", "github-light"],
-    ]);
+    const THEMES = new Set(__LIBRE_CLAW_THEME_IDS__);
+    const THEME_ALIASES = new Map(Object.entries(__LIBRE_CLAW_THEME_ALIASES__));
 
     function applyTheme(value) {
-      const normalized = THEME_ALIASES.get(String(value || "").toLowerCase()) || value;
-      const theme = THEMES.has(normalized) ? normalized : "lobster";
+      const raw = String(value || "").trim().toLowerCase();
+      const normalized = THEME_ALIASES.get(raw) || raw;
+      const theme = THEMES.has(normalized) ? normalized : "libre";
       document.documentElement.dataset.theme = theme;
-      localStorage.setItem(THEME_KEY, theme);
+      try { localStorage.setItem(THEME_KEY, theme); } catch { /* Keep the theme usable without storage. */ }
       const picker = $("themeSelect");
       if (picker) picker.value = theme;
       return theme;
@@ -432,7 +407,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     function initTheme() {
-      applyTheme(localStorage.getItem(THEME_KEY) || document.documentElement.dataset.theme || "lobster");
+      applyTheme(document.documentElement.dataset.theme || "libre");
       $("themeSelect").addEventListener("change", (event) => {
         void saveTheme(event.target.value);
       });
@@ -1482,8 +1457,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
     function welcomeState() {
       const node = empty("What are we building?", "Start a task. Keep the work, plan, and changes together.");
       node.classList.add("welcome-state");
-      const mark = document.createElement("span"); mark.className = "empty-icon"; mark.setAttribute("aria-hidden", "true");
-      const logo = document.createElement("img"); logo.src = "/assets/lobster-icon.svg"; logo.alt = ""; logo.width = 24; logo.height = 24; mark.append(logo); node.prepend(mark);
+      const mark = document.createElement("div"); mark.className = "welcome-wordmark";
+      mark.append($("wordmarkTemplate").content.cloneNode(true)); node.prepend(mark);
       const actions = document.createElement("div"); actions.className = "starter-grid";
       for (const [label, prompt] of [["Explore the project", "Explore this project and explain its structure and main entry points."], ["Find a bug", "Review this project for a concrete bug, explain it, and propose a focused fix."], ["Plan a change", "Help me plan a change to this project: "]]) {
         const button = document.createElement("button"); button.type = "button"; button.className = "starter-action"; button.textContent = label;

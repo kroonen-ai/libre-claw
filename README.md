@@ -138,6 +138,12 @@ current Textual selection. If you want normal terminal scrollback instead, launc
 with `libre-claw tui --inline`. If you want clickable Textual mouse controls,
 launch with `libre-claw tui --mouse` or set `[tui].mouse = true`.
 
+The default **Libre Claw** theme matches the website: warm charcoal, copper
+accents, and monospace type. Use `/theme libre-light --global` for the cream
+variant, or `/theme libre --global` to return to dark. The global choice also
+sets the dashboard theme; its Settings panel offers the same themes. Existing
+named themes, including Lobster, remain available through `/theme list`.
+
 File edits are rendered as compact unified diffs. Press `Ctrl+E` or run
 `/review` to open the focused change drawer, then use its Previous/Next controls
 to inspect every edit without digging through tool output. Permission prompts

@@ -423,7 +423,7 @@ def test_lobster_markdown_uses_website_code_theme() -> None:
     assert markdown.inline_code_theme is markdown.code_theme
 
 
-def test_tui_code_renderables_use_lobster_theme(monkeypatch, tmp_path: Path) -> None:
+def test_tui_code_renderables_use_selected_theme(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -440,9 +440,9 @@ def test_tui_code_renderables_use_lobster_theme(monkeypatch, tmp_path: Path) -> 
     )
     file_preview = app._format_entry(TranscriptEntry(role="file", title="demo.py", content="print('hi')"))
 
-    assert assistant.renderables[1].code_theme.get_background_style().bgcolor.get_truecolor().hex == "#0b1020"
-    assert diff.renderables[1].background_color == "#0b1020"
-    assert file_preview.renderables[1].background_color == "#0b1020"
+    assert assistant.renderables[1].code_theme.get_background_style().bgcolor.get_truecolor().hex == "#171714"
+    assert diff.renderables[1].background_color == "#171714"
+    assert file_preview.renderables[1].background_color == "#171714"
     assert _lobster_syntax("print('hi')", "python").background_color == "#0b1020"
     assert _lobster_syntax("print('hi')", "python", light=True).background_color == "#fffaf0"
 
@@ -1380,10 +1380,10 @@ def test_startup_renderable_collapses_release_notes() -> None:
     expanded = console.export_text()
 
     assert STARTUP_ASCII.strip().splitlines()[0] in collapsed
-    assert "release notes collapsed" in collapsed
-    assert "Press Ctrl+R to expand" in collapsed
-    assert PROJECT_LINKS in collapsed
-    assert PROJECT_NOTICE in collapsed
+    assert "Your machine. Your models." in collapsed
+    assert "Ctrl+R release notes" in collapsed
+    assert PROJECT_LINKS not in collapsed
+    assert PROJECT_NOTICE not in collapsed
     assert "## 0.1.0" not in collapsed
     assert PROJECT_LINKS in expanded
     assert PROJECT_NOTICE in expanded
@@ -1867,14 +1867,14 @@ async def test_tui_scrollbars_use_brand_accent(monkeypatch, tmp_path: Path) -> N
         for selector in ("#workspace", "#sidebar", "#file-tree", "#main", "#composer", "#input"):
             styles = app.query_one(selector).styles
 
-            assert styles.scrollbar_color.hex == "#FF5C5C"
-            assert styles.scrollbar_color_hover.hex == "#FF5C5C"
-            assert styles.scrollbar_color_active.hex == "#FF5C5C"
+            assert styles.scrollbar_color.hex == "#D98C7C"
+            assert styles.scrollbar_color_hover.hex == "#D98C7C"
+            assert styles.scrollbar_color_active.hex == "#D98C7C"
             assert styles.scrollbar_size_vertical == 1
             assert styles.scrollbar_size_horizontal == 1
 
         chat_styles = app.query_one("#chat").styles
-        assert chat_styles.scrollbar_color.hex == "#FF5C5C"
+        assert chat_styles.scrollbar_color.hex == "#D98C7C"
         assert chat_styles.scrollbar_size_vertical == 0
         assert chat_styles.scrollbar_size_horizontal == 0
 
@@ -1963,7 +1963,7 @@ async def test_file_tree_up_updates_agent_working_directory(monkeypatch, tmp_pat
 
         assert app.config.general.working_directory == tmp_path.resolve()
         assert app.query_one("#file-tree").path == tmp_path.resolve()
-        assert app.query_one("#sidebar-root").content == f"cwd: {tmp_path.resolve()}"
+        assert app.query_one("#sidebar-root").content == str(tmp_path.resolve())
 
 
 async def test_tool_call_updates_single_collapsed_entry(monkeypatch, tmp_path: Path) -> None:

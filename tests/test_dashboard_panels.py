@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from html.parser import HTMLParser
 
 import pytest
 
+from libre_claw.core.themes import THEME_ALIASES, THEME_PALETTES
 from libre_claw.web.dashboard import dashboard_html
 
 
@@ -236,3 +238,64 @@ elements.mobileTasks.listeners.click(); assert.equal(elements.appFrame.classList
 query.matches = true; query.listener();
 assert.equal(elements.taskSidebar.inert, true); assert.equal(document.activeElement, elements.mobileTasks);
 """)
+
+
+def test_dashboard_themes_match_shared_registry_and_saved_preferences(tmp_path) -> None:
+    html = dashboard_html(theme="libre-light")
+    startup = html.split("<script>", 1)[1].split("</script>", 1)[0]
+    source = html[html.index("    const THEME_KEY ="):html.index("    async function saveTheme(")]
+    picker = html.split('id="themeSelect"', 1)[1].split("</select>", 1)[0]
+    for name, palette in THEME_PALETTES.items():
+        assert f'<option value="{name}">{palette.label}</option>' in picker
+    run_script(tmp_path, r"""
+const assert = require('node:assert/strict');
+let stored = '', rejectStorage = false;
+const document = {documentElement: {dataset: {theme: 'libre-light'}}};
+const localStorage = {
+  getItem() { if (rejectStorage) throw new Error('Blocked'); return stored; },
+  setItem(key, value) { if (rejectStorage) throw new Error('Blocked'); stored = value; },
+};
+const picker = {value: ''};
+const $ = () => picker;
+""" + source + "\nconst startup = () => {" + startup + r"""
+};
+startup(); assert.equal(document.documentElement.dataset.theme, 'libre-light');
+stored = 'gruvbox-dark'; startup();
+assert.equal(document.documentElement.dataset.theme, 'gruvbox-dark');
+stored = 'invalid-theme'; startup();
+assert.equal(document.documentElement.dataset.theme, 'libre-light');
+stored = ' LIBRE-DARK '; startup();
+assert.equal(document.documentElement.dataset.theme, 'libre');
+stored = ' LoBsTeR '; startup();
+assert.equal(document.documentElement.dataset.theme, 'lobster');
+rejectStorage = true; startup();
+assert.equal(document.documentElement.dataset.theme, 'libre-light');
+assert.equal(applyTheme('libre'), 'libre'); assert.equal(picker.value, 'libre');
+rejectStorage = false;
+""" + "\nconst expectedAliases = " + json.dumps(THEME_ALIASES) + r""";
+for (const [alias, expected] of Object.entries(expectedAliases)) {
+  assert.equal(applyTheme(alias), expected);
+  assert.equal(picker.value, expected);
+  assert.equal(stored, expected);
+}
+for (const theme of THEMES) assert.equal(applyTheme(theme), theme);
+assert.equal(applyTheme('unknown-theme'), 'libre');
+""")
+
+
+def test_libre_dashboard_uses_shared_colors_and_local_branding() -> None:
+    html = dashboard_html()
+    assert '<html lang="en" data-theme="libre">' in html
+    assert '__LIBRE_CLAW_' not in html
+    assert 'id="wordmarkTemplate"' in html
+    assert 'class="pixel-wordmark"' in html
+    for name in ("libre", "libre-light"):
+        palette = THEME_PALETTES[name]
+        css = html.split(f'html[data-theme="{name}"] {{', 1)[1].split("}", 1)[0]
+        for token, color in (("bg", palette.background), ("accent", palette.accent),
+                             ("text", palette.text), ("line", palette.line),
+                             ("on-accent", palette.on_accent)):
+            assert f"--{token}: {color};" in css
+        assert '--font-ui: var(--font-mono)' in css
+    assert '@media (prefers-reduced-motion: reduce)' in html
+    assert 'fonts.googleapis.com' not in html
