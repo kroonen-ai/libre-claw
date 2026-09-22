@@ -305,6 +305,22 @@ async def test_cache_isolated_by_endpoint_and_resolved_credentials(config, provi
         assert len(requests) == 3
 
 
+async def test_catalog_cache_does_not_retain_environment_or_resolved_credentials(config, monkeypatch):
+    environment_key = "private-environment-credential"
+    resolved_key = "private-keyring-credential"
+    monkeypatch.setenv("CUSTOM_CATALOG_KEY", environment_key)
+    config = provider_config(config, "openrouter", api_key_env="CUSTOM_CATALOG_KEY")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"data": [{"id": "vendor/model"}]})
+    )) as client:
+        result = await discover_models(config, "openrouter", api_key_store=KeyStore(resolved_key), client=client)
+    assert result.source == "live"
+    assert model_catalog._CACHE and model_catalog._ACTIVE_KEYS
+    retained = repr((model_catalog._CACHE, model_catalog._ACTIVE_KEYS, model_catalog._SELECTED_CACHE))
+    assert environment_key not in retained
+    assert resolved_key not in retained
+
+
 async def test_concurrent_first_loads_remain_available_to_offline_readers(config):
     requests = []
     both_started = asyncio.Event()

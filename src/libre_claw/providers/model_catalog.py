@@ -10,7 +10,6 @@ does not publish them, and no request is validated against a model allowlist.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import time
@@ -25,6 +24,7 @@ import httpx
 from libre_claw.auth.api_keys import ApiKeyStore
 from libre_claw.config import LibreClawConfig
 from libre_claw.kimi import normalize_moonshot_selection
+from libre_claw.providers.cache_identity import cache_identity
 from libre_claw.providers.capabilities import apply_model_overrides, parse_capabilities
 from libre_claw.providers.llamacpp import normalize_llamacpp_base_url
 from libre_claw.providers.local import _ollama_api_url, _openai_base_url
@@ -70,7 +70,7 @@ _MAX_PAGES = 100
 _MAX_CACHE_ENTRIES = 128
 _CACHE: dict[tuple[str, str], _CachedCatalog] = {}
 # Offline readers never access keyrings, the network, or spawn a CLI. Discovery
-# binds each settings scope to the credential fingerprint that last resolved it.
+# binds each settings scope to the opaque credential identity that resolved it.
 _ACTIVE_KEYS: dict[str, tuple[str, str]] = {}
 _SELECTED_CACHE: dict[tuple[tuple[str, str], str], tuple[ModelInfo, float]] = {}
 
@@ -218,7 +218,7 @@ async def discover_models(
             _merge_models(config, provider, ()), "configured", "Could not read provider credentials."
         )
 
-    key = (scope, _fingerprint(api_key))
+    key = (scope, cache_identity(api_key, purpose="model-catalog:credential"))
     _ACTIVE_KEYS[scope] = key
     async with _catalog_lock(key):
         return await _discover_cached(config, provider, settings, api_key, client, refresh, key)
@@ -330,7 +330,8 @@ def _base_url(provider: str, settings: Mapping[str, Any]) -> str:
 
 def _settings_scope(config: LibreClawConfig, provider: str, settings: Mapping[str, Any]) -> str:
     env = _text(settings.get("api_key_env"), _KEY_ENVS.get(provider, ""))
-    # Hash credentials even in memory keys; never retain them in catalog records.
+    # Keep credentials out of memory keys and catalog records. The keyed identity
+    # is private to this process, including when an environment key is low entropy.
     identity = [
         provider, _base_url(provider, settings),
         _text(settings.get("service")), _text(settings.get("api_format"), "ollama"),
@@ -346,11 +347,7 @@ def _settings_scope(config: LibreClawConfig, provider: str, settings: Mapping[st
             os.getenv("CODEX_HOME", os.path.expanduser("~/.codex")),
             str(config.general.working_directory),
         ])
-    return _fingerprint(json.dumps(identity))
-
-
-def _fingerprint(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
+    return cache_identity(json.dumps(identity), purpose="model-catalog:settings")
 
 
 def _codex_identity() -> str:

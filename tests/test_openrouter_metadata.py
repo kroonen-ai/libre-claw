@@ -9,7 +9,9 @@ from pathlib import Path
 
 import httpx
 
+from libre_claw.auth.api_keys import ApiKeyLookup
 from libre_claw.config import load_config
+from libre_claw.providers import openrouter_metadata
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 
 
@@ -159,3 +161,45 @@ async def test_metadata_credential_lookup_does_not_block_event_loop(monkeypatch,
         finally:
             release.set()
         assert (await task).context_window_tokens == 32768
+
+
+async def test_metadata_cache_isolates_rotated_and_missing_credentials(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(openrouter_metadata, "_CACHE", {})
+    config = load_config(config_path=_config_path(
+        tmp_path, base_url="https://credential-cache.test/api/v1", model="lab/model",
+    ))
+
+    class KeyStore:
+        key = "private-account-one"
+
+        def get_api_key(self, *_args):
+            return ApiKeyLookup(self.key, "test" if self.key else "missing")
+
+    store = KeyStore()
+    contexts = {"Bearer private-account-one": 32000, "Bearer private-account-two": 64000, "": 16000}
+    calls = []
+
+    def respond(request):
+        calls.append(request.url.path)
+        context = contexts[request.headers.get("authorization", "")]
+        return httpx.Response(200, json={"data": [{"id": "lab/model", "context_length": context}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        first = await detect_openrouter_model_limits(config, api_key_store=store, client=client)
+        cached = await detect_openrouter_model_limits(config, api_key_store=store, client=client)
+        assert first == cached and len(calls) == 1
+        store.key = "private-account-two"
+        rotated = await detect_openrouter_model_limits(config, api_key_store=store, client=client)
+        store.key = "private-account-one"
+        restored = await detect_openrouter_model_limits(config, api_key_store=store, client=client)
+        assert restored == first and len(calls) == 2
+        store.key = ""
+        anonymous = await detect_openrouter_model_limits(config, api_key_store=store, client=client)
+
+    assert [first.context_window_tokens, rotated.context_window_tokens, anonymous.context_window_tokens] == [
+        32000, 64000, 16000,
+    ]
+    assert len(calls) == 3 and len(openrouter_metadata._CACHE) == 3
+    assert "private-account-one" not in repr(openrouter_metadata._CACHE)
+    assert "private-account-two" not in repr(openrouter_metadata._CACHE)

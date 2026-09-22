@@ -91,6 +91,7 @@ from libre_claw.tools_builtin import create_builtin_registry
 from libre_claw.web import dashboard_html
 from libre_claw.core.worktrees import ManagedWorktree
 from libre_claw.web.workflow_api import WorkflowAPI, WorkspaceBusyError
+from libre_claw.web.request_security import control_api_middleware
 
 
 ProviderFactory = Callable[[LibreClawConfig], LLMProvider]
@@ -185,8 +186,8 @@ class DaemonServer:
         self._telegram_task: asyncio.Task[None] | None = None
         self._shutdown_event: asyncio.Event | None = None
 
-    def app(self) -> web.Application:
-        app = web.Application()
+    def app(self, *, host: str | None = None) -> web.Application:
+        app = web.Application(middlewares=[control_api_middleware(host or self.config.daemon.host)])
         app.add_routes(
             [
                 web.get("/", self.dashboard),
@@ -253,7 +254,7 @@ class DaemonServer:
 
     async def run(self, host: str | None = None, port: int | None = None) -> None:
         self._shutdown_event = asyncio.Event()
-        runner = web.AppRunner(self.app())
+        runner = web.AppRunner(self.app(host=host))
         await runner.setup()
         site = web.TCPSite(runner, host or self.config.daemon.host, port or self.config.daemon.port)
         try:

@@ -20,9 +20,22 @@ class DashboardElements(HTMLParser):
     def __init__(self):
         super().__init__()
         self.ids = []
+        self.scripts = []
+        self._script_parts = None
 
     def handle_starttag(self, tag, attrs):
         self.ids.extend(value for name, value in attrs if name == "id")
+        if tag == "script":
+            self._script_parts = []
+
+    def handle_data(self, data):
+        if self._script_parts is not None:
+            self._script_parts.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "script" and self._script_parts is not None:
+            self.scripts.append("".join(self._script_parts))
+            self._script_parts = None
 
 
 def test_dashboard_control_ids_are_unique_and_all_static_bindings_exist():
@@ -35,12 +48,17 @@ def test_dashboard_control_ids_are_unique_and_all_static_bindings_exist():
     assert {"tabChanges", "tabWorktrees", "tabPlan", "messageAction", "runWorktree", "runMode", "taskWorkers", "workerStatus"} <= set(elements.ids)
 
 
-def test_dashboard_javascript_is_valid(tmp_path):
+@pytest.mark.parametrize("script_tag", ["script", 'SCRIPT data-label="a > b"'])
+def test_dashboard_javascript_is_valid(tmp_path, script_tag):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js required for dashboard JavaScript verification")
+    elements = DashboardElements()
+    elements.feed(dashboard_html().replace("<script>", f"<{script_tag}>").replace("</script>", "</SCRIPT>"))
+    elements.close()
+    assert elements.scripts and all(script.strip() for script in elements.scripts)
     source = tmp_path / "dashboard.js"
-    source.write_text("\n".join(re.findall(r"<script>(.*?)</script>", dashboard_html(), re.S)))
+    source.write_text("\n".join(elements.scripts))
     completed = subprocess.run([node, "--check", str(source)], text=True, capture_output=True)
     assert completed.returncode == 0, completed.stderr
 

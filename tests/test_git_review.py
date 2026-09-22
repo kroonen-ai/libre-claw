@@ -3,13 +3,14 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import stat
 from pathlib import Path
 
 import pytest
 
-from libre_claw.core.git_review import ReviewCommentStore, ReviewError, capture_review, create_checkpoint, mutate_review
+from libre_claw.core.git_review import ReviewCommentStore, ReviewError, capture_review, create_checkpoint, mutate_review, validate_repo_path
 
 
 def git(repo: Path, *args: str) -> str:
@@ -253,6 +254,53 @@ async def test_mutations_refuse_unsafe_paths(repo: Path, path: str) -> None:
     review = await capture_review(repo)
     with pytest.raises(ReviewError):
         await mutate_review(repo, "stage", expected_revision=review.revision, path=path)
+
+
+@pytest.mark.parametrize("path", [".", "./", "././", "../repo-other/file", "folder/../../outside", "/tmp/outside", ".git/config", "folder/.git/config"])
+def test_review_rejects_unsafe_paths_before_filesystem_access(repo: Path, path: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected_resolve(self: Path, *args, **kwargs) -> Path:
+        raise AssertionError("Unsafe review paths must be rejected before filesystem access")
+
+    monkeypatch.setattr(Path, "resolve", unexpected_resolve)
+    with pytest.raises(ReviewError, match="inside the repository"):
+        validate_repo_path(repo, path)
+
+
+@pytest.mark.parametrize("target", ["outside", "inside", "missing", "loop"])
+def test_review_checks_symlink_ancestors_without_traversing_them(repo: Path, target: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    outside = repo.parent / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("private contents\n")
+    inside = repo / "inside"
+    inside.mkdir()
+    (inside / "secret.txt").write_text("project contents\n")
+    link = repo / "link"
+    link.symlink_to({"outside": outside, "inside": inside, "missing": outside / "missing", "loop": link}[target])
+    inspected: list[str] = []
+    original_lstat = os.lstat
+    original_stat = os.stat
+
+    def record_lstat(path, *args, **kwargs):
+        inspected.append(os.fspath(path))
+        return original_lstat(path, *args, **kwargs)
+
+    def record_stat(path, *args, **kwargs):
+        inspected.append(os.fspath(path))
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", record_lstat)
+    monkeypatch.setattr(os, "stat", record_stat)
+    with pytest.raises(ReviewError, match="symlinks"):
+        validate_repo_path(repo, "link/secret.txt")
+    assert str(link) in inspected
+    assert str(link / "secret.txt") not in inspected
+    assert not any(path.startswith(str(outside)) for path in inspected)
+    assert (outside / "secret.txt").read_text() == "private contents\n"
+
+
+@pytest.mark.parametrize("path", ["nested/file.txt", "./nested//file.txt", "nested/./file.txt"])
+def test_review_accepts_normalized_paths_for_new_or_deleted_files(repo: Path, path: str) -> None:
+    assert validate_repo_path(repo, path) == "nested/file.txt"
 
 
 async def test_literal_filename_and_symlink_safety(repo: Path) -> None:

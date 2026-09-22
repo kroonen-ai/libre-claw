@@ -14,6 +14,8 @@ the default security posture is conservative.
   the input in the TUI.
 - Codex/ChatGPT auth is delegated to the Codex CLI. Libre Claw does not read or
   copy private Codex token files.
+- Provider metadata caches use keyed, process-local identities to separate
+  credentials without keeping reusable credential fingerprints.
 
 ## Permissions
 
@@ -40,6 +42,21 @@ File tools resolve paths through the configured working directory when
 `[sandbox].restrict_to_working_dir = true`.
 
 Daemon `POST /runs` requests cannot override the server working directory.
+
+## Dashboard and Daemon API
+
+The daemon binds to localhost by default. Its API is a trusted control surface:
+local clients can approve tools and explicitly request worktree setup commands.
+Shell execution is intentional and remains subject to the shell permission and
+sandbox policies.
+
+The daemon validates the requested host and browser origin, rejects cross-site
+API requests, and requires JSON content types for nonempty mutation bodies.
+These checks prevent websites from using a visitor's browser to issue commands
+to the daemon. They are not user authentication. Binding to a LAN address or
+`0.0.0.0` gives reachable native clients access; keep these listeners on trusted
+networks. Reverse proxies require explicit authentication and compatible
+Host/Origin handling; arbitrary forwarded headers are not trusted.
 
 ## Durable Logs
 

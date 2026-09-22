@@ -159,16 +159,19 @@ def validate_repo_path(repository: Path, path: str) -> str:
     if not path or "\x00" in path or "\\" in path:
         raise ReviewError("Provide a repository-relative file path.")
     relative = PurePosixPath(path)
-    if relative.is_absolute() or any(part in {"..", ".git"} for part in relative.parts) or path == ".":
+    if relative.is_absolute() or any(part in {"..", ".git"} for part in relative.parts) or not relative.parts:
         raise ReviewError("Review paths must stay inside the repository and outside .git.")
-    candidate = repository / path
-    try:
-        candidate.resolve().relative_to(repository.resolve())
-    except ValueError as exc:
-        raise ReviewError("Review path resolves outside the repository.") from exc
-    if candidate.is_symlink() or any(parent.is_symlink() for parent in candidate.parents if parent != repository and parent.is_relative_to(repository)):
-        raise ReviewError("Review mutations through symlinks are not supported.")
-    return relative.as_posix()
+    root = repository.resolve()
+    normalized = os.path.normpath(os.path.join(root, path))
+    if not normalized.startswith(os.path.join(str(root), "")):
+        raise ReviewError("Review path resolves outside the repository.")
+    candidate = Path(normalized)
+    # Check containment before inspecting user paths, and inspect ancestors
+    # first so even validation never traverses a symlink outside the repository.
+    for current in (*reversed(candidate.parents), candidate):
+        if current != root and current.is_relative_to(root) and current.is_symlink():
+            raise ReviewError("Review mutations through symlinks are not supported.")
+    return candidate.relative_to(root).as_posix()
 
 
 def repository_lock(repository: Path) -> asyncio.Lock:

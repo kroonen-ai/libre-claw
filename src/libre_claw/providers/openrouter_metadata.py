@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -15,6 +14,7 @@ import httpx
 
 from libre_claw.auth.api_keys import ApiKeyStore
 from libre_claw.config import LibreClawConfig
+from libre_claw.providers.cache_identity import cache_identity
 
 
 OPENROUTER_METADATA_TTL_SECONDS = 6 * 60 * 60
@@ -58,7 +58,10 @@ async def detect_openrouter_model_limits(
         )
     except Exception:
         return OpenRouterModelLimits(source="unavailable")
-    cache_key = (base_url, selected_model, hashlib.sha256((api_key or "").encode()).hexdigest())
+    cache_key = (
+        base_url, selected_model,
+        cache_identity(api_key or "", purpose="openrouter-metadata:credential"),
+    )
     cached = _CACHE.get(cache_key)
     now = time.monotonic()
     if cached is not None and now - cached[0] < OPENROUTER_METADATA_TTL_SECONDS:

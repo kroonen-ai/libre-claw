@@ -115,6 +115,11 @@ class BashTool(BaseTool):
         started_at = time.monotonic()
 
         try:
+            # This is intentionally a shell interpreter, not a command built by
+            # interpolating a filename or other data. Agent and worktree callers
+            # must obtain permission for this exact script before calling us;
+            # daemon routes also enforce the control API's browser boundary.
+            # Pattern checks are guardrails, not OS-level process isolation.
             process = await asyncio.create_subprocess_shell(
                 command,
                 cwd=str(self.context.working_directory),
