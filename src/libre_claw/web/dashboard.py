@@ -231,6 +231,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         <h2>Settings</h2>
         <button class="active" id="settingsTabGeneral" data-pane="general" role="tab" aria-controls="paneGeneral" aria-selected="true" type="button">General</button>
         <button id="settingsTabModels" data-pane="models" role="tab" aria-controls="paneModels" aria-selected="false" tabindex="-1" type="button">Models</button>
+        <button id="settingsTabPlugins" data-pane="plugins" role="tab" aria-controls="panePlugins" aria-selected="false" tabindex="-1" type="button">Plugins</button>
         <button id="settingsTabSchedules" data-pane="schedules" role="tab" aria-controls="paneSchedules" aria-selected="false" tabindex="-1" type="button">Schedules</button>
         <button id="settingsTabUsage" data-pane="usage" role="tab" aria-controls="paneUsage" aria-selected="false" tabindex="-1" type="button">Usage</button>
         <button id="settingsTabAbout" data-pane="about" role="tab" aria-controls="paneAbout" aria-selected="false" tabindex="-1" type="button">About</button>
@@ -314,6 +315,14 @@ _DASHBOARD_HTML = r"""<!doctype html>
             <div id="llamacppDiscovered" class="row"></div>
           </form>
           </section>
+        </div>
+        <div class="settings-body" id="panePlugins" role="tabpanel" aria-labelledby="settingsTabPlugins" tabindex="0" hidden>
+          <div class="panel-header"><div><h3>Plugins</h3><p class="panel-description">Local Cordis tools for this project.</p></div><button id="refreshPlugins" type="button">Refresh</button></div>
+          <div class="plugin-scope"><span class="eyebrow">Project scope</span><strong id="pluginsWorkspace">Current project only</strong><p class="hint">New tasks discover enabled tools. Disabling a plugin revokes its access.</p></div>
+          <p id="pluginsDisabled" class="hint" hidden>Cordis is turned off. Set <code>enabled = true</code> in your <code>[cordis]</code> configuration to enable tools.</p>
+          <div id="pluginsPrivacy" class="plugin-privacy" aria-label="Plugin privacy defaults"></div>
+          <p id="pluginsStatus" class="hint" role="status" aria-live="polite" aria-atomic="true">Refresh to load installed plugins.</p>
+          <div id="pluginsList" class="plugin-list" aria-label="Installed plugins"></div>
         </div>
         <div class="settings-body" id="paneSchedules" role="tabpanel" aria-labelledby="settingsTabSchedules" tabindex="0" hidden>
           <div class="panel-header"><div><h3>Schedules</h3><p class="panel-description">Keep recurring work on track.</p></div></div>
@@ -1483,8 +1492,135 @@ _DASHBOARD_HTML = r"""<!doctype html>
       node.append(actions); return node;
     }
 
+    /* Cordis plugins */
+    let pluginCatalog = null, pluginLoading = false, pluginPending = "", pluginPendingEnable = false;
+    function pluginNode(tag, className, text) {
+      const node = document.createElement(tag);
+      node.className = className;
+      if (text !== undefined) node.textContent = String(text);
+      return node;
+    }
+    function setPluginStatus(message, error = false) {
+      $("pluginsStatus").textContent = message;
+      $("pluginsStatus").className = error ? "hint danger" : "hint";
+    }
+    function syncPluginControls() {
+      const busy = pluginLoading || Boolean(pluginPending);
+      $("refreshPlugins").disabled = busy;
+      $("refreshPlugins").textContent = pluginLoading ? "Refreshing…" : "Refresh";
+      $("pluginsList").setAttribute("aria-busy", String(busy));
+      for (const button of $("pluginsList").querySelectorAll("button[data-plugin-id]")) {
+        const plugin = pluginCatalog?.plugins.find(item => String(item.id) === button.dataset.pluginId);
+        const blocked = !plugin || (!plugin.enabled && (!pluginCatalog.enabled || plugin.integrity !== "valid"));
+        button.disabled = busy || blocked;
+        button.textContent = pluginPending === button.dataset.pluginId
+          ? (pluginPendingEnable ? "Enabling…" : "Disabling…")
+          : (plugin?.enabled ? "Disable" : "Enable offline");
+      }
+    }
+    function renderPlugins(payload) {
+      $("pluginsWorkspace").textContent = payload.workspace ? String(payload.workspace) : "Current project only";
+      $("pluginsDisabled").hidden = payload.enabled === true;
+      const privacy = payload.privacy || {};
+      const privacyList = $("pluginsPrivacy");
+      privacyList.replaceChildren();
+      for (const [key, label] of [["telemetry", "No telemetry"], ["history_shared", "No automatic chat access"], ["credentials_inherited", "No inherited credentials"]]) {
+        if (privacy[key] === false) privacyList.append(pluginNode("span", "plugin-privacy-item", label));
+      }
+      if (privacy.default_network === "denied") privacyList.append(pluginNode("span", "plugin-privacy-item", "Offline by default"));
+      const list = $("pluginsList");
+      list.replaceChildren();
+      if (!payload.plugins.length) {
+        const empty = pluginNode("div", "plugin-empty");
+        empty.append(pluginNode("h4", "", "No plugins installed"));
+        empty.append(pluginNode("p", "hint", "Install a trusted local folder, then refresh this list."));
+        empty.append(pluginNode("code", "plugin-install-command", "libre-claw cordis install <folder>"));
+        list.append(empty);
+        return;
+      }
+      for (const plugin of payload.plugins) {
+        const name = String(plugin.name || plugin.id);
+        const card = pluginNode("article", "plugin-card");
+        card.setAttribute("aria-label", name);
+        const header = pluginNode("div", "plugin-card-head");
+        const identity = pluginNode("div", "plugin-identity");
+        identity.append(pluginNode("h4", "", name));
+        identity.append(pluginNode("p", "tiny", [plugin.id, plugin.version].filter(Boolean).join(" · ")));
+        const status = plugin.integrity !== "valid" ? "Files changed" : plugin.enabled ? (payload.enabled ? "Enabled" : "Paused") : "Disabled";
+        header.append(identity, pluginNode("span", plugin.integrity !== "valid" ? "plugin-state danger" : "plugin-state", status));
+        const grants = plugin.grants || {};
+        const permissions = pluginNode("dl", "plugin-grants");
+        for (const [label, value] of [
+          ["Network", grants.allow_network === true ? "Allowed" : "Denied"],
+          ["Extra reads", Array.isArray(grants.read_paths) && grants.read_paths.length ? grants.read_paths.join(", ") : "None"],
+          ["Extra writes", Array.isArray(grants.write_paths) && grants.write_paths.length ? grants.write_paths.join(", ") : "None"],
+        ]) permissions.append(pluginNode("dt", "", label), pluginNode("dd", "", value));
+        const tools = Array.isArray(plugin.tools) ? plugin.tools : [];
+        const toolNames = pluginNode("p", "plugin-tools", tools.length ? `Tools: ${tools.join(", ")}` : "No tools declared");
+        card.append(header, permissions, toolNames);
+        if (plugin.integrity !== "valid") card.append(pluginNode("p", "hint danger", "Files changed since installation. Reinstall before enabling."));
+        const actions = pluginNode("div", "plugin-actions");
+        const toggle = pluginNode("button", plugin.enabled ? "" : "primary");
+        toggle.type = "button";
+        toggle.dataset.pluginId = String(plugin.id);
+        toggle.setAttribute("aria-label", `${plugin.enabled ? "Disable" : "Enable offline"}: ${name} for this project`);
+        toggle.setAttribute("aria-describedby", "pluginsStatus");
+        toggle.addEventListener("click", () => togglePlugin(String(plugin.id)));
+        actions.append(toggle);
+        card.append(actions);
+        list.append(card);
+      }
+    }
+    async function loadPlugins(message = "") {
+      if (pluginLoading || (pluginPending && !message)) return false;
+      pluginLoading = true;
+      syncPluginControls();
+      setPluginStatus("Loading installed plugins…");
+      try {
+        const payload = await request("/plugins");
+        if (!Array.isArray(payload.plugins) || typeof payload.enabled !== "boolean") throw new Error("Invalid plugin registry response.");
+        pluginCatalog = payload;
+        renderPlugins(payload);
+        setPluginStatus(message || `${payload.plugins.length} plugin${payload.plugins.length === 1 ? "" : "s"} installed locally.`);
+        return true;
+      } catch (error) {
+        pluginCatalog = null;
+        $("pluginsList").replaceChildren();
+        $("pluginsPrivacy").replaceChildren();
+        setPluginStatus(`${message ? "Change saved, but plugins could not be refreshed" : "Could not load plugins"}: ${error.message || error}`, true);
+        return false;
+      } finally { pluginLoading = false; syncPluginControls(); }
+    }
+    async function togglePlugin(id) {
+      if (pluginLoading || pluginPending || !pluginCatalog) return;
+      const plugin = pluginCatalog.plugins.find(item => String(item.id) === id);
+      if (!plugin || (!plugin.enabled && (!pluginCatalog.enabled || plugin.integrity !== "valid"))) return;
+      const enabled = !plugin.enabled;
+      const name = String(plugin.name || id);
+      const trigger = [...$("pluginsList").querySelectorAll("button[data-plugin-id]")].find(item => item.dataset.pluginId === id);
+      const restoreFocus = document.activeElement === trigger;
+      pluginPending = id;
+      pluginPendingEnable = enabled;
+      syncPluginControls();
+      setPluginStatus(`${enabled ? "Enabling" : "Disabling"} ${name}${enabled ? " offline" : ""}…`);
+      try {
+        await request(`/plugins/${encodeURIComponent(id)}`, {method: "PATCH", body: JSON.stringify({enabled})});
+        await loadPlugins(enabled ? `${name} enabled offline. Start a new task to use its tools.` : `${name} disabled. Its access has been revoked.`);
+      } catch (error) {
+        setPluginStatus(`Could not ${enabled ? "enable" : "disable"} ${name}: ${error.message || error}`, true);
+      } finally {
+        pluginPending = "";
+        syncPluginControls();
+        if (restoreFocus && (document.activeElement === trigger || document.activeElement === document.body)
+          && !$("panePlugins").hidden && !$("settingsOverlay").hidden) {
+          const button = [...$("pluginsList").querySelectorAll("button[data-plugin-id]")].find(item => item.dataset.pluginId === id);
+          if (button && !button.disabled) button.focus();
+        }
+      }
+    }
+
     /* Settings modal */
-    const PANES = ["general", "models", "schedules", "usage", "about"];
+    const PANES = ["general", "models", "plugins", "schedules", "usage", "about"];
     let settingsReturnFocus = null;
     function openSettingsPane(pane) {
       if (!PANES.includes(pane)) return;
@@ -1510,6 +1646,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         void loadLlamacppConfig();
       }
       if (pane === "schedules") void refreshAutomations().catch(error => setNotice(error.message || String(error), true));
+      if (pane === "plugins") void loadPlugins();
       if (pane === "usage") void loadUsagePane();
     }
     function closeSettingsPanel() {
@@ -2387,6 +2524,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     $("messageAction").addEventListener("change", syncComposerMode);
     $("automationRoute").addEventListener("change", syncAutomationRoute);
     $("refreshUsagePane").addEventListener("click", loadUsagePane);
+    $("refreshPlugins").addEventListener("click", () => { void loadPlugins(); });
     $("refreshSchedules").addEventListener("click", () => { void refreshAutomations().catch(error => setNotice(error.message || String(error), true)); });
     $("cancelAutomationEdit").addEventListener("click", () => resetAutomationForm($("automationForm")));
     $("cancelRun").addEventListener("click", async () => {

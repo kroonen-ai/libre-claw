@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field, replace
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 
 import httpx
 import structlog
@@ -31,6 +32,7 @@ from libre_claw.config import (
     set_global_theme,
 )
 from libre_claw.auth.api_keys import ApiKeyStore
+from libre_claw.cordis_cli import manager_for as cordis_manager, plugin_status
 from libre_claw.core import (
     Agent,
     AgentDone,
@@ -211,6 +213,8 @@ class DaemonServer:
                 web.post("/runs/{run_id}/cancel", self.cancel_run),
                 web.post("/runs/{run_id}/permissions/{tool_call_id}", self.resolve_permission),
                 web.get("/usage", self.usage),
+                web.get("/plugins", self.list_plugins),
+                web.patch("/plugins/{plugin_id}", self.update_plugin),
                 web.get("/automations", self.list_automations),
                 web.post("/automations", self.create_automation),
                 web.get("/automations/{automation_id}", self.get_automation),
@@ -494,6 +498,33 @@ class DaemonServer:
             return _json_error("Unknown run.", status=404)
         filtered = [event for event in events if event.event_id > after]
         return web.json_response({"events": [_event_payload(event) for event in filtered]})
+
+    async def list_plugins(self, request: web.Request) -> web.Response:
+        if not _cordis_local_request(request):
+            return _json_error("Plugin management is available only from this local dashboard.", status=403)
+        try:
+            return web.json_response(await asyncio.to_thread(plugin_status, self.config))
+        except (ValueError, OSError, RuntimeError) as exc:
+            return _json_error(str(exc))
+
+    async def update_plugin(self, request: web.Request) -> web.Response:
+        if not _cordis_local_request(request) or request.content_type != "application/json":
+            return _json_error("Plugin changes require a local JSON request from this dashboard.", status=403)
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict) or set(payload) != {"enabled"} or not isinstance(payload["enabled"], bool):
+                raise ValueError("Send only a boolean enabled field. Additional grants require the local CLI.")
+            manager = cordis_manager(self.config)
+            plugin_id = request.match_info["plugin_id"]
+            if payload["enabled"]:
+                if not self.config.cordis.enabled:
+                    raise ValueError("Cordis is disabled in configuration.")
+                await asyncio.to_thread(manager.enable, plugin_id, self.config.general.working_directory)
+            else:
+                await asyncio.to_thread(manager.disable, plugin_id, self.config.general.working_directory)
+            return web.json_response(await asyncio.to_thread(plugin_status, self.config))
+        except (ValueError, OSError, RuntimeError) as exc:
+            return _json_error(str(exc))
 
     async def usage(self, request: web.Request) -> web.Response:
         provider = str(request.query.get("provider", "")).strip().lower() or None
@@ -2604,6 +2635,24 @@ def _read_artifact(run: RunRecord, name: str) -> str:
         return path.read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+def _cordis_local_request(request: web.Request) -> bool:
+    """Keep plugin trust changes away from cross-site and remote requests."""
+    if request.remote not in {"127.0.0.1", "::1"}:
+        return False
+    try:
+        target = urlsplit(f"{request.scheme}://{request.host}")
+        if target.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            return False
+        origin = request.headers.get("Origin")
+        if origin:
+            source = urlsplit(origin)
+            if (source.scheme, source.hostname, source.port) != (target.scheme, target.hostname, target.port):
+                return False
+        return request.headers.get("Sec-Fetch-Site") != "cross-site"
+    except ValueError:
+        return False
 
 
 def _usage_payload(usage: Usage, *, provider: str = "", model: str = "", surface: str = "") -> dict[str, Any]:

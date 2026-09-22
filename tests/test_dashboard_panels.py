@@ -67,7 +67,7 @@ class Element {
   getClientRects() { return this.hidden ? [] : [{}]; }
   addEventListener(name, handler) { this.listeners[name] = handler; }
 }
-const names = ['general', 'models', 'schedules', 'usage', 'about'];
+const names = ['general', 'models', 'plugins', 'schedules', 'usage', 'about'];
 const elements = Object.fromEntries(['appFrame', 'settingsOverlay', 'settingsNotice', 'openSettings', 'closeSettings',
   ...names.map(name => 'pane' + name[0].toUpperCase() + name.slice(1))].map(id => [id, new Element(id)]));
 elements.settingsOverlay.hidden = true;
@@ -81,6 +81,8 @@ const loadModelConfig = () => { modelLoads++; };
 const loadLlamacppConfig = () => {};
 const refreshAutomations = async () => {};
 const loadUsagePane = () => {};
+let pluginLoads = 0;
+const loadPlugins = async () => { pluginLoads++; };
 const setNotice = () => {};
 const closeMobileSidebar = () => {};
 const keyboard = (key, shiftKey = false) => ({key, shiftKey, prevented: false, preventDefault() { this.prevented = true; }});
@@ -108,9 +110,12 @@ bindTabNavigation('.settings-nav button', tab => openSettingsPane(tab.dataset.pa
 tabs[0].listeners.keydown(keyboard('ArrowDown'));
 assert.equal(document.activeElement, tabs[1]); assert.equal(elements.paneModels.hidden, false);
 assert.equal(elements.paneGeneral.hidden, true); assert.equal(modelLoads, 1);
-tabs[1].listeners.keydown(keyboard('End'));
-assert.equal(document.activeElement, tabs[4]); assert.equal(elements.paneAbout.hidden, false);
-tabs[4].listeners.keydown(keyboard('Home')); assert.equal(document.activeElement, tabs[0]);
+tabs[1].listeners.keydown(keyboard('ArrowDown'));
+assert.equal(document.activeElement, tabs[2]); assert.equal(elements.panePlugins.hidden, false);
+assert.equal(pluginLoads, 1);
+tabs[2].listeners.keydown(keyboard('End'));
+assert.equal(document.activeElement, tabs.at(-1)); assert.equal(elements.paneAbout.hidden, false);
+tabs.at(-1).listeners.keydown(keyboard('Home')); assert.equal(document.activeElement, tabs[0]);
 const escape = keyboard('Escape'); handleSettingsKeydown(escape);
 assert.equal(escape.prevented, true); assert.equal(elements.appFrame.inert, false);
 assert.equal(elements.settingsOverlay.hidden, true); assert.equal(document.activeElement, elements.openSettings);

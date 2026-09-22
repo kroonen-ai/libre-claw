@@ -22,6 +22,7 @@ Current release: Version `0.1.0`.
 | Durable runs | Every task gets a run ID, JSONL event log, summary, verification notes, and optional diff. |
 | Local dashboard | Start, inspect, cancel, and approve daemon-owned runs from a browser on localhost. |
 | Memory and skills | Local persistent memory, `SOUL.md` persona files, user/project `SKILL.md` workflows, and optional Vercel Skills discovery. |
+| Cordis plugins | Local tools and services with project-specific grants, offline defaults, and managed cleanup. [Guide](docs/CORDIS.md). |
 | Real tools | File edits, shell, code search, web search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
 | Provider routing | DeepSeek, Kimi Code/Moonshot, OpenRouter, Ollama/Ollama Cloud, llama.cpp/llama-swap, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
 | Reproducible evals | A Harbor adapter runs the real Libre Claw loop against Terminal-Bench 2.1. |

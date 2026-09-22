@@ -241,6 +241,12 @@ class MCPConfig:
 
 
 @dataclass(frozen=True)
+class CordisConfig:
+    enabled: bool = True
+    tool_timeout: int = 30
+
+
+@dataclass(frozen=True)
 class LibreClawConfig:
     general: GeneralConfig
     agent: AgentConfig
@@ -274,6 +280,7 @@ class LibreClawConfig:
         )
     )
     source_paths: tuple[Path, ...] = field(default_factory=tuple)
+    cordis: CordisConfig = field(default_factory=CordisConfig)
 
 
 ENV_OVERRIDES: Mapping[str, tuple[str, str]] = {
@@ -827,6 +834,7 @@ def _load_default_config() -> ConfigTable:
             "tool_timeout": 30,
             "servers": {},
         },
+        "cordis": {"enabled": True, "tool_timeout": 30},
     }
 
 
@@ -1078,6 +1086,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
     skills = _section(data, "skills")
     petdex = _section(data, "petdex")
     mcp = _section(data, "mcp")
+    cordis = _section(data, "cordis")
 
     return LibreClawConfig(
         general=GeneralConfig(
@@ -1241,6 +1250,10 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             servers=_mcp_servers(mcp),
         ),
         providers=_providers(data),
+        cordis=CordisConfig(
+            enabled=_bool(cordis, "enabled"),
+            tool_timeout=max(1, min(300, _int(cordis, "tool_timeout"))),
+        ),
         web_search=WebSearchConfig(
             enabled=_bool(web_search, "enabled"),
             provider=_str(web_search, "provider"),

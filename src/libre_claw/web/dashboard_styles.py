@@ -877,6 +877,29 @@ DASHBOARD_CSS = r"""
     .endpoint-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: start; gap: 8px; }
     .endpoint-row input { width: 100%; }
     #llamacppStatus { margin: 0; overflow-wrap: anywhere; }
+    .plugin-scope { display: grid; gap: 6px; padding: 16px; border: 1px solid var(--line); border-inline-start: 2px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); }
+    .plugin-scope .eyebrow { color: var(--muted); font-size: 10px; }
+    .plugin-scope strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+    .plugin-scope .hint { margin: 0; font-size: 11px; }
+    .plugin-privacy { display: flex; flex-wrap: wrap; gap: 7px 14px; margin: 16px 0; }
+    .plugin-privacy-item { color: var(--muted); font-size: 10px; line-height: 1.6; }
+    .plugin-privacy-item::before { content: '·'; color: var(--accent); margin-inline-end: 6px; }
+    #pluginsStatus { min-height: 20px; margin: 14px 0; overflow-wrap: anywhere; }
+    .plugin-list { display: grid; gap: 12px; }
+    .plugin-card, .plugin-empty { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--bg); }
+    .plugin-card-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+    .plugin-identity { min-width: 0; }
+    .plugin-card h4, .plugin-empty h4 { margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+    .plugin-identity .tiny { margin: 5px 0 0; overflow-wrap: anywhere; }
+    .plugin-state { flex: none; font-size: 10px; padding: 3px 7px; border: 1px solid var(--line); border-radius: var(--radius-small); color: var(--muted); }
+    .plugin-state.danger { color: var(--danger); border-color: var(--danger); }
+    .plugin-grants { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 6px 12px; margin: 18px 0 12px; font-size: 11px; line-height: 1.6; }
+    .plugin-grants dt { color: var(--muted); }
+    .plugin-grants dd { margin: 0; color: var(--soft); overflow-wrap: anywhere; }
+    .plugin-tools { color: var(--muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; margin: 0; }
+    .plugin-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .plugin-actions button { min-height: 38px; font-size: 11px; }
+    .plugin-install-command { display: block; color: var(--text); padding: 12px; background: var(--surface-2); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
     .automation-list { display: grid; gap: 12px; margin-top: 22px; }
     .automation { border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--bg); padding: 17px; display: grid; gap: 10px; }
     .automation-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -945,6 +968,10 @@ DASHBOARD_CSS = r"""
       .metric-grid { gap: 8px; }
     }
     @media (max-width: 600px) {
+      .plugin-card-head { flex-wrap: wrap; }
+      .plugin-card, .plugin-empty { padding: 14px; }
+      .plugin-actions button { width: 100%; }
+      .plugin-grants { grid-template-columns: 76px minmax(0, 1fr); gap: 6px 8px; }
       .model-fields { grid-template-columns: 1fr; gap: 20px; }
       .model-actions { width: 100%; }
       .model-actions button { flex: 1; }

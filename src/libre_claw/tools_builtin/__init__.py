@@ -8,6 +8,7 @@ from dataclasses import replace
 
 from libre_claw.config import LibreClawConfig
 from libre_claw.core.memory import MemoryStore
+from libre_claw.core.cordis import CordisManager
 from libre_claw.core.tools import ToolContext, ToolRegistry, registered_tool_types
 
 # Import modules for their @register_tool side effects.
@@ -85,6 +86,11 @@ def create_builtin_registry(config: LibreClawConfig, memory_store: MemoryStore |
         for tool in _mcp.mcp_tools(config, context)
         if _tool_is_enabled(tool.name, allowlist, denylist, unavailable)
     )
+    if config.cordis.enabled:
+        tools.extend(
+            tool for tool in CordisManager(tool_timeout=config.cordis.tool_timeout).create_tools(context)
+            if _tool_is_enabled(tool.name, allowlist, denylist, unavailable)
+        )
     return ToolRegistry(tools)
 
 

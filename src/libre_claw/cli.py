@@ -1427,5 +1427,7 @@ async def _stream_codex_login(browser_login: bool) -> CodexCommandResult:
 
 
 from libre_claw.workflow_cli import workflow_group
+from libre_claw.cordis_cli import cordis_group
 
 main.add_command(workflow_group)
+main.add_command(cordis_group)

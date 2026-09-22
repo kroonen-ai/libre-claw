@@ -293,6 +293,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/paste-image", "/paste-image", "Attach an image from the OS clipboard"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/usage", "/usage <provider>|all|attribution|presets", "Show tokens, cache reuse, and cost"),
+    SlashCommand("/plugins", "/plugins [list|inspect|enable|disable] [id]", "Manage local Cordis plugins for this project"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
     SlashCommand("/models", "/models [provider] [search] [--refresh]", "Discover provider models"),
     SlashCommand("/fallback", "/fallback list|set|clear", "Manage fallback provider/model slots"),
@@ -1249,6 +1250,13 @@ class LibreClawApp(App[None]):
             return
         if command == "/usage":
             await self._handle_usage_command(argument)
+            return
+        if command == "/plugins":
+            from libre_claw.cordis_cli import plugin_command
+            try:
+                self._append_system(await plugin_command(self.config, argument))
+            except (ValueError, OSError, RuntimeError) as exc:
+                self._append_system(f"Cordis: {exc}")
             return
         if command == "/model":
             tokens = argument.split(maxsplit=1)

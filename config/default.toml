@@ -297,3 +297,9 @@ tool_timeout = 30
 # [mcp.servers.filesystem]
 # command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."]
 # tools = ["read_file", "list_directory"]
+
+[cordis]
+# Available, but no plugin runs until explicitly installed and enabled for a project.
+# This switch disables all Cordis tools. Plugin grants live in the user registry.
+enabled = true
+tool_timeout = 30

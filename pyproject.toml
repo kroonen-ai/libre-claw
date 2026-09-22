@@ -65,6 +65,9 @@ lc = "libre_claw.cli:main"
 [project.urls]
 Homepage = "https://kroonen.ai"
 
+[tool.hatch.build]
+exclude = ["**/node_modules/**"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/libre_claw"]
 
