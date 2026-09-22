@@ -131,8 +131,16 @@ class DeepSeekProvider(OpenAIProvider):
     def _usage_from(self, raw_usage: Any, previous: Usage | None) -> Usage | None:
         usage = super()._usage_from(raw_usage, previous)
         cache_hits = _object_field(raw_usage, "prompt_cache_hit_tokens")
-        if usage is not None and isinstance(cache_hits, int) and not isinstance(cache_hits, bool):
-            usage = replace(usage, cached_tokens=cache_hits)
+        cache_misses = _object_field(raw_usage, "prompt_cache_miss_tokens")
+        if usage is not None:
+            if _is_token_count(cache_hits):
+                usage = replace(usage, cached_tokens=cache_hits)
+            if (
+                not _is_token_count(_object_field(raw_usage, "prompt_tokens"))
+                and _is_token_count(cache_hits)
+                and _is_token_count(cache_misses)
+            ):
+                usage = replace(usage, input_tokens=cache_hits + cache_misses)
         return usage
 
     def _response_error(self, stop_reason: str | None, has_tool_calls: bool) -> str | None:
@@ -159,6 +167,10 @@ class DeepSeekProvider(OpenAIProvider):
         ]
         accumulators.clear()
         return calls
+
+
+def _is_token_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _validate_max_tokens(value: int) -> None:

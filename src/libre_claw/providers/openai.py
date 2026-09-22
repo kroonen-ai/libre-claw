@@ -4,17 +4,20 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 import structlog
 
 from libre_claw.core.session import ChatMessage, ContentBlock
 from libre_claw.providers.capabilities import apply_reasoning_request, prepare_request
 from libre_claw.providers.base import (
+    CacheableSystemPrompt,
     Done,
     LLMProvider,
     ProviderError,
@@ -69,13 +72,23 @@ class OpenAIProvider(LLMProvider):
         default_headers: Mapping[str, str] | None = None,
         display_name: str = "OpenAI",
         client: Any | None = None,
+        prompt_caching: bool | None = None,
+        prompt_cache_key: str | None = None,
     ) -> None:
+        if prompt_caching is not None and not isinstance(prompt_caching, bool):
+            raise ProviderConfigurationError("prompt_caching must be a boolean or unset.")
+        if prompt_cache_key is not None and (
+            not isinstance(prompt_cache_key, str) or not 1 <= len(prompt_cache_key) <= 64
+        ):
+            raise ProviderConfigurationError("OpenAI prompt_cache_key must be a string of 1 to 64 characters.")
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
         self.base_url = base_url
         self.default_headers = dict(default_headers or {})
         self.display_name = display_name
+        self.prompt_caching = prompt_caching
+        self.prompt_cache_key = prompt_cache_key
         if client is not None:
             self._client = client
         elif AsyncOpenAI is None:
@@ -228,6 +241,50 @@ class OpenAIProvider(LLMProvider):
     def _finalize_request(self, request: dict[str, Any]) -> None:
         """Apply capability controls and provider protocol constraints."""
         apply_reasoning_request(self, request)
+        self._apply_prompt_caching(request)
+
+    def _apply_prompt_caching(self, request: dict[str, Any]) -> None:
+        # Compatible providers inherit this class without necessarily supporting
+        # OpenAI's cache parameters. Check the effective SDK URL too: environment
+        # variables can override its endpoint even when base_url is unset here.
+        if (
+            self.prompt_caching is False
+            or type(self) is not OpenAIProvider
+            or not self._uses_official_endpoint("api.openai.com", "/v1")
+        ):
+            return
+        key = self.prompt_cache_key or _prompt_cache_digest({
+            "model": self.model,
+            "system": [
+                {
+                    "role": message["role"],
+                    "content": (
+                        message["content"].cache_prefix
+                        if isinstance(message["content"], CacheableSystemPrompt)
+                        else message["content"]
+                    ),
+                }
+                for message in request["messages"]
+                if message["role"] in {"system", "developer"}
+            ],
+            "tools": request.get("tools", []),
+        })
+        # extra_body keeps this compatible with our OpenAI SDK minimum version.
+        # Leave cache retention at the provider's model/account default.
+        request.setdefault("extra_body", {})["prompt_cache_key"] = key
+
+    def _uses_official_endpoint(self, host: str, path: str) -> bool:
+        endpoint = str(getattr(self._client, "base_url", None) or self.base_url or "https://api.openai.com/v1")
+        try:
+            parsed = urlsplit(endpoint)
+            return (
+                parsed.scheme == "https"
+                and parsed.hostname == host
+                and parsed.port in {None, 443}
+                and parsed.path.rstrip("/") == path
+            )
+        except ValueError:
+            return False
 
     def _usage_from(self, raw_usage: Any, previous: Usage | None) -> Usage | None:
         return _usage_from(raw_usage, previous)
@@ -436,7 +493,17 @@ def _usage_from(raw_usage: Any, previous: Usage | None) -> Usage | None:
             previous.reasoning_tokens if previous else 0,
         ),
         cost=_cost_value(_get_usage_value(raw_usage, "cost"), previous.cost if previous else None),
+        cache_write_tokens=_token_value(
+            _get_usage_value(prompt_details, "cache_write_tokens"),
+            previous.cache_write_tokens if previous else 0,
+        ),
     )
+
+
+def _prompt_cache_digest(value: Any) -> str:
+    """Create a stable, bounded routing key without exposing prompt content."""
+    serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "libre-claw:" + hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:48]
 
 
 def _get_usage_value(raw_usage: Any, key: str) -> Any:

@@ -292,7 +292,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/attach", "/attach <image-path>|list|clear", "Attach images to the next TUI message"),
     SlashCommand("/paste-image", "/paste-image", "Attach an image from the OS clipboard"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
-    SlashCommand("/usage", "/usage openrouter|attribution|presets", "Show provider usage analytics"),
+    SlashCommand("/usage", "/usage <provider>|all|attribution|presets", "Show tokens, cache reuse, and cost"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
     SlashCommand("/models", "/models [provider] [search] [--refresh]", "Discover provider models"),
     SlashCommand("/fallback", "/fallback list|set|clear", "Manage fallback provider/model slots"),
@@ -4793,6 +4793,8 @@ class LibreClawApp(App[None]):
         ]
         if self.usage.cached_tokens:
             lines.append(f"- Cached input: {self.usage.cached_tokens}")
+        if self.usage.cache_write_tokens:
+            lines.append(f"- Cache writes: {self.usage.cache_write_tokens}")
         if self.usage.reasoning_tokens:
             lines.append(f"- Reasoning output: {self.usage.reasoning_tokens}")
         lines.append(f"- Cost: {_format_usage_cost(self.usage)}")
@@ -4874,11 +4876,11 @@ class LibreClawApp(App[None]):
         if normalized in {"openrouter presets", "presets", "models", "openrouter models"}:
             self._start_model_discovery("openrouter")
             return
-        if normalized not in {"openrouter", "all"}:
+        if normalized not in {*self.config.providers, "all"}:
             self._append_system(_usage_help_text())
             return
 
-        provider = None if normalized == "all" else "openrouter"
+        provider = None if normalized == "all" else normalized
         if self.daemon_client is not None:
             try:
                 payload = await self.daemon_client.usage(provider=provider or "", limit=250)
@@ -5571,11 +5573,14 @@ def _usage_help_text() -> str:
     return "\n".join(
         [
             "Usage:",
+            "/usage <provider>",
+            "/usage deepseek",
+            "/usage all",
             "/usage openrouter",
             "/usage openrouter attribution",
             "/usage openrouter presets",
             "",
-            "Shows persistent provider usage from durable runs: tokens, cost, model, run, and user surface.",
+            "Shows persistent provider usage from durable runs: tokens, cache reuse, cost, model, run, and user surface.",
         ]
     )
 
@@ -5633,6 +5638,7 @@ def _usage_payload(usage: Usage, *, provider: str = "", model: str = "", surface
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
         "cached_tokens": usage.cached_tokens,
+        "cache_write_tokens": usage.cache_write_tokens,
         "reasoning_tokens": usage.reasoning_tokens,
         "cost": usage.cost,
     }
@@ -5650,6 +5656,7 @@ def _usage_from_payload(payload: dict[str, Any]) -> Usage:
         input_tokens=int(payload.get("input_tokens", 0) or 0),
         output_tokens=int(payload.get("output_tokens", 0) or 0),
         cached_tokens=int(payload.get("cached_tokens", 0) or 0),
+        cache_write_tokens=int(payload.get("cache_write_tokens", 0) or 0),
         reasoning_tokens=int(payload.get("reasoning_tokens", 0) or 0),
         cost=payload.get("cost") if isinstance(payload.get("cost"), int | float) else None,
     )

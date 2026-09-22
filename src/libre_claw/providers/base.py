@@ -16,17 +16,37 @@ if TYPE_CHECKING:
 ToolSchema = Mapping[str, Any]
 
 
+class CacheableSystemPrompt(str):
+    """A normal prompt string with an explicit stable cache boundary.
+
+    Providers that understand this metadata can mark the stable prefix while
+    still sending the complete, current prompt. Other providers see plain text.
+    """
+
+    cache_prefix: str
+    cache_scope: str | None
+
+    def __new__(cls, prefix: str, suffix: str = "", *, cache_scope: str | None = None):
+        value = super().__new__(cls, "\n\n".join(part for part in (prefix, suffix) if part))
+        value.cache_prefix = prefix
+        value.cache_scope = cache_scope
+        return value
+
+
 class ProviderConfigurationError(RuntimeError):
     """Raised when a provider cannot be configured for the current session."""
 
 
 @dataclass(frozen=True)
 class Usage:
+    """Input totals include cache reads and writes; cache fields are subsets."""
+
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
     reasoning_tokens: int = 0
     cost: float | None = None
+    cache_write_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -52,6 +72,7 @@ def combine_usage(left: Usage | None, right: Usage | None) -> Usage | None:
         cached_tokens=left.cached_tokens + right.cached_tokens,
         reasoning_tokens=left.reasoning_tokens + right.reasoning_tokens,
         cost=cost,
+        cache_write_tokens=left.cache_write_tokens + right.cache_write_tokens,
     )
 
 

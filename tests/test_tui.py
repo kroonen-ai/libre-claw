@@ -1140,6 +1140,23 @@ async def test_approvals_command_lists_blocked_runs(monkeypatch, tmp_path: Path)
     assert any("toolu_1" in entry.content for entry in app.transcript)
 
 
+async def test_usage_command_reports_deepseek_cache_reuse(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    app = LibreClawApp(config=load_config())
+    app.run_store = RunStore(tmp_path / "runs")
+    run = await app.run_store.create_run("Cached work", kind="chat", provider="deepseek", model="deepseek-flash")
+    await app.run_store.append_event(run.run_id, "usage", {
+        "input_tokens": 100, "output_tokens": 10, "cached_tokens": 80,
+    })
+    async with app.run_test():
+        await app._handle_command("/usage deepseek")
+    text = "\n".join(entry.content for entry in app.transcript if entry.role == "system")
+    assert "deepseek-flash" in text
+    assert "Cached input: 80" in text
+    assert "Reported cache reuse: 80.0%" in text
+
+
 async def test_usage_command_reports_openrouter_run_rollups(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

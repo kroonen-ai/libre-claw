@@ -41,16 +41,24 @@ system_prompt_extra = ""
 # .libre-claw/SOUL.md, and ./SOUL.md at runtime.
 
 [providers.anthropic]
+# Prompt caching is automatic on the official endpoint; custom endpoints require opt-in.
+# prompt_caching = false # disable Libre Claw cache markers
+# prompt_cache_ttl = "5m" # "1h" is available at the provider's higher write rate
 api_key_env = "ANTHROPIC_API_KEY"
 default_model = "claude-opus-5"
 max_tokens = 65536
 
 [providers.openai]
+# Stable prompt-cache routing keys are generated for the official OpenAI endpoint.
+# prompt_caching = false # omit routing hints; provider-managed caching may still apply
+# prompt_cache_key = "my-workspace" # optional stable key, at most 64 characters
 api_key_env = "OPENAI_API_KEY"
 default_model = "gpt-5.5"
 max_tokens = 16384
 
 [providers.openrouter]
+# Official OpenRouter: sticky routing and automatic caching for Anthropic routes.
+# prompt_caching = false # omit Libre Claw caching and routing hints
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
 default_model = "openrouter/auto"
@@ -58,6 +66,7 @@ max_tokens = 16384
 auto_context_window = true
 
 [providers.deepseek]
+# DeepSeek manages prefix caching automatically; no cache toggle is needed.
 api_key_env = "DEEPSEEK_API_KEY"
 base_url = "https://api.deepseek.com"
 default_model = "deepseek-flash"

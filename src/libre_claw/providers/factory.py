@@ -163,6 +163,8 @@ def _create_provider(
                 model=resolved_model,
                 max_tokens=max_tokens,
                 base_url=_str_provider_value(provider_config, "base_url", "") or None,
+                prompt_caching=_prompt_caching_value(provider_config, resolved_provider_name),
+                prompt_cache_ttl=_prompt_cache_ttl(provider_config),
             )
         if resolved_provider_name == "openrouter":
             return OpenRouterProvider(
@@ -170,6 +172,7 @@ def _create_provider(
                 model=resolved_model,
                 max_tokens=max_tokens,
                 base_url=_str_provider_value(provider_config, "base_url", "https://openrouter.ai/api/v1"),
+                prompt_caching=_prompt_caching_value(provider_config, resolved_provider_name),
             )
         if resolved_provider_name == "deepseek":
             thinking = provider_config.get("thinking", "enabled")
@@ -219,6 +222,8 @@ def _create_provider(
             model=resolved_model,
             max_tokens=max_tokens,
             base_url=_str_provider_value(provider_config, "base_url", "") or None,
+            prompt_caching=_prompt_caching_value(provider_config, resolved_provider_name),
+            prompt_cache_key=_prompt_cache_key(provider_config),
         )
     except RuntimeError as exc:
         raise ProviderConfigurationError(str(exc)) from exc
@@ -394,6 +399,27 @@ def _ollama_think_value(config: Mapping[str, Any], model: str) -> OllamaThink:
     raise ProviderConfigurationError(
         "[providers.ollama].think must be 'auto', true, false, 'low', 'medium', or 'high'."
     )
+
+
+def _prompt_caching_value(config: Mapping[str, Any], provider: str) -> bool | None:
+    value = config.get("prompt_caching")
+    if value is not None and not isinstance(value, bool):
+        raise ProviderConfigurationError(f"[providers.{provider}].prompt_caching must be true or false.")
+    return value
+
+
+def _prompt_cache_ttl(config: Mapping[str, Any]) -> str:
+    value = config.get("prompt_cache_ttl", "5m")
+    if value not in ("5m", "1h"):
+        raise ProviderConfigurationError("[providers.anthropic].prompt_cache_ttl must be '5m' or '1h'.")
+    return value
+
+
+def _prompt_cache_key(config: Mapping[str, Any]) -> str | None:
+    value = config.get("prompt_cache_key")
+    if value is not None and (not isinstance(value, str) or not value.strip() or len(value) > 64):
+        raise ProviderConfigurationError("[providers.openai].prompt_cache_key must be a non-empty string of at most 64 characters.")
+    return value
 
 
 def _provider_max_tokens(config: Mapping[str, Any]) -> int:

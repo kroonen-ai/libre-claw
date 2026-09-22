@@ -84,3 +84,7 @@ DeepSeek reports them. Billed cost stays unknown unless the API reports it;
 Libre Claw does not hardcode DeepSeek's changing prices. Check
 [DeepSeek's pricing page](https://api-docs.deepseek.com/quick_start/pricing/) for
 current rates.
+
+Context caching is automatic. Libre Claw keeps prompt prefixes stable across
+tool calls and reports cache reuse in the dashboard's Usage pane and `/usage
+deepseek`. See the [prompt caching guide](PROMPT_CACHING.md) for details.

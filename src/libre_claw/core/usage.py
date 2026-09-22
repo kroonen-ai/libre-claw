@@ -35,6 +35,7 @@ class UsageRecord:
     cached_tokens: int = 0
     reasoning_tokens: int = 0
     cost: float | None = None
+    cache_write_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -48,6 +49,7 @@ class UsageRecord:
             cached_tokens=self.cached_tokens,
             reasoning_tokens=self.reasoning_tokens,
             cost=self.cost,
+            cache_write_tokens=self.cache_write_tokens,
         )
 
 
@@ -61,6 +63,7 @@ class UsageGroup:
     cached_tokens: int
     reasoning_tokens: int
     cost: float | None
+    cache_write_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -109,6 +112,7 @@ def usage_records_from_run(run: RunRecord, events: list[RunEvent]) -> list[Usage
                 cached_tokens=_int_value(data.get("cached_tokens")),
                 reasoning_tokens=_int_value(data.get("reasoning_tokens")),
                 cost=_cost_value(data.get("cost")),
+                cache_write_tokens=_int_value(data.get("cache_write_tokens")),
             )
         )
     return records
@@ -131,6 +135,10 @@ def usage_report_text(records: list[UsageRecord], *, provider: str = "openrouter
     ]
     if total.cached_tokens:
         lines.append(f"- Cached input: {total.cached_tokens}")
+        if total.input_tokens:
+            lines.append(f"- Reported cache reuse: {_cache_hit_ratio(total.cached_tokens, total.input_tokens):.1%} of input")
+    if total.cache_write_tokens:
+        lines.append(f"- Cache writes: {total.cache_write_tokens}")
     if total.reasoning_tokens:
         lines.append(f"- Reasoning output: {total.reasoning_tokens}")
     lines.append(f"- Cost: {_format_cost(total.cost)}")
@@ -194,6 +202,8 @@ def usage_summary_payload(records: list[UsageRecord]) -> dict[str, Any]:
         "input_tokens": total.input_tokens,
         "output_tokens": total.output_tokens,
         "cached_tokens": total.cached_tokens,
+        "cache_write_tokens": total.cache_write_tokens,
+        "cache_hit_ratio": _cache_hit_ratio(total.cached_tokens, total.input_tokens),
         "reasoning_tokens": total.reasoning_tokens,
         "total_tokens": total.total_tokens,
         "cost": total.cost,
@@ -214,6 +224,8 @@ def usage_record_payload(record: UsageRecord) -> dict[str, Any]:
         "input_tokens": record.input_tokens,
         "output_tokens": record.output_tokens,
         "cached_tokens": record.cached_tokens,
+        "cache_write_tokens": record.cache_write_tokens,
+        "cache_hit_ratio": _cache_hit_ratio(record.cached_tokens, record.input_tokens),
         "reasoning_tokens": record.reasoning_tokens,
         "total_tokens": record.total_tokens,
         "cost": record.cost,
@@ -251,6 +263,7 @@ def _group_records(name: str, records: list[UsageRecord]) -> UsageGroup:
         input_tokens=sum(record.input_tokens for record in records),
         output_tokens=sum(record.output_tokens for record in records),
         cached_tokens=sum(record.cached_tokens for record in records),
+        cache_write_tokens=sum(record.cache_write_tokens for record in records),
         reasoning_tokens=sum(record.reasoning_tokens for record in records),
         cost=sum(costs) if costs and len(costs) == len(records) else None,
     )
@@ -298,10 +311,16 @@ def _group_payload(group: UsageGroup) -> dict[str, Any]:
         "input_tokens": group.input_tokens,
         "output_tokens": group.output_tokens,
         "cached_tokens": group.cached_tokens,
+        "cache_write_tokens": group.cache_write_tokens,
+        "cache_hit_ratio": _cache_hit_ratio(group.cached_tokens, group.input_tokens),
         "reasoning_tokens": group.reasoning_tokens,
         "total_tokens": group.total_tokens,
         "cost": group.cost,
     }
+
+
+def _cache_hit_ratio(cached_tokens: int, input_tokens: int) -> float | None:
+    return min(1.0, max(0, cached_tokens) / input_tokens) if input_tokens > 0 else None
 
 
 def _int_value(value: object) -> int:

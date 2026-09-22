@@ -497,6 +497,8 @@ class DaemonServer:
 
     async def usage(self, request: web.Request) -> web.Response:
         provider = str(request.query.get("provider", "")).strip().lower() or None
+        if provider == "all":
+            provider = None
         limit = _positive_int(request.query.get("limit"), default=250, maximum=1000)
         records = await load_usage_records(self.run_store, provider=provider, limit=limit)
         return web.json_response(
@@ -2609,6 +2611,7 @@ def _usage_payload(usage: Usage, *, provider: str = "", model: str = "", surface
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
         "cached_tokens": usage.cached_tokens,
+        "cache_write_tokens": usage.cache_write_tokens,
         "reasoning_tokens": usage.reasoning_tokens,
         "cost": usage.cost,
     }

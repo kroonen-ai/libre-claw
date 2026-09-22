@@ -203,6 +203,9 @@ For direct DeepSeek access, run `/setup key deepseek`, then `/setup deepseek`.
 Use `/models deepseek` to discover available models. See the
 [DeepSeek guide](docs/DEEPSEEK.md) for thinking settings and image support.
 
+Prompt caching is configured automatically for supported providers. See the
+[caching guide](docs/PROMPT_CACHING.md) for controls and cache usage reports.
+
 ### Choose A Model
 
 Libre Claw discovers models from your provider instead of maintaining a list of

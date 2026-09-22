@@ -46,6 +46,46 @@ def test_provider_factory_fallback_models_match_public_defaults() -> None:
     assert _fallback_model("ollama") == "qwen3.6:27b"
 
 
+@pytest.mark.parametrize("name", ["anthropic", "openai", "openrouter"])
+def test_factory_wires_prompt_cache_opt_out(monkeypatch, tmp_path, name):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config.providers[name]["prompt_caching"] = False
+    provider = create_provider(config, provider_name=name, api_key_store=FakeApiKeyStore("key"))
+    assert provider.prompt_caching is False
+
+
+@pytest.mark.parametrize("name,settings,field", [
+    ("anthropic", {"prompt_caching": "false"}, "prompt_caching"),
+    ("openai", {"prompt_caching": 1}, "prompt_caching"),
+    ("openrouter", {"prompt_caching": "true"}, "prompt_caching"),
+    ("anthropic", {"prompt_cache_ttl": "24h"}, "prompt_cache_ttl"),
+    ("openai", {"prompt_cache_key": ""}, "prompt_cache_key"),
+    ("openai", {"prompt_cache_key": "x" * 65}, "prompt_cache_key"),
+])
+def test_factory_rejects_invalid_prompt_cache_controls(monkeypatch, tmp_path, name, settings, field):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config.providers[name].update(settings)
+    with pytest.raises(ProviderConfigurationError, match=field):
+        create_provider(config, provider_name=name, api_key_store=FakeApiKeyStore("key"))
+
+
+def test_factory_wires_cache_ttl_and_explicit_routing_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config.providers["anthropic"].update(prompt_caching=True, prompt_cache_ttl="1h")
+    anthropic = create_provider(config, provider_name="anthropic", api_key_store=FakeApiKeyStore("key"))
+    assert anthropic.prompt_caching is True
+    assert anthropic.prompt_cache_ttl == "1h"
+    config.providers["openai"]["prompt_cache_key"] = "my-workspace"
+    openai = create_provider(config, provider_name="openai", api_key_store=FakeApiKeyStore("key"))
+    assert openai.prompt_cache_key == "my-workspace"
+
+
 @pytest.mark.parametrize("provider_name", ["openai", "anthropic", "deepseek"])
 def test_factory_inference_honors_custom_base_url(monkeypatch, tmp_path, provider_name):
     monkeypatch.setenv("HOME", str(tmp_path))

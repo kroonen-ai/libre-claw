@@ -450,6 +450,8 @@ class TelegramBridge:
             )
         if usage.cached_tokens:
             lines.append(f"- Cached input: {usage.cached_tokens}")
+        if usage.cache_write_tokens:
+            lines.append(f"- Cache writes: {usage.cache_write_tokens}")
         if usage.reasoning_tokens:
             lines.append(f"- Reasoning output: {usage.reasoning_tokens}")
         lines.append(f"- Cost: {_format_usage_cost(usage)}")
@@ -1407,6 +1409,7 @@ def _usage_from_payload(data: dict[str, Any]) -> Usage:
         input_tokens=_int_payload(data.get("input_tokens")),
         output_tokens=_int_payload(data.get("output_tokens")),
         cached_tokens=_int_payload(data.get("cached_tokens")),
+        cache_write_tokens=_int_payload(data.get("cache_write_tokens")),
         reasoning_tokens=_int_payload(data.get("reasoning_tokens")),
         cost=_float_payload(data.get("cost")),
     )

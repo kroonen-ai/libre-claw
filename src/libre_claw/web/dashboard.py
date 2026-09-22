@@ -362,6 +362,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
             <div class="metric"><span>Requests</span><strong id="usagePaneRequests">0</strong><small id="usagePaneRuns">0 runs</small></div>
             <div class="metric"><span>Cost</span><strong id="usagePaneCost">—</strong><small>When reported by the provider</small></div>
           </div>
+          <div class="cache-usage" aria-label="Prompt cache usage">
+            <div><span>Input reused</span><strong id="usagePaneCached">0</strong></div>
+            <div><span>Cache writes</span><strong id="usagePaneCacheWrites">0</strong></div>
+            <div><span>Reported reuse</span><strong id="usagePaneCacheRatio">—</strong></div>
+          </div>
           <p class="usage-sub">By model</p>
           <div class="usage-table-wrap"><table class="usage-table" id="usageByModel" aria-label="Usage by model"></table></div>
           <p class="usage-sub">Recent runs</p>
@@ -1733,13 +1738,20 @@ _DASHBOARD_HTML = r"""<!doctype html>
         $("usagePaneRequests").textContent = formatExactNumber(summary.requests);
         $("usagePaneRuns").textContent = `${formatExactNumber(summary.runs)} runs`;
         $("usagePaneCost").textContent = formatCost(summary.cost);
+        $("usagePaneCached").textContent = formatCompactNumber(summary.cached_tokens);
+        $("usagePaneCacheWrites").textContent = formatCompactNumber(summary.cache_write_tokens);
+        const inputTokens = Number(summary.input_tokens) || 0;
+        $("usagePaneCacheRatio").textContent = inputTokens > 0
+          ? `${(Math.min(1, Math.max(0, Number(summary.cached_tokens) || 0) / inputTokens) * 100).toFixed(1)}%`
+          : "—";
         usageTable(
           $("usageByModel"),
-          ["Model", "Requests", "Input", "Output", "Total", "Cost"],
+          ["Model", "Requests", "Input", "Reused", "Output", "Total", "Cost"],
           (summary.by_model || []).map((group) => [
             group.name || "unknown",
             formatExactNumber(group.requests),
             formatCompactNumber(group.input_tokens),
+            formatCompactNumber(group.cached_tokens),
             formatCompactNumber(group.output_tokens),
             formatCompactNumber(group.total_tokens),
             formatCost(group.cost),

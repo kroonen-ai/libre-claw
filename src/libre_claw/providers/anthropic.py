@@ -7,13 +7,15 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import structlog
 
 from libre_claw.core.session import ChatMessage, ContentBlock
 from libre_claw.providers.capabilities import apply_reasoning_request, prepare_request
 from libre_claw.providers.base import (
+    CacheableSystemPrompt,
     Done,
     LLMProvider,
     ProviderError,
@@ -63,11 +65,18 @@ class AnthropicProvider(LLMProvider):
         client: Any | None = None,
         *,
         base_url: str | None = None,
+        prompt_caching: bool | None = None,
+        prompt_cache_ttl: Literal["5m", "1h"] = "5m",
     ) -> None:
+        if prompt_caching is not None and not isinstance(prompt_caching, bool):
+            raise ProviderConfigurationError("Anthropic prompt_caching must be a boolean.")
+        if prompt_cache_ttl not in {"5m", "1h"}:
+            raise ProviderConfigurationError("Anthropic prompt_cache_ttl must be '5m' or '1h'.")
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
         self.base_url = base_url
+        self.prompt_cache_ttl = prompt_cache_ttl
         if client is not None:
             self._client = client
         elif AsyncAnthropic is None:
@@ -78,6 +87,10 @@ class AnthropicProvider(LLMProvider):
             if base_url:
                 kwargs["base_url"] = base_url
             self._client = AsyncAnthropic(**kwargs)
+        effective_url = getattr(self._client, "base_url", None) or base_url
+        self.prompt_caching = (
+            not effective_url or urlsplit(str(effective_url)).hostname == "api.anthropic.com"
+        ) if prompt_caching is None else prompt_caching
         self._logger = structlog.get_logger(__name__)
 
     async def complete(
@@ -89,7 +102,6 @@ class AnthropicProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        del stream
         try:
             tools, max_tokens = prepare_request(self, messages, tools, max_tokens)
         except ProviderConfigurationError as exc:
@@ -108,7 +120,9 @@ class AnthropicProvider(LLMProvider):
         if system:
             request["system"] = system
         if tools:
-            request["tools"] = list(tools)
+            request["tools"] = [dict(tool) for tool in tools]
+        if self.prompt_caching:
+            _apply_prompt_caching(request, self.prompt_cache_ttl)
 
         try:
             apply_reasoning_request(self, request, anthropic=True)
@@ -121,6 +135,27 @@ class AnthropicProvider(LLMProvider):
         tool_accumulators: dict[int, _ToolAccumulator] = {}
 
         try:
+            if not stream:
+                final_message = await self._client.messages.create(**request)
+                for block in getattr(final_message, "content", ()):
+                    payload = _anthropic_response_block(block)
+                    if not payload:
+                        continue
+                    if payload.get("type") == "text" and payload.get("text"):
+                        yield TextDelta(payload["text"])
+                    elif payload.get("type") == "tool_use":
+                        yield ToolCallReady(
+                            tool_call_id=payload["id"], name=payload["name"], input=payload["input"],
+                        )
+                reasoning = _anthropic_reasoning_delta(final_message)
+                if reasoning is not None:
+                    yield reasoning
+                yield Done(
+                    usage=_usage_from(getattr(final_message, "usage", None), None),
+                    stop_reason=getattr(final_message, "stop_reason", None),
+                )
+                return
+
             async with self._client.messages.stream(**request) as response_stream:
                 async for event in response_stream:
                     event_type = getattr(event, "type", None)
@@ -278,21 +313,64 @@ class AnthropicProvider(LLMProvider):
         )
 
 
+def _apply_prompt_caching(request: dict[str, Any], ttl: str) -> None:
+    # Preserve explicitly supplied breakpoints rather than exceeding the API's
+    # four-breakpoint limit or mixing incompatible TTLs with automatic caching.
+    tools = request.get("tools", [])
+    blocks = [block for message in request["messages"] for block in message["content"]]
+    if any("cache_control" in block for block in [*tools, *blocks]):
+        return
+
+    control = {"type": "ephemeral"}
+    if ttl != "5m":
+        control["ttl"] = ttl
+    # Tools and system remain reusable even after conversation compaction.
+    if tools:
+        tools[-1]["cache_control"] = dict(control)
+    if system := request.get("system"):
+        prefix = system.cache_prefix if isinstance(system, CacheableSystemPrompt) else system
+        if prefix and system.startswith(prefix):
+            request["system"] = [{"type": "text", "text": prefix, "cache_control": dict(control)}]
+            # Preserve separators and every current task detail after the stable
+            # boundary without making those changes invalidate its cache entry.
+            if suffix := system[len(prefix):]:
+                request["system"].append({"type": "text", "text": suffix})
+        else:
+            request["system"] = [{"type": "text", "text": str(system)}]
+    # Anthropic moves this third breakpoint as history grows and skips blocks
+    # such as thinking that cannot themselves carry cache_control.
+    request["cache_control"] = dict(control)
+
+
 def _usage_from(raw_usage: Any, previous: Usage | None) -> Usage | None:
     if raw_usage is None:
         return previous
 
-    input_tokens = getattr(raw_usage, "input_tokens", None)
+    cached_tokens = _token_value(
+        getattr(raw_usage, "cache_read_input_tokens", None), previous.cached_tokens if previous else 0,
+    )
+    cache_write_tokens = _token_value(
+        getattr(raw_usage, "cache_creation_input_tokens", None), previous.cache_write_tokens if previous else 0,
+    )
+    # Anthropic's input_tokens excludes reads and writes; normalize to the full
+    # input size used by the other providers and context-budget calculations.
+    previous_uncached = (
+        previous.input_tokens - previous.cached_tokens - previous.cache_write_tokens
+        if previous else 0
+    )
+    input_tokens = _token_value(getattr(raw_usage, "input_tokens", None), previous_uncached)
     output_tokens = getattr(raw_usage, "output_tokens", None)
 
     return Usage(
-        input_tokens=_token_value(input_tokens, previous.input_tokens if previous else 0),
+        input_tokens=input_tokens + cached_tokens + cache_write_tokens,
         output_tokens=_token_value(output_tokens, previous.output_tokens if previous else 0),
+        cached_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
     )
 
 
 def _token_value(value: Any, fallback: int) -> int:
-    if isinstance(value, int):
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
         return value
     return fallback
 

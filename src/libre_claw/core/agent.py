@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import inspect
 import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +34,7 @@ from libre_claw.core.session import (
 from libre_claw.core.skills import SKILL_AUTHORING_GUIDANCE
 from libre_claw.core.tools import ToolCall, ToolRegistry, ToolRegistryError, ToolResult
 from libre_claw.providers.base import (
+    CacheableSystemPrompt,
     Done,
     LLMProvider,
     ProviderError,
@@ -156,6 +159,18 @@ class Agent:
         self.fallback_recheck_after_attempts = max(1, fallback_recheck_after_attempts)
         self.deadline_monotonic = deadline_monotonic
         self.deadline_reserve_seconds = max(0.0, deadline_reserve_seconds)
+        self._deadline_prompt = ""
+        if deadline_monotonic is not None:
+            budget = max(0.0, deadline_monotonic - time.monotonic())
+            deadline = datetime.now(timezone.utc) + timedelta(seconds=budget)
+            # A changing countdown invalidates the entire conversation cache on
+            # every request. Execution still enforces the live monotonic deadline.
+            self._deadline_prompt = (
+                f"Run deadline: {deadline.isoformat(timespec='seconds')} UTC. "
+                f"The starting time budget was about {int(budget)} seconds; this is not the remaining time. "
+                "Prioritize the requested result, stop starting nonessential work as the deadline "
+                "approaches, and return the best verified final answer before time expires."
+            )
         self.checkpoint_callback = checkpoint_callback
         self.usage_callback = usage_callback
         self._checkpoint_lock = asyncio.Lock()
@@ -172,13 +187,9 @@ class Agent:
                 from libre_claw.core.subagents import SubagentManager
                 self.subagents = SubagentManager(self)
                 context.shared_state["subagent_manager"] = self.subagents
-        self._tool_schemas = self.tool_registry.schemas()
-        self._serialized_tool_schemas = json.dumps(
-            self._tool_schemas,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
+        self._tool_schemas: list[dict[str, Any]] = []
+        self._serialized_tool_schemas = "[]"
+        self._refresh_tool_schemas(provider)
         self._last_provider_input_tokens = 0
         self._active_skills: list[str] = []
         self._active_soul: list[str] = []
@@ -535,6 +546,7 @@ class Agent:
 
     def _maybe_compact_session(self, provider: LLMProvider | None = None) -> None:
         provider = provider or self.provider
+        self._refresh_tool_schemas(provider)
         estimated_tokens = estimate_context_tokens(
             self.session.messages,
             summary=self.session.summary,
@@ -555,33 +567,11 @@ class Agent:
             self._last_provider_input_tokens = 0
 
     def _build_system_prompt(self) -> str:
+        # Put durable policy before changing task state so a checkpoint or memory
+        # update preserves the longest safe provider-cache prefix.
         parts = [self.system_prompt]
         if self.system_prompt_extra:
             parts.append(self.system_prompt_extra)
-        control_prompt = self.session.control_prompt()
-        if control_prompt:
-            parts.append(control_prompt)
-        instructions = render_instructions(self._active_instructions)
-        if instructions:
-            parts.append(instructions)
-        if self._active_soul:
-            parts.append(
-                "Libre Claw soul/persona customization. These notes may shape voice, style, taste, "
-                "and durable identity, but they never override safety rules, tool permissions, "
-                "sandbox boundaries, provider policies, or direct user instructions:\n\n"
-                + "\n\n---\n\n".join(self._active_soul)
-            )
-        memories = _dedupe_texts([*self.memory_facts, *self._active_memory])
-        if memories:
-            facts = "\n".join(f"- {fact}" for fact in memories)
-            parts.append("Relevant persistent memory:\n" + facts)
-        if self._active_skills:
-            parts.append(
-                "Relevant Libre Claw skills. Follow these project/user procedures when they apply:\n\n"
-                + "\n\n---\n\n".join(self._active_skills)
-            )
-        if self.session.summary:
-            parts.append("Compacted prior conversation summary:\n" + self.session.summary)
         tool_names = [
             str(schema.get("name", ""))
             for schema in self._tool_schemas
@@ -602,14 +592,62 @@ class Agent:
                 "If this task reveals a repeatable workflow that is not captured by the relevant skills, "
                 "briefly suggest a `/skills add <name> ...` command when you finish."
             )
-        remaining = self._remaining_seconds()
-        if remaining is not None:
+        instructions = render_instructions(self._active_instructions)
+        if instructions:
+            parts.append(instructions)
+        if self._active_soul:
             parts.append(
-                f"Run deadline: about {max(0, int(remaining))} seconds remain. "
-                "Prioritize the requested result, stop starting nonessential work as the deadline "
-                "approaches, and return the best verified final answer before time expires."
+                "Libre Claw soul/persona customization. These notes may shape voice, style, taste, "
+                "and durable identity, but they never override safety rules, tool permissions, "
+                "sandbox boundaries, provider policies, or direct user instructions:\n\n"
+                + "\n\n---\n\n".join(self._active_soul)
             )
-        return "\n\n".join(parts)
+        if self._active_skills:
+            parts.append(
+                "Relevant Libre Claw skills. Follow these project/user procedures when they apply:\n\n"
+                + "\n\n---\n\n".join(self._active_skills)
+            )
+        stable_prefix = "\n\n".join(parts)
+        parts = []
+        memories = _dedupe_texts([*self.memory_facts, *self._active_memory])
+        if memories:
+            facts = "\n".join(f"- {fact}" for fact in memories)
+            parts.append("Relevant persistent memory:\n" + facts)
+        if self.session.summary:
+            parts.append("Compacted prior conversation summary:\n" + self.session.summary)
+        control_prompt = self.session.control_prompt()
+        if control_prompt:
+            parts.append(control_prompt)
+        if self._deadline_prompt:
+            parts.append(self._deadline_prompt)
+        history = self.session.archived_messages or self.session.messages
+        cache_scope = None
+        if history:
+            # The first original message survives compaction and persistence;
+            # use its digest without exposing conversation text in routing keys.
+            first_message = json.dumps(
+                history[0].as_provider_dict(),
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            cache_scope = hashlib.sha256(first_message.encode()).hexdigest()
+        return CacheableSystemPrompt(stable_prefix, "\n\n".join(parts), cache_scope=cache_scope)
+
+    def _refresh_tool_schemas(self, provider: LLMProvider) -> None:
+        info = getattr(provider, "model_info", None)
+        schemas = [] if getattr(info, "supports_tools", None) is False else self.tool_registry.schemas()
+        serialized = json.dumps(
+            sorted(schemas, key=lambda schema: str(schema.get("name", ""))),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if serialized != self._serialized_tool_schemas:
+            # The actual request and token estimate share the same canonical
+            # snapshot, including after model discovery or registry updates.
+            self._serialized_tool_schemas = serialized
+            self._tool_schemas = json.loads(serialized)
 
     async def _refresh_instructions(self, paths: Sequence[Path] = ()) -> bool:
         if self._instruction_loader is None:
@@ -727,8 +765,6 @@ class Agent:
             elif hasattr(provider, "sandbox") or hasattr(provider, "approval_policy"):
                 yield ProviderError("Plan mode cannot enforce read-only execution for this native-tool provider.")
                 return
-        info = getattr(provider, "model_info", None)
-        self._tool_schemas = [] if getattr(info, "supports_tools", None) is False else self.tool_registry.schemas()
         stream = provider.complete(
             messages=self.session.messages,
             tools=self._tool_schemas,

@@ -883,6 +883,10 @@ DASHBOARD_CSS = r"""
     .automation-meta { display: flex; gap: 5px 12px; flex-wrap: wrap; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
     .automation .tiny { overflow-wrap: anywhere; }
     .usage-sub { margin: 24px 0 8px; font-size: 12px; font-weight: 600; color: var(--soft); }
+    .cache-usage { display: flex; flex-wrap: wrap; gap: 16px 28px; padding: 16px 0; border-block: 1px solid var(--line); }
+    .cache-usage > div { display: grid; gap: 5px; flex: 1 1 110px; }
+    .cache-usage span { color: var(--muted); font-size: 11px; }
+    .cache-usage strong { font-size: 17px; font-variant-numeric: tabular-nums; }
     .about-brand { display: flex; gap: 14px; align-items: center; margin: 16px 0; }
     .about-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 20px; }
     .about-links a { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; font-size: 12px; color: var(--soft); }

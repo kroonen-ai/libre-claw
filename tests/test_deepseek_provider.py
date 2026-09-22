@@ -291,6 +291,22 @@ async def test_deepseek_preserves_openai_usage_fields_when_cache_extension_absen
     assert events == [Done(Usage(input_tokens=10, output_tokens=4, cached_tokens=2, reasoning_tokens=3), "stop")]
 
 
+async def test_deepseek_derives_input_from_reported_cache_hits_and_misses() -> None:
+    client = FakeClient([chunk(finish="stop", usage={
+        "completion_tokens": 4, "prompt_cache_hit_tokens": 80, "prompt_cache_miss_tokens": 20,
+    })])
+    events = [event async for event in make_provider(client).complete([])]
+    assert events == [Done(Usage(input_tokens=100, output_tokens=4, cached_tokens=80), "stop")]
+
+
+def test_deepseek_partial_usage_preserves_total_and_ignores_invalid_cache_counts() -> None:
+    provider = make_provider(FakeClient([]))
+    previous = Usage(input_tokens=100, output_tokens=4, cached_tokens=80)
+    assert provider._usage_from({"prompt_cache_hit_tokens": 80}, previous) == previous
+    assert provider._usage_from({"prompt_cache_hit_tokens": -1}, previous) == previous
+    assert provider._usage_from({"prompt_cache_hit_tokens": True}, previous) == previous
+
+
 async def test_deepseek_maps_image_attachments() -> None:
     client = FakeClient([chunk(content="A cat", finish="stop")])
     image = UserAttachment(media_type="image/png", data="aGVsbG8=", filename="cat.png")

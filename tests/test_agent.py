@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 from libre_claw.config import PermissionsConfig
 from libre_claw.core.agent import (
@@ -34,6 +36,7 @@ from libre_claw.core.session import (
 )
 from libre_claw.core.tools import BaseTool, ToolCall, ToolContext, ToolRegistry, ToolResult
 from libre_claw.providers.base import (
+    CacheableSystemPrompt,
     Done,
     LLMProvider,
     ProviderError,
@@ -52,6 +55,7 @@ class ScriptedProvider(LLMProvider):
         self.received_messages: list[list[ChatMessage]] = []
         self.received_tools: list[list[ToolSchema]] = []
         self.received_system: str | None = None
+        self.received_systems: list[str | None] = []
 
     async def complete(
         self,
@@ -66,6 +70,7 @@ class ScriptedProvider(LLMProvider):
         self.received_messages.append(list(messages))
         self.received_tools.append(list(tools or []))
         self.received_system = system
+        self.received_systems.append(system)
         for event in self.responses.pop(0):
             yield event
 
@@ -945,3 +950,226 @@ async def test_agent_can_run_when_model_discovery_is_unavailable() -> None:
     agent = make_agent(provider)
     events = await collect_events(agent, "work")
     assert events[-1] == AgentDone(None)
+
+
+async def test_tool_rounds_keep_cached_prefix_when_deadline_time_advances(tmp_path: Path, monkeypatch) -> None:
+    now = [100.0]
+    monkeypatch.setattr("libre_claw.core.agent.time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    class AdvancingTool(EchoTool):
+        async def execute(self, value: str) -> ToolResult:
+            now[0] += 15
+            return await super().execute(value)
+
+    provider = ScriptedProvider([
+        [ToolCallReady("echo", "echo", {"value": "ok"}), Done()],
+        [TextDelta("done"), Done()],
+    ])
+    agent = make_agent(
+        provider,
+        ToolRegistry([AdvancingTool(ToolContext(working_directory=tmp_path))]),
+        deadline_monotonic=160.0,
+    )
+
+    await collect_events(agent, "work")
+
+    assert provider.received_systems[0] == provider.received_systems[1]
+    assert "starting time budget was about 60 seconds" in provider.received_systems[0]
+    assert provider.received_messages[1][:len(provider.received_messages[0])] == provider.received_messages[0]
+    assert agent._remaining_seconds() == 45.0
+    now[0] = 161.0
+    assert agent._deadline_expired()
+
+
+async def test_checkpoint_changes_preserve_durable_prompt_prefix(tmp_path: Path) -> None:
+    class CheckpointTool(EchoTool):
+        async def execute(self, value: str) -> ToolResult:
+            agent.session.update_checkpoint({"verification": ["Tests passed."]})
+            agent.session.plan_steps = [{"status": "complete", "text": "Run tests"}]
+            return await super().execute(value)
+
+    (tmp_path / "AGENTS.md").write_text("Keep the documented API compatible.")
+    provider = ScriptedProvider([
+        [ToolCallReady("echo", "echo", {"value": "ok"}), Done()],
+        [TextDelta("done"), Done()],
+    ])
+    agent = make_agent(
+        provider,
+        ToolRegistry([CheckpointTool(ToolContext(working_directory=tmp_path))]),
+        skill_provider=lambda _: ["Verify the public API."],
+        soul_provider=lambda: ["Be precise."],
+        memory_provider=lambda _: ["Use concise responses."],
+    )
+    agent.session.plan_steps = [{"status": "in_progress", "text": "Run tests"}]
+
+    await collect_events(agent, "work")
+
+    before, after = provider.received_systems
+    assert isinstance(before, CacheableSystemPrompt)
+    assert isinstance(after, CacheableSystemPrompt)
+    assert before.cache_prefix == after.cache_prefix
+    assert "Keep the documented API compatible." in before.cache_prefix
+    assert "Be precise." in before.cache_prefix
+    assert "Verify the public API." in before.cache_prefix
+    assert "Relevant persistent memory:" not in before.cache_prefix
+    assert "Task plan:" not in before.cache_prefix
+    assert "Task checkpoint:" not in before.cache_prefix
+    assert before.split("Task plan:\n")[0] == after.split("Task plan:\n")[0]
+    assert "Keep the documented API compatible." in before.split("Task plan:\n")[0]
+    assert "Relevant persistent memory:" in before.split("Task plan:\n")[0]
+    assert "Tests passed." not in before
+    assert "Tests passed." in after
+    assert "[in_progress] Run tests" in before
+    assert "[complete] Run tests" in after
+
+
+async def test_memory_refresh_preserves_tool_and_skill_prefix_across_turns() -> None:
+    provider = ScriptedProvider([[TextDelta("first"), Done()], [TextDelta("second"), Done()]])
+    agent = make_agent(
+        provider,
+        skill_provider=lambda _: ["Use the relevant tests."],
+        memory_provider=lambda message: [f"Preference for {message}"],
+    )
+
+    await collect_events(agent, "task one")
+    await collect_events(agent, "task two")
+
+    before, after = provider.received_systems
+    assert isinstance(before, CacheableSystemPrompt)
+    assert isinstance(after, CacheableSystemPrompt)
+    assert before.cache_prefix == after.cache_prefix
+    assert before.cache_scope == after.cache_scope
+    assert before.split("Relevant persistent memory:\n")[0] == after.split("Relevant persistent memory:\n")[0]
+    assert "Preference for task one" in before
+    assert "Preference for task two" in after
+    assert "Preference for task one" not in after
+    assert "Relevant Libre Claw skills" in before.split("Relevant persistent memory:\n")[0]
+
+
+async def test_cache_stability_does_not_hide_changed_project_instructions(tmp_path: Path) -> None:
+    instruction_path = tmp_path / "AGENTS.md"
+    instruction_path.write_text("First instruction.")
+
+    class ChangingInstructionsTool(EchoTool):
+        async def execute(self, value: str) -> ToolResult:
+            instruction_path.write_text("Updated instruction.")
+            return await super().execute(value)
+
+    provider = ScriptedProvider([
+        [ToolCallReady("echo", "echo", {"value": "ok"}), Done()],
+        [TextDelta("done"), Done()],
+    ])
+    agent = make_agent(provider, ToolRegistry([ChangingInstructionsTool(ToolContext(working_directory=tmp_path))]))
+
+    await collect_events(agent, "work")
+
+    before, after = provider.received_systems
+    assert "First instruction." in before
+    assert "Updated instruction." in after
+    assert "First instruction." not in after
+
+
+async def test_tool_schema_order_is_canonical_in_requests_and_estimates(tmp_path: Path) -> None:
+    class ReorderedRegistry(ToolRegistry):
+        calls = 0
+
+        def schemas(self):
+            self.calls += 1
+            schemas = super().schemas()
+            if self.calls % 2:
+                return [dict(reversed(list(schema.items()))) for schema in reversed(schemas)]
+            return schemas
+
+    context = ToolContext(working_directory=tmp_path)
+    registry = ReorderedRegistry([EchoTool(context), AskTool(context)])
+    provider = ScriptedProvider([
+        [ToolCallReady("echo", "echo", {"value": "ok"}), Done()],
+        [TextDelta("done"), Done()],
+    ])
+    agent = make_agent(provider, registry)
+
+    await collect_events(agent, "work")
+
+    before, after = [json.dumps(tools, separators=(",", ":")) for tools in provider.received_tools]
+    assert before == after == agent._serialized_tool_schemas
+    assert [schema["name"] for schema in provider.received_tools[0]] == ["ask_echo", "echo"]
+
+
+async def test_discovered_tool_capability_updates_prompt_estimate(tmp_path: Path) -> None:
+    class VerboseTool(EchoTool):
+        description = "Detailed tool guidance. " * 1000
+
+    provider = ScriptedProvider([[TextDelta("reply"), Done()]])
+    agent = make_agent(
+        provider,
+        ToolRegistry([VerboseTool(ToolContext(working_directory=tmp_path))]),
+        context_window_tokens=1000,
+        compact_keep_last=2,
+    )
+    for _ in range(5):
+        agent.session.add_user_message("Earlier request.")
+        agent.session.add_assistant_message("Earlier response.")
+
+    async def discover():
+        provider.model_info = SimpleNamespace(supports_tools=False)
+
+    provider.ensure_model_info = discover
+    assert "echo" in agent._serialized_tool_schemas
+
+    await collect_events(agent, "talk")
+
+    assert provider.received_tools == [[]]
+    assert agent._serialized_tool_schemas == "[]"
+    assert "No tools are enabled" in provider.received_system
+    assert agent.session.summary is None
+    assert len(provider.received_messages[0]) == 11
+
+
+def test_prompt_cache_scope_survives_compaction_and_agent_recreation() -> None:
+    agent = make_agent(ScriptedProvider([]))
+    empty = agent.resolved_system_prompt()
+    assert isinstance(empty, CacheableSystemPrompt)
+    assert empty.cache_scope is None
+    agent.session.add_user_message("Original task")
+    for _ in range(5):
+        agent.session.add_assistant_message("Earlier response")
+        agent.session.add_user_message("Follow-up")
+    before = agent.resolved_system_prompt()
+
+    agent.session.compact(keep_last=2)
+    after = agent.resolved_system_prompt()
+    restored = make_agent(ScriptedProvider([]))
+    restored.session = agent.session
+    recreated = restored.resolved_system_prompt()
+
+    assert agent.session.archived_messages
+    assert before != after
+    assert before.cache_prefix == after.cache_prefix == recreated.cache_prefix
+    assert before.cache_scope == after.cache_scope == recreated.cache_scope
+    assert len(before.cache_scope) == 64
+    assert "Original task" not in before.cache_scope
+
+    agent.session.clear()
+    assert agent.resolved_system_prompt().cache_scope is None
+    agent.session.add_user_message("A different task")
+    assert agent.resolved_system_prompt().cache_scope != before.cache_scope
+
+
+def test_prompt_cache_boundary_preserves_complete_prompt_text() -> None:
+    agent = make_agent(ScriptedProvider([]))
+    agent._active_memory = ["Use concise responses."]
+    agent.session.summary = "Earlier context."
+    agent.session.add_user_message("Original task")
+
+    prompt = agent.resolved_system_prompt()
+
+    assert isinstance(prompt, CacheableSystemPrompt)
+    assert prompt.cache_prefix == "test system\n\nNo tools are enabled for this run."
+    assert str(prompt) == "\n\n".join([
+        prompt.cache_prefix,
+        "Relevant persistent memory:\n- Use concise responses.",
+        "Compacted prior conversation summary:\nEarlier context.",
+        agent.session.control_prompt(),
+    ])
+    # Native/plain-string providers and trajectory JSON still get all context.
+    assert json.loads(json.dumps({"system": prompt}))["system"] == str(prompt)
