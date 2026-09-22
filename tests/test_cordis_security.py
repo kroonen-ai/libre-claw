@@ -212,6 +212,12 @@ result.state = JSON.parse(fs.readFileSync('state.json', 'utf8'));
 const server = net.createServer();
 server.once('error', error => { result.network = error.code; finish(); });
 function finish() { process.stdout.write(JSON.stringify(result)); }
+// Node 26 can throw its Net permission denial from an asynchronous bind,
+// outside both listen's try/catch and the server's error event.
+process.once('uncaughtException', error => {
+  if (error.code !== 'ERR_ACCESS_DENIED' || error.permission !== 'Net') throw error;
+  result.network = error.code; finish();
+});
 try { server.listen(0, '127.0.0.1', () => {
   result.network = 'allowed'; server.close(finish);
 }); } catch (error) { result.network = error.code; finish(); }
@@ -227,7 +233,8 @@ try { server.listen(0, '127.0.0.1', () => {
         raise
 
     completed = subprocess.run(process.command, env=process.env, cwd=process.cwd,
-                               capture_output=True, text=True, timeout=5, check=True)
+                               capture_output=True, text=True, timeout=5, check=False)
+    assert completed.returncode == 0, completed.stderr
     result = json.loads(completed.stdout)
     assert result["environmentSecret"] is None
     assert result["nodeOptions"] is None
