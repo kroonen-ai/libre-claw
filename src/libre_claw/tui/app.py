@@ -36,7 +36,14 @@ from textual.widgets import Button, DirectoryTree, Input, RichLog, Static
 
 from libre_claw import __version__
 from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
-from libre_claw.auth.codex import CodexCliError, CodexCommandResult, codex_logout, codex_status, stream_codex_command
+from libre_claw.auth.codex import (
+    CodexCliError,
+    CodexCommandResult,
+    codex_logout,
+    codex_status,
+    configured_codex_executable,
+    stream_codex_command,
+)
 from libre_claw.config import (
     ConfigError,
     FallbackConfig,
@@ -2976,7 +2983,7 @@ class LibreClawApp(App[None]):
                     statuses[name] = lookup.source
         except KeyStorageError as exc:
             statuses = {"error": str(exc)}
-        codex = await codex_status()
+        codex = await codex_status(configured_codex_executable(self.config.providers.get("codex", {})))
         lines = [
             "Libre Claw setup status:",
             f"- Provider: {_canonical_tui_provider(self.config.general.default_provider)}",
@@ -3942,7 +3949,7 @@ class LibreClawApp(App[None]):
         value = " ".join(parts[1:]).strip()
 
         if action == "status":
-            status = await codex_status()
+            status = await codex_status(configured_codex_executable(self.config.providers.get("codex", {})))
             self._append_system(status.detail)
             return
 
@@ -3952,6 +3959,11 @@ class LibreClawApp(App[None]):
                 "Starting Codex login. Use the code/link Codex prints, then return here. "
                 "Libre Claw will use that Codex auth when provider is `codex`."
             )
+            if not browser_login:
+                self._append_system(
+                    "Device sign-in must be enabled in ChatGPT security settings or workspace permissions. "
+                    "Use `/codex login browser` for browser login."
+                )
             try:
                 result = await self._stream_codex_login(browser_login=browser_login)
             except CodexCliError as exc:
@@ -3964,7 +3976,7 @@ class LibreClawApp(App[None]):
 
         if action == "logout":
             try:
-                result = await codex_logout()
+                result = await codex_logout(configured_codex_executable(self.config.providers.get("codex", {})))
             except CodexCliError as exc:
                 self._append_system(str(exc))
                 return
@@ -3981,7 +3993,7 @@ class LibreClawApp(App[None]):
         self._append_system("Usage: /codex login [browser]|status|logout|use [model]")
 
     async def _stream_codex_login(self, browser_login: bool) -> CodexCommandResult:
-        args = ["codex", "login"]
+        args = [configured_codex_executable(self.config.providers.get("codex", {})), "login"]
         if not browser_login:
             args.append("--device-auth")
 

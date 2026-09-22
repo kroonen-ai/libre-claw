@@ -1702,6 +1702,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("providerAuthLink").hidden = !isOpenCode;
       $("providerRouteHint").textContent = isOpenCode
         ? `${providerLabel(provider)} uses an OpenCode API key. Connect with /setup ${provider} in the terminal UI, or libre-claw auth set-key ${provider}, then refresh models.`
+        : provider === "codex"
+        ? "Uses your Codex CLI ChatGPT sign-in. Run libre-claw auth codex-login --browser, then refresh models."
         : provider === "deepseek"
         ? "Connects through your DeepSeek API configuration. Model IDs come directly from DeepSeek."
         : `Models are discovered from your ${providerLabel(provider)} connection. You can also enter a model ID.`;

@@ -7,7 +7,7 @@ import asyncio
 import os
 import signal
 import shutil
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -39,6 +39,12 @@ class CodexStatus:
     available: bool
     logged_in: bool
     detail: str
+
+
+def configured_codex_executable(settings: Mapping[str, object]) -> str:
+    """Use the same CLI installation for authentication and provider requests."""
+    executable = settings.get("executable", "codex")
+    return executable if isinstance(executable, str) else "codex"
 
 
 def codex_available(executable: str = "codex") -> bool:

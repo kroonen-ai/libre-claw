@@ -467,7 +467,7 @@ async def test_timeout_returns_configuration_and_cancellation_propagates(config,
             await task
 
 
-async def test_codex_cli_handshake_pagination_hidden_models_and_account_cache(config, tmp_path):
+async def test_codex_cli_handshake_gpt6_capabilities_pagination_and_account_cache(config, tmp_path):
     executable = tmp_path / "codex-test"
     requests_path = tmp_path / "requests.jsonl"
     executable.write_text(f"#!{Path(sys.executable).resolve()}\n" + '''
@@ -489,10 +489,21 @@ for line in sys.stdin:
         assert initialized
         assert message['params']['includeHidden'] is False
         if message['params'].get('cursor') == 'second-page':
-            result = {'data': [{'id': 'second', 'model': 'codex-second'}], 'nextCursor': None}
+            result = {'data': [
+                {'id': 'second', 'model': 'codex-second'},
+                {'id': 'astra', 'model': 'gpt-6-astra', 'displayName': 'GPT-6 Astra',
+                 'inputModalities': ['text', 'image'],
+                 'supportedReasoningEfforts': [{'reasoningEffort': level} for level in ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']]},
+            ], 'nextCursor': None}
         else:
             result = {'data': [
                 {'id': 'first', 'model': 'codex-future', 'displayName': 'Future Codex'},
+                {'id': 'luna', 'model': 'gpt-6-luna', 'displayName': 'GPT-6 Luna',
+                 'inputModalities': ['text', 'image'],
+                 'supportedReasoningEfforts': [{'reasoningEffort': level} for level in ['low', 'medium', 'high', 'xhigh', 'max']]},
+                {'id': 'sol', 'model': 'gpt-6-sol', 'displayName': 'GPT-6 Sol',
+                 'inputModalities': ['text', 'image'],
+                 'supportedReasoningEfforts': [{'reasoningEffort': level} for level in ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']]},
                 {'id': 'helper', 'model': 'hidden-helper', 'hidden': True},
             ], 'nextCursor': 'second-page'}
     else:
@@ -501,11 +512,23 @@ for line in sys.stdin:
 ''')
     executable.chmod(0o700)
     config = provider_config(config, "codex", executable=str(executable))
-    result = await discover_models(config, "codex")
+    store = KeyStore(None)
+    result = await discover_models(config, "codex", api_key_store=store)
     assert result.source == "live" and not result.error
+    assert not store.calls
     assert "codex-future" in {item.model for item in result.models}
     assert "codex-second" in {item.model for item in result.models}
     assert "hidden-helper" not in {item.model for item in result.models}
+    for suffix in ("luna", "sol", "astra"):
+        model = f"gpt-6-{suffix}"
+        info = model_catalog.selected_model_info(config, "codex", model)
+        assert info == next(item for item in result.models if item.model == model)
+        assert info.label == f"GPT-6 {suffix.title()}"
+        assert info.supports_vision is True and info.supports_reasoning is True
+        assert info.supported_reasoning_efforts == (
+            "low", "medium", "high", "xhigh", "max",
+        ) + (() if suffix == "luna" else ("ultra",))
+        assert info.supports_tools is None
     assert await discover_models(config, "codex") == replace(result, source="cache")
     messages = [json.loads(line) for line in requests_path.read_text().splitlines()]
     assert [item["method"] for item in messages] == ["initialize", "initialized", "model/list", "model/list"]

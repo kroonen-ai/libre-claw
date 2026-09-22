@@ -6,6 +6,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 import libre_claw.providers.codex as codex_provider
 from libre_claw.auth.codex import CodexCommandEvent, CodexCommandResult, CodexStatus
 from libre_claw.core.session import ChatMessage, text_block
@@ -58,7 +60,8 @@ async def test_codex_provider_requires_login(monkeypatch, tmp_path: Path) -> Non
     assert "/codex login" in events[0].message
 
 
-async def test_codex_provider_streams_codex_exec_with_prompt(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "future-codex-model"])
+async def test_codex_provider_streams_codex_exec_with_prompt(monkeypatch, tmp_path: Path, model: str) -> None:
     captured: dict[str, object] = {}
 
     async def fake_status(executable: str = "codex") -> CodexStatus:
@@ -82,7 +85,7 @@ async def test_codex_provider_streams_codex_exec_with_prompt(monkeypatch, tmp_pa
 
     monkeypatch.setattr(codex_provider, "codex_status", fake_status)
     monkeypatch.setattr(codex_provider, "stream_codex_command", fake_stream)
-    provider = codex_provider.CodexProvider(model="gpt-5.5", working_directory=tmp_path, timeout=12, replay_delay=0)
+    provider = codex_provider.CodexProvider(model=model, working_directory=tmp_path, timeout=12, replay_delay=0)
 
     events = [
         event
@@ -99,6 +102,7 @@ async def test_codex_provider_streams_codex_exec_with_prompt(monkeypatch, tmp_pa
     assert done.usage.output_tokens == 2
     assert captured["args"][:5] == ["codex", "--ask-for-approval", "never", "exec", "--json"]
     assert "--model" in captured["args"]
+    assert captured["args"][captured["args"].index("--model") + 1] == model
     assert "build this" in str(captured["input_text"])
     assert "System text" in str(captured["input_text"])
 

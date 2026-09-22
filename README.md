@@ -330,22 +330,30 @@ Use `/provider` when you only want to switch providers:
 
 ### Codex / ChatGPT Login
 
-Codex uses the supported Codex CLI login flow instead of an OpenAI API key:
+The `codex` provider uses the installed Codex CLI and its ChatGPT OAuth session:
 
 ```bash
 libre-claw auth codex-login
+libre-claw auth codex-status
 ```
 
-Or inside the TUI:
+Device sign-in must be enabled in your ChatGPT security settings or workspace
+permissions. For browser login, use `libre-claw auth codex-login --browser`.
+Codex stores and refreshes its own credentials; Libre Claw does not import tokens.
+
+Inside the TUI:
 
 ```text
 /codex login
 /provider codex
-/model codex:gpt-5.6-sol --global
+/models codex
+/model codex:gpt-6-sol --global
 ```
 
-Use `/models codex` to discover models available through the installed CLI.
-Model availability depends on the signed-in ChatGPT account and workspace.
+Use `/codex login browser` for the browser flow. GPT-6 model IDs are
+`gpt-6-luna`, `gpt-6-sol`, and `gpt-6-astra`; availability depends on the CLI,
+signed-in account, rollout, and workspace. The picker discovers models from the
+installed CLI. See [Codex setup and verification](docs/CODEX.md).
 
 ## Run Surfaces
 

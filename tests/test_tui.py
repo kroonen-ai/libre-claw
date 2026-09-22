@@ -1194,7 +1194,7 @@ async def test_setup_key_flow_hides_and_stores_provider_key(monkeypatch, tmp_pat
     monkeypatch.setattr("libre_claw.tui.app.ApiKeyStore.from_config", lambda _auth: fake_store)
     monkeypatch.setattr(
         "libre_claw.tui.app.codex_status",
-        lambda: asyncio.sleep(0, result=CodexStatus(available=True, logged_in=False, detail="missing")),
+        lambda executable="codex": asyncio.sleep(0, result=CodexStatus(available=True, logged_in=False, detail="missing")),
     )
     app = LibreClawApp(config=load_config())
 
@@ -1250,7 +1250,7 @@ async def test_setup_key_flow_supports_provider(monkeypatch, tmp_path: Path, pro
     monkeypatch.setattr("libre_claw.tui.app.ApiKeyStore.from_config", lambda _auth: fake_store)
     monkeypatch.setattr(
         "libre_claw.tui.app.codex_status",
-        lambda: asyncio.sleep(0, result=CodexStatus(available=True, logged_in=False, detail="missing")),
+        lambda executable="codex": asyncio.sleep(0, result=CodexStatus(available=True, logged_in=False, detail="missing")),
     )
     app = LibreClawApp(config=load_config())
 

@@ -24,7 +24,14 @@ from libre_claw import __version__
 from libre_claw.cli_ui import LibreGroup, status_text
 from libre_claw.opencode import OPENCODE_AUTH_URL, OPENCODE_PROVIDERS, canonical_opencode_provider
 from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
-from libre_claw.auth.codex import CodexCliError, CodexCommandResult, codex_logout, codex_status, stream_codex_command
+from libre_claw.auth.codex import (
+    CodexCliError,
+    CodexCommandResult,
+    codex_logout,
+    codex_status,
+    configured_codex_executable,
+    stream_codex_command,
+)
 from libre_claw.config import (
     ConfigError,
     LibreClawConfig,
@@ -1405,16 +1412,16 @@ def auth_delete_key(ctx: click.Context, provider: str) -> None:
 def auth_status(ctx: click.Context, provider: str | None = None) -> None:
     """Show whether configured provider keys are available without printing them."""
     config = _load_context_config(ctx)
-    store = ApiKeyStore.from_config(config.auth)
     if provider:
         provider = canonical_opencode_provider(provider)
         if provider == "codex":
-            status = asyncio.run(codex_status())
+            status = asyncio.run(codex_status(configured_codex_executable(config.providers.get("codex", {}))))
             click.echo(f"codex: {'logged_in' if status.logged_in else 'missing'}")
             return
         if provider not in config.providers and provider != "telegram":
             raise click.UsageError("Choose a configured provider or omit PROVIDER to list all credentials.")
         env = config.telegram.bot_token_env if provider == "telegram" else _provider_api_key_env(config.providers.get(provider))
+        store = ApiKeyStore.from_config(config.auth)
         try:
             source = store.key_status([(provider, env)])[provider]
         except KeyStorageError as exc:
@@ -1427,13 +1434,14 @@ def auth_status(ctx: click.Context, provider: str | None = None) -> None:
         if name in {"anthropic", "openai", "openrouter", "deepseek", "opencode", "opencode-go", "moonshot", "ollama"}
     ]
     providers.append(("telegram", config.telegram.bot_token_env))
+    store = ApiKeyStore.from_config(config.auth)
     try:
         statuses = store.key_status(providers)
     except KeyStorageError as exc:
         _raise_click_error(str(exc))
     for name in sorted(statuses):
         click.echo(f"{name}: {statuses[name]}")
-    status = asyncio.run(codex_status())
+    status = asyncio.run(codex_status(configured_codex_executable(config.providers.get("codex", {}))))
     click.echo(f"codex: {'logged_in' if status.logged_in else 'missing'}")
 
 
@@ -1481,10 +1489,18 @@ def auth_import_opencode(ctx: click.Context, provider: str, auth_path: Path | No
 
 @auth_command.command("codex-login")
 @click.option("--browser", "browser_login", is_flag=True, help="Use Codex's normal browser login instead of device auth.")
-def auth_codex_login(browser_login: bool) -> None:
+@click.pass_context
+def auth_codex_login(ctx: click.Context, browser_login: bool) -> None:
     """Log in to Codex/ChatGPT auth for the Codex-backed Libre Claw provider."""
+    config = _load_context_config(ctx)
+    executable = configured_codex_executable(config.providers.get("codex", {}))
+    if not browser_login:
+        click.echo(
+            "Device sign-in must be enabled in ChatGPT security settings or workspace permissions. "
+            "Use --browser for browser login."
+        )
     try:
-        result = asyncio.run(_stream_codex_login(browser_login=browser_login))
+        result = asyncio.run(_stream_codex_login(browser_login=browser_login, executable=executable))
     except CodexCliError as exc:
         _raise_click_error(str(exc))
     if result.exit_code != 0:
@@ -1492,17 +1508,21 @@ def auth_codex_login(browser_login: bool) -> None:
 
 
 @auth_command.command("codex-status")
-def auth_codex_status() -> None:
+@click.pass_context
+def auth_codex_status(ctx: click.Context) -> None:
     """Show Codex CLI login status without printing credentials."""
-    status = asyncio.run(codex_status())
+    config = _load_context_config(ctx)
+    status = asyncio.run(codex_status(configured_codex_executable(config.providers.get("codex", {}))))
     click.echo(status.detail)
 
 
 @auth_command.command("codex-logout")
-def auth_codex_logout() -> None:
+@click.pass_context
+def auth_codex_logout(ctx: click.Context) -> None:
     """Log out of Codex/ChatGPT auth through the Codex CLI."""
+    config = _load_context_config(ctx)
     try:
-        result = asyncio.run(codex_logout())
+        result = asyncio.run(codex_logout(configured_codex_executable(config.providers.get("codex", {}))))
     except CodexCliError as exc:
         _raise_click_error(str(exc))
     if result.output:
@@ -1519,8 +1539,8 @@ def _provider_api_key_env(provider_config: object) -> str | None:
     return None
 
 
-async def _stream_codex_login(browser_login: bool) -> CodexCommandResult:
-    args = ["codex", "login"]
+async def _stream_codex_login(browser_login: bool, executable: str = "codex") -> CodexCommandResult:
+    args = [executable, "login"]
     if not browser_login:
         args.append("--device-auth")
 
