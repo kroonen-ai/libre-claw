@@ -288,19 +288,23 @@ assert.equal(applyTheme('unknown-theme'), 'libre');
 """)
 
 
-def test_libre_dashboard_uses_shared_colors_and_local_branding() -> None:
+def test_all_dashboard_themes_use_shared_colors_and_libre_design() -> None:
     html = dashboard_html()
     assert '<html lang="en" data-theme="libre">' in html
     assert '__LIBRE_CLAW_' not in html
     assert 'id="wordmarkTemplate"' in html
     assert 'class="pixel-wordmark"' in html
-    for name in ("libre", "libre-light"):
-        palette = THEME_PALETTES[name]
+    for name, palette in THEME_PALETTES.items():
+        assert html.count(f'html[data-theme="{name}"] {{') == 1
         css = html.split(f'html[data-theme="{name}"] {{', 1)[1].split("}", 1)[0]
         for token, color in (("bg", palette.background), ("accent", palette.accent),
                              ("text", palette.text), ("line", palette.line),
-                             ("on-accent", palette.on_accent)):
+                             ("on-accent", palette.on_accent),
+                             ("on-accent-strong", palette.on_accent_strong)):
+            assert color
             assert f"--{token}: {color};" in css
         assert '--font-ui: var(--font-mono)' in css
+        assert '--radius: 0px;' in css
+    assert 'html:is([data-theme="libre"], [data-theme="libre-light"])' not in html
     assert '@media (prefers-reduced-motion: reduce)' in html
     assert 'fonts.googleapis.com' not in html

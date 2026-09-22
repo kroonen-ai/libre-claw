@@ -55,10 +55,21 @@ def _contrast_ratio(foreground: str, background: str) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
-@pytest.mark.parametrize("theme_id", ["libre", "libre-light"])
-def test_libre_text_and_controls_have_readable_contrast(theme_id: str) -> None:
+@pytest.mark.parametrize("theme_id", list(THEME_PALETTES))
+def test_theme_text_and_controls_have_readable_contrast(theme_id: str) -> None:
     palette = tui_theme_palette(theme_id)
     for background in (palette.background, palette.surface, palette.surface_2, palette.code):
         for foreground in (palette.text, palette.soft, palette.muted):
             assert _contrast_ratio(foreground, background) >= 4.5
     assert _contrast_ratio(palette.on_accent, palette.accent) >= 4.5
+    assert _contrast_ratio(palette.on_accent_strong, palette.accent_strong) >= 4.5
+
+
+@pytest.mark.parametrize("theme_id", list(THEME_PALETTES))
+def test_every_theme_has_complete_shared_design_tokens(theme_id: str) -> None:
+    palette = tui_theme_palette(theme_id)
+    for name in ("line", "line_strong", "soft", "panel_strong", "on_accent", "on_accent_strong", "code"):
+        value = getattr(palette, name)
+        assert value.startswith("#") and len(value) == 7
+        int(value[1:], 16)
+    assert palette.line != palette.accent

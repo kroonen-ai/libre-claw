@@ -142,8 +142,9 @@ launch with `libre-claw tui --mouse` or set `[tui].mouse = true`.
 The default **Libre Claw** theme matches the website: warm charcoal, copper
 accents, and monospace type. Use `/theme libre-light --global` for the cream
 variant, or `/theme libre --global` to return to dark. The global choice also
-sets the dashboard theme; its Settings panel offers the same themes. Existing
-named themes, including Lobster, remain available through `/theme list`.
+sets the dashboard theme; its Settings panel offers the same themes. All named
+themes share Libre's typography, square controls, and panel styling while keeping
+their own color palettes. Find them with `/theme list`.
 
 File edits are rendered as compact unified diffs. Press `Ctrl+E` or run
 `/review` to open the focused change drawer, then use its Previous/Next controls

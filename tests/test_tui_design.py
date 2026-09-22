@@ -17,7 +17,7 @@ from textual.widgets import Button, Input
 from libre_claw.config import load_config
 from libre_claw.core.agent import AgentPermissionRequest
 from libre_claw.core.branding import WORDMARK_ROWS
-from libre_claw.core.themes import tui_theme_palette
+from libre_claw.core.themes import THEME_PALETTES, tui_theme_palette
 from libre_claw.core.tools import ToolCall
 from libre_claw.tui.app import LibreClawApp, _palette_code_theme, _rich_log_selection_text
 from libre_claw.tui.branding import PixelWordmark, pixel_wordmark_text
@@ -37,7 +37,7 @@ def test_wordmark_preserves_website_glyphs_and_uses_narrow_fallback() -> None:
     assert output.getvalue().strip() == "LIBRE CLAW"
 
 
-@pytest.mark.parametrize("theme", ["libre", "libre-light", "matrix"])
+@pytest.mark.parametrize("theme", list(THEME_PALETTES))
 def test_syntax_and_diff_colors_follow_the_selected_palette(theme: str) -> None:
     palette = tui_theme_palette(theme)
     syntax = _palette_code_theme(palette)
@@ -67,13 +67,15 @@ def design_app(monkeypatch, tmp_path: Path) -> LibreClawApp:
 async def test_theme_switch_updates_widget_components_and_quiet_borders(design_app: LibreClawApp) -> None:
     app = design_app
     async with app.run_test(size=(120, 36)) as pilot:
-        for name in ("libre", "libre-light"):
+        for name in THEME_PALETTES:
             app._set_tui_theme(name)
             await pilot.pause()
             palette = tui_theme_palette(name)
             assert app.query_one("#workspace").styles.border.top[1].hex.lower() == palette.line
             assert app.query_one("#composer").styles.border.top[1].hex.lower() == palette.line
             assert app.query_one("#chat").styles.background.hex.lower() == palette.background
+            assert app.query_one("#workspace-bar").styles.background.hex.lower() == palette.background
+            assert app.query_one("#composer").styles.background.hex.lower() == palette.surface
             cursor = app.query_one("#input", Input).get_component_rich_style("input--cursor")
             for actual, expected in ((cursor.bgcolor, palette.accent), (cursor.color, palette.on_accent)):
                 assert all(abs(a - b) <= 1 for a, b in zip(actual.get_truecolor(), Color.parse(expected).get_truecolor()))

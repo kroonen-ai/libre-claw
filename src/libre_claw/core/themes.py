@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,7 @@ class ThemePalette:
     panel_strong: str = ""
     on_accent: str = ""
     code: str = ""
+    on_accent_strong: str = ""
 
 
 THEME_ALIASES: dict[str, str] = {
@@ -504,6 +505,61 @@ THEME_PALETTES: dict[str, ThemePalette] = {
         warn="#baff39",
     ),
 }
+
+
+def _blend_color(background: str, foreground: str, amount: float) -> str:
+    channels = (
+        round(int(background[index:index + 2], 16) * (1 - amount) + int(foreground[index:index + 2], 16) * amount)
+        for index in (1, 3, 5)
+    )
+    return "#" + "".join(f"{channel:02x}" for channel in channels)
+
+
+def _contrast_ratio(foreground: str, background: str) -> float:
+    def luminance(color: str) -> float:
+        channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+        linear = [value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4 for value in channels]
+        return sum(value * weight for value, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+    lighter, darker = sorted((luminance(foreground), luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _readable_text(color: str, text: str, backgrounds: tuple[str, ...]) -> str:
+    """Preserve a palette color unless it needs more contrast on its surfaces."""
+    for amount in range(101):
+        candidate = color if amount == 0 else _blend_color(color, text, amount / 100)
+        if all(_contrast_ratio(candidate, background) >= 4.5 for background in backgrounds):
+            return candidate
+    return max(("#000000", "#ffffff"), key=lambda candidate: min(_contrast_ratio(candidate, background) for background in backgrounds))
+
+
+def _control_text(background: str, *preferred: str) -> str:
+    for color in (*preferred, "#000000", "#ffffff"):
+        if color and _contrast_ratio(color, background) >= 4.5:
+            return color
+    raise ValueError(f"No readable text color for {background}")
+
+
+def _complete_palette(palette: ThemePalette) -> ThemePalette:
+    """Apply the shared design tokens while retaining each theme's colors."""
+    code = palette.code or (palette.surface if palette.is_light else palette.background)
+    backgrounds = (palette.background, palette.surface, palette.surface_2, code)
+    on_accent = _control_text(palette.accent, palette.on_accent, palette.background, palette.text)
+    return replace(
+        palette,
+        line=palette.line or _blend_color(palette.background, palette.text, 0.16),
+        line_strong=palette.line_strong or _blend_color(palette.background, palette.text, 0.26),
+        muted=_readable_text(palette.muted, palette.text, backgrounds),
+        soft=palette.soft or _readable_text(_blend_color(palette.text, palette.background, 0.18), palette.text, backgrounds),
+        panel_strong=palette.panel_strong or palette.surface_2,
+        on_accent=on_accent,
+        on_accent_strong=_control_text(palette.accent_strong, palette.on_accent_strong, on_accent, palette.background, palette.text),
+        code=code,
+    )
+
+
+THEME_PALETTES = {name: _complete_palette(palette) for name, palette in THEME_PALETTES.items()}
 
 
 def normalize_theme(theme: str | None) -> str:

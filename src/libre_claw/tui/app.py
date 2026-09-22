@@ -512,8 +512,6 @@ def _lobster_syntax(code: str, lexer: str, *, light: bool = False, word_wrap: bo
 
 @lru_cache(maxsize=32)
 def _palette_code_theme(palette: ThemePalette) -> LobsterSyntaxTheme:
-    if palette.theme_id in {"lobster", "lobster-light"}:
-        return _lobster_code_theme(light=palette.is_light)
     background = palette.code or palette.background
     base = Color.parse(background)
     return LobsterSyntaxTheme(
@@ -925,13 +923,11 @@ class LibreClawApp(App[None]):
         muted = Color.parse(palette.muted)
         background = Color.parse(palette.background)
         surface = Color.parse(palette.surface)
-        surface_2 = Color.parse(palette.surface_2)
         panel = Color.parse(palette.panel)
         sidebar = Color.parse(palette.sidebar)
         status_bg = Color.parse(palette.status_bg)
-        branded = palette.theme_id in {"libre", "libre-light"}
-        canvas = background if branded else surface
-        composer = surface if branded else surface_2
+        canvas = background
+        composer = surface
 
         self.styles.background = background
         self.styles.color = text
@@ -951,7 +947,7 @@ class LibreClawApp(App[None]):
             ("#sidebar-root", sidebar, muted),
             ("#file-tree", sidebar, text),
             ("#main", canvas, text),
-            ("#workspace-bar", canvas if branded else surface_2, muted),
+            ("#workspace-bar", canvas, muted),
             ("#chat", canvas, text),
             ("#petdex-panel", surface, text),
             ("#composer", composer, text),

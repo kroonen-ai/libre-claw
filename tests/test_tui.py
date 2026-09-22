@@ -1911,15 +1911,15 @@ async def test_tui_uses_configured_theme_palette(monkeypatch, tmp_path: Path) ->
         composer = app.query_one("#composer")
         renderable = app._format_entry(TranscriptEntry(role="assistant", content="hello"))
 
-        assert workspace.styles.background.hex == "#06100A"
-        assert workspace.styles.border.top[1].hex == "#00FF41"
-        assert workspace.styles.border.bottom[1].hex == "#00FF41"
+        assert workspace.styles.background.hex == "#000000"
+        assert workspace.styles.border.top[1].hex == "#222924"
+        assert workspace.styles.border.bottom[1].hex == "#222924"
         assert chat.styles.scrollbar_color.hex == "#00FF41"
-        assert suggestions.styles.border.top[1].hex == "#00FF41"
-        assert suggestions.styles.border.right[1].hex == "#00FF41"
-        assert suggestions.styles.border.bottom[1].hex == "#00FF41"
-        assert suggestions.styles.border.left[1].hex == "#00FF41"
-        assert composer.styles.border.top[1].hex == "#00FF41"
+        assert suggestions.styles.border.top[1].hex == "#222924"
+        assert suggestions.styles.border.right[1].hex == "#222924"
+        assert suggestions.styles.border.bottom[1].hex == "#222924"
+        assert suggestions.styles.border.left[1].hex == "#222924"
+        assert composer.styles.border.top[1].hex == "#222924"
         assert "#00ff41" in str(renderable.renderables[0].style).lower()
 
 
@@ -1936,7 +1936,7 @@ async def test_tui_lobster_light_theme_uses_cream_palette(monkeypatch, tmp_path:
         chat = app.query_one("#chat")
         assistant = app._format_entry(TranscriptEntry(role="assistant", content="```python\nprint('hi')\n```"))
 
-        assert workspace.styles.background.hex == "#FFFAF0"
+        assert workspace.styles.background.hex == "#FDF6E3"
         assert chat.styles.scrollbar_color.hex == "#FF5C5C"
         assert assistant.renderables[1].code_theme.get_background_style().bgcolor.get_truecolor().hex == "#fffaf0"
 
