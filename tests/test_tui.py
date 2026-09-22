@@ -1213,6 +1213,35 @@ async def test_setup_key_flow_hides_and_stores_provider_key(monkeypatch, tmp_pat
     assert "sk-or-secret" not in system_text
 
 
+async def test_command_palette_cannot_expose_a_provider_key_during_setup(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    fake_store = FakeApiKeyStore()
+    monkeypatch.setattr("libre_claw.tui.app.ApiKeyStore.from_config", lambda _auth: fake_store)
+    app = LibreClawApp(config=load_config())
+    secret = "sk-test-terminal-key"
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        app._begin_key_setup("deepseek")
+        input_widget = app.query_one("#input")
+        input_widget.value = secret
+        await pilot.press("ctrl+p")
+        assert app.palette_open is False
+        assert app.query_one("#palette").has_class("hidden")
+        assert input_widget.password is True
+        assert input_widget.has_focus
+        assert secret not in app.export_screenshot()
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert fake_store.keys == {"deepseek": secret}
+        assert input_widget.password is False
+        assert input_widget.value == ""
+        assert secret not in app.export_screenshot()
+
+    assert all(secret not in entry.content for entry in app.transcript)
+
+
 @pytest.mark.parametrize("provider", ["moonshot", "deepseek"])
 async def test_setup_key_flow_supports_provider(monkeypatch, tmp_path: Path, provider: str) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -1576,6 +1605,7 @@ async def test_idle_status_refresh_does_not_repaint_when_text_is_unchanged(monke
             return original_update(renderable)
 
         status.update = update_once  # type: ignore[method-assign]
+        app._last_status_text = ""
 
         app._update_status()
         app._update_status()
@@ -1703,7 +1733,7 @@ async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     app = LibreClawApp(config=load_config())
 
-    async with app.run_test():
+    async with app.run_test(size=(120, 36)):
         assert app.query_one("#chat")
         assert app.transcript[0].role == "startup"
         assert app.query_one("#input")
@@ -1720,8 +1750,8 @@ async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None
         assert app.query_one("#change-panel").has_class("hidden")
         assert app.query_one("#workspace-bar")
         assert app.query_one("#composer")
-        assert "WORKSPACE" in str(app.query_one("#workspace-bar").content)
-        assert "MESSAGE" in str(app.query_one("#composer-meta").content)
+        assert tmp_path.name in str(app.query_one("#workspace-bar").content)
+        assert "Ctrl+P commands" in str(app.query_one("#composer-meta").content)
         assert app.query_one("#input").cursor_blink is False
 
 
@@ -1858,7 +1888,7 @@ async def test_tui_sidebar_left_rail_toggle(monkeypatch, tmp_path: Path) -> None
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     app = LibreClawApp(config=load_config())
 
-    async with app.run_test():
+    async with app.run_test(size=(120, 36)):
         sidebar = app.query_one("#sidebar")
         rail = app.query_one("#sidebar-rail")
 
@@ -2134,7 +2164,8 @@ async def test_tui_edit_permission_shows_exact_patch(monkeypatch, tmp_path: Path
         assert "EDIT  src/demo.py" in preview
         assert "-return False" in preview
         assert "+return True" in preview
-        assert "APPROVAL" in str(app.query_one("#composer-meta").content)
+        assert "y allow once" in str(app.query_one("#composer-meta").content)
+        assert "needs approval" in str(app.query_one("#status").content)
 
 
 async def test_tui_permission_panel_warns_for_dangerous_commands(monkeypatch, tmp_path: Path) -> None:

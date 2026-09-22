@@ -12,6 +12,7 @@ import pytest
 from pygments.token import Token
 from rich.console import Console
 from rich.color import Color
+from rich.cells import cell_len
 from textual.widgets import Button, Input
 
 from libre_claw.config import load_config
@@ -137,3 +138,99 @@ async def test_narrow_resize_reflows_branding_and_keeps_approval_actions_visible
         assert app.query_one("#permission-panel").has_class("hidden")
         assert not app.has_class("approving")
         assert app.query_one("#chat").display is True
+        await pilot.pause()
+        assert "LIBRE CLAW" in _rich_log_selection_text(app.query_one("#chat").lines)
+
+
+@pytest.mark.parametrize("size", [(120, 36), (80, 24), (60, 20)])
+async def test_command_palette_keeps_the_selection_visible_and_completes_it(
+    design_app: LibreClawApp, size: tuple[int, int],
+) -> None:
+    app = design_app
+    async with app.run_test(size=size) as pilot:
+        app.action_command_palette()
+        for _ in range(14):
+            app._move_menu_selection(1)
+        await pilot.pause()
+        menu = app.query_one("#palette")
+        rendered = app._palette_text("").splitlines()
+        selected = app._palette_matches("")[14]
+        assert any(line.startswith(f"> {selected.name}") for line in rendered)
+        assert len(rendered) <= menu.content_size.height
+        assert all(cell_len(line) <= menu.content_size.width for line in rendered)
+        assert menu.region.bottom <= app.query_one("#composer").region.y
+        assert "Tab fill" in app._composer_meta_text()
+        app.action_accept_suggestion()
+        assert app.query_one("#input", Input).value == app._completion_text(selected)
+        assert app.palette_open is False
+
+
+async def test_narrow_sidebar_recovers_space_without_losing_the_draft(design_app: LibreClawApp) -> None:
+    app = design_app
+    async with app.run_test(size=(60, 20)) as pilot:
+        assert app.query_one("#sidebar-rail").display is False
+        assert app.query_one("#main").region.width == app.query_one("#workspace").content_size.width
+        input_widget = app.query_one("#input", Input)
+        input_widget.value = "Continue with the parser"
+        entry_count = len(app.transcript)
+        await pilot.press("ctrl+b")
+        assert app.query_one("#sidebar").display is True
+        await pilot.press("ctrl+b")
+        assert app.query_one("#sidebar").display is False
+        assert input_widget.value == "Continue with the parser"
+        assert input_widget.has_focus
+        assert len(app.transcript) == entry_count
+
+
+async def test_approval_status_updates_immediately_and_deny_restores_idle(design_app: LibreClawApp) -> None:
+    app = design_app
+    async with app.run_test(size=(60, 20)):
+        future = asyncio.get_running_loop().create_future()
+        request = AgentPermissionRequest(call=ToolCall(id="status", name="bash", arguments={"command": "pwd"}), future=future)
+        app._pending_permission = request
+        app._show_permission_prompt(request)
+        assert "needs approval" in str(app.query_one("#status").render())
+        assert "idle" not in app._status_text()
+        assert cell_len(app._status_text()) <= 58
+        assert "y allow once" in app._input_placeholder()
+        app._resolve_pending_permission("deny")
+        assert await asyncio.wait_for(asyncio.shield(future), timeout=2) == "deny"
+        assert "idle" in str(app.query_one("#status").render())
+
+
+async def test_palette_resize_retains_a_visible_selection(design_app: LibreClawApp) -> None:
+    app = design_app
+    async with app.run_test(size=(120, 36)) as pilot:
+        app.action_command_palette()
+        for _ in range(14):
+            app._move_menu_selection(1)
+        await pilot.resize_terminal(60, 20)
+        await pilot.pause()
+        menu = app.query_one("#palette")
+        lines = menu.content.plain.splitlines()
+        assert app.query_one("#sidebar-rail").display is False
+        assert app._palette_selected_index == 14
+        assert any(line.startswith("> /plugins") for line in lines)
+        assert all(cell_len(line) <= menu.content_size.width for line in lines), (menu.content_size, lines)
+        assert len(lines) <= menu.content_size.height
+        assert app.query_one("#input", Input).has_focus
+        await pilot.press("ctrl+b")
+        await pilot.pause()
+        assert app._palette_selected_index == 14
+        assert all(cell_len(line) <= menu.content_size.width for line in menu.content.plain.splitlines())
+
+
+async def test_chrome_preserves_literal_model_and_workspace_brackets(design_app: LibreClawApp, tmp_path: Path) -> None:
+    app = design_app
+    workspace = tmp_path / "project[notes]"
+    workspace.mkdir()
+    app.config = replace(app.config, general=replace(
+        app.config.general, working_directory=workspace, default_provider="deepseek", default_model="test[/model]",
+    ))
+    async with app.run_test(size=(120, 36)) as pilot:
+        assert "test[/model]" in str(app.query_one("#status").render())
+        assert "project[notes]" in str(app.query_one("#sidebar-root").render())
+        assert "project[notes]" in str(app.query_one("#workspace-bar").render())
+        await pilot.resize_terminal(110, 30)
+        await pilot.pause()
+        assert "test[/model]" in str(app.query_one("#status").render())

@@ -273,7 +273,7 @@ def test_cli_start_exposes_daemon_options() -> None:
     result = runner.invoke(main, ["start", "--help"])
 
     assert result.exit_code == 0
-    assert "Start the local background runner daemon" in result.output
+    assert "use --detach for background operation" in result.output
     assert "--host" in result.output
     assert "--port" in result.output
     assert "--detach" in result.output

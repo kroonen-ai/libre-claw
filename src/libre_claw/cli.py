@@ -21,6 +21,7 @@ import click
 import httpx
 
 from libre_claw import __version__
+from libre_claw.cli_ui import LibreGroup, status_text
 from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
 from libre_claw.auth.codex import CodexCliError, CodexCommandResult, codex_logout, codex_status, stream_codex_command
 from libre_claw.config import (
@@ -91,6 +92,7 @@ def _load_context_config(ctx: click.Context) -> LibreClawConfig:
 
 
 @click.group(
+    cls=LibreGroup,
     invoke_without_command=True,
     no_args_is_help=False,
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -99,24 +101,24 @@ def _load_context_config(ctx: click.Context) -> LibreClawConfig:
     "--config",
     "config_path",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Path to a Libre Claw TOML config file.",
+    help="Load a TOML configuration file.",
 )
 @click.option(
     "--working-directory",
     type=click.Path(file_okay=False, path_type=Path),
-    help="Working directory for the Libre Claw session.",
+    help="Use this project directory.",
 )
 @click.option(
     "--mouse/--no-mouse",
     "tui_mouse",
     default=None,
-    help="Enable or disable Textual mouse capture for the TUI. Disable it for native terminal text selection.",
+    help="Capture mouse input, or keep native terminal selection.",
 )
 @click.option(
     "--inline/--fullscreen",
     "tui_inline",
     default=None,
-    help="Run the TUI inline in terminal scrollback or in the full-screen alternate screen.",
+    help="Open within scrollback or use the full screen.",
 )
 @click.version_option(__version__, prog_name="libre-claw")
 @click.pass_context
@@ -127,11 +129,7 @@ def main(
     tui_mouse: bool | None,
     tui_inline: bool | None,
 ) -> None:
-    """Launch Libre Claw, a terminal-native coding agent harness.
-
-    Running without a subcommand opens the Textual TUI. Use `auth` to manage
-    provider keys, `config` to inspect defaults, or `telegram` for the daemon.
-    """
+    """Open the terminal UI or run a task from the shell."""
     ctx.obj = {
         "config_path": config_path,
         "working_directory": working_directory,
@@ -181,6 +179,60 @@ def chat_command(ctx: click.Context, mouse: bool | None, inline: bool | None) ->
     _run_tui(ctx, mouse=mouse, inline=inline)
 
 
+def _status_daemon_url(value: str) -> str | None:
+    if any(character.isspace() or not character.isprintable() for character in value):
+        return None
+    try:
+        parsed = httpx.URL(_client_base_url(value))
+        if (parsed.scheme not in {"http", "https"} or not parsed.host or parsed.userinfo
+                or parsed.query or parsed.fragment or parsed.path not in {"", "/"}):
+            return None
+    except (httpx.InvalidURL, ValueError):
+        return None
+    return str(parsed).rstrip("/")
+
+
+@main.command("status")
+@click.option("--json", "as_json", is_flag=True, help="Print only machine-readable JSON.")
+@click.option("--timeout", type=click.FloatRange(min=0.1, max=10), default=1.0, show_default=True,
+              help="Maximum seconds per daemon health check.")
+@click.pass_context
+def status_command(ctx: click.Context, as_json: bool, timeout: float) -> None:
+    """Show workspace, model, configuration, and daemon health."""
+    from libre_claw.core.themes import normalize_theme
+    from libre_claw.providers.factory import _canonical_provider_name, _resolve_model
+
+    config = _load_context_config(ctx)
+    base_url = _status_daemon_url(daemon_base_url(config))
+    health: dict[str, Any] | None = None
+    for candidate in _lifecycle_target_urls(config, host=None, port=None):
+        candidate = _status_daemon_url(candidate)
+        if candidate is None:
+            continue
+        response = _request_daemon_json("GET", candidate, "/health", timeout=timeout)
+        if response and response.get("ok") is True:
+            base_url, health = _client_base_url(candidate), response
+            break
+    active = health.get("active_runs") if health else None
+    if not isinstance(active, int) or isinstance(active, bool) or active < 0:
+        active = None
+    provider = _canonical_provider_name(config.general.default_provider)
+    payload = {
+        "version": __version__,
+        "workspace": str(config.general.working_directory),
+        "provider": provider,
+        "model": _resolve_model(config, provider, config.providers.get(provider, {})),
+        "theme": normalize_theme(config.general.theme),
+        "config_sources": [str(path) for path in config.source_paths],
+        "log_path": str(_process_log_path()),
+        "daemon": {
+            "state": "online" if health else "unavailable", "url": base_url,
+            "dashboard_url": f"{base_url}/dashboard" if base_url else None, "active_runs": active,
+        },
+    }
+    click.echo(json.dumps(payload, indent=2) if as_json else status_text(payload, color=ctx.color))
+
+
 @main.command("run")
 @click.argument("message", required=False)
 @click.option(
@@ -226,6 +278,8 @@ def run_command(
     deadline_reserve_seconds: float,
 ) -> None:
     """Run one complete agent turn without opening the TUI."""
+    if message is None and sys.stdin.isatty():
+        raise click.UsageError('Provide MESSAGE or pipe a prompt on stdin.\nExample: libre-claw run "Review changes"\nOpen the terminal UI: libre-claw tui')
     prompt = message if message is not None else sys.stdin.read()
     if not prompt.strip():
         raise click.UsageError("Provide MESSAGE or pipe a prompt on stdin.")
@@ -429,7 +483,7 @@ async def _run_telegram_stack(config: LibreClawConfig, host: str | None = None, 
 @click.option("--port", type=int, help="Port for the local daemon API.")
 @click.pass_context
 def daemon_command(ctx: click.Context, host: str | None, port: int | None) -> None:
-    """Run the local background runner daemon."""
+    """Run the daemon in this terminal."""
     _run_daemon_process(ctx, host=host, port=port)
 
 
@@ -444,7 +498,7 @@ def daemon_command(ctx: click.Context, host: str | None, port: int | None) -> No
 )
 @click.pass_context
 def start_command(ctx: click.Context, host: str | None, port: int | None, detach: bool) -> None:
-    """Start the local background runner daemon."""
+    """Start the daemon; use --detach for background operation."""
     _run_daemon_process(ctx, host=host, port=port, detach=detach, allow_config_detach=True)
 
 
@@ -509,7 +563,7 @@ def _run_daemon_process(
 @click.option("--force", is_flag=True, help="Send SIGKILL if the process does not stop after SIGTERM.")
 @click.pass_context
 def shutdown_command(ctx: click.Context, host: str | None, port: int | None, timeout: float, force: bool) -> None:
-    """Shut down a running Libre Claw daemon or Telegram stack from another terminal."""
+    """Shut down the daemon or Telegram stack and its active turns."""
     config = _load_context_config(ctx)
     result = _stop_lifecycle(config, host=host, port=port, timeout=timeout, force=force)
     click.echo(result.message)
@@ -522,7 +576,7 @@ def shutdown_command(ctx: click.Context, host: str | None, port: int | None, tim
 @click.option("--timeout", type=float, default=10.0, show_default=True, help="Seconds to wait for the daemon API.")
 @click.pass_context
 def stop_command(ctx: click.Context, run_id: str | None, host: str | None, port: int | None, timeout: float) -> None:
-    """Stop the active daemon turn without shutting down Libre Claw."""
+    """Stop the active turn; keep Libre Claw running."""
     config = _load_context_config(ctx)
     click.echo(_stop_active_turn(config, run_id=run_id, host=host, port=port, timeout=timeout))
 
@@ -548,7 +602,7 @@ def restart_command(
     force: bool,
     mode: str,
 ) -> None:
-    """Restart the running Libre Claw daemon or Telegram stack in the background."""
+    """Restart the daemon or Telegram stack in the background."""
     config = _load_context_config(ctx)
     state = _read_process_state()
     selected_mode = _selected_restart_mode(mode, state)
@@ -576,7 +630,7 @@ def restart_command(
 @click.option("--branch", default="main", show_default=True, help="Remote branch to fast-forward from.")
 @click.option("--dry-run", is_flag=True, help="Check for updates without writing a backup or applying changes.")
 def update_command(repo_path: Path | None, remote: str, branch: str, dry_run: bool) -> None:
-    """Safely update this Libre Claw checkout from the latest main commit."""
+    """Update this checkout from the latest main branch."""
     try:
         result = _update_checkout(
             repo_path,
@@ -826,7 +880,7 @@ def _request_daemon_json(method: str, base_url: str, path: str, *, timeout: floa
         response = httpx.request(method, f"{_client_base_url(base_url)}{path}", timeout=timeout)
         response.raise_for_status()
         payload = response.json()
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
 

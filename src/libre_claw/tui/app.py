@@ -607,7 +607,7 @@ class LibreClawApp(App[None]):
     #palette {
         height: auto;
         max-height: 10;
-        padding: 1 2;
+        padding: 0 1;
         border: solid $primary;
     }
 
@@ -794,7 +794,7 @@ class LibreClawApp(App[None]):
 
     def compose(self) -> ComposeResult:
         if self.config.tui.show_status_bar:
-            yield Static(self._status_text(), id="status")
+            yield Static(self._status_text(), id="status", markup=False)
 
         with Horizontal(id="workspace"):
             with Vertical(id="sidebar-rail"):
@@ -803,11 +803,10 @@ class LibreClawApp(App[None]):
                 with Horizontal(id="sidebar-actions"):
                     yield Button("Hide", id="sidebar-hide", compact=True)
                     yield Button("Up", id="sidebar-up", variant="primary", compact=True)
-                yield Static(self._sidebar_root_text(), id="sidebar-root")
+                yield Static(self._sidebar_root_text(), id="sidebar-root", markup=False)
                 yield DirectoryTree(self.config.general.working_directory, id="file-tree")
             with Vertical(id="main"):
                 yield Static("", id="workspace-bar")
-                yield Static("", id="palette", classes="hidden")
                 yield Static("", id="petdex-panel", classes="hidden")
                 yield SelectableRichLog(id="chat", min_width=1, wrap=True, highlight=False, markup=True)
                 with Vertical(id="permission-panel", classes="hidden"):
@@ -836,6 +835,7 @@ class LibreClawApp(App[None]):
                         yield Button("Close", id="artifact-close", compact=True)
                     yield Static("", id="artifact-title")
                     yield SelectableRichLog(id="artifact-content", wrap=True, highlight=True, markup=True)
+                yield Static("", id="palette", classes="hidden")
                 yield Static("", id="suggestions", classes="hidden")
                 with Vertical(id="composer"):
                     yield Static("", id="composer-meta")
@@ -1002,7 +1002,9 @@ class LibreClawApp(App[None]):
         self.set_class(event.size.width < 90, "narrow")
         self.set_class(event.size.height < 30, "short")
         if self.is_mounted and self.transcript:
+            self._sync_sidebar_visibility(width=event.size.width)
             self._update_shell_chrome()
+            self.call_after_refresh(self._refresh_command_menu)
             if self.config.tui.show_status_bar:
                 self.query_one("#status", Static).update(self._status_text())
 
@@ -1010,6 +1012,7 @@ class LibreClawApp(App[None]):
         event.stop()
         if self.transcript:
             self._render_transcript()
+            self._refresh_command_menu()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -1535,8 +1538,10 @@ class LibreClawApp(App[None]):
     def action_toggle_sidebar(self) -> None:
         self.sidebar_visible = not self.sidebar_visible
         self._sync_sidebar_visibility()
-        state = "shown" if self.sidebar_visible else "hidden"
-        self._append_system(f"File tree {state}.")
+        if not self.sidebar_visible:
+            self.query_one("#input", Input).focus()
+        self._update_shell_chrome()
+        self.call_after_refresh(self._refresh_command_menu)
 
     def action_toggle_change_review(self) -> None:
         if self._change_review_visible:
@@ -1545,10 +1550,13 @@ class LibreClawApp(App[None]):
         self._show_change_review()
 
     def action_command_palette(self) -> None:
-        self.palette_open = not self.palette_open
-        self._update_palette(self.query_one("#input", Input).value)
-        self._update_slash_suggestions("")
         input_widget = self.query_one("#input", Input)
+        if self._pending_key_setup is not None:
+            input_widget.focus()
+            return
+        self.palette_open = not self.palette_open
+        self._update_palette(input_widget.value)
+        self._update_slash_suggestions("")
         input_widget.placeholder = self._input_placeholder()
         input_widget.focus()
 
@@ -2458,6 +2466,7 @@ class LibreClawApp(App[None]):
         panel.remove_class("hidden")
         self.query_one("#input", Input).placeholder = self._input_placeholder()
         self._update_shell_chrome()
+        self._update_status_bar()
         allow_once.focus()
 
     def _hide_permission_prompt(self) -> None:
@@ -2471,6 +2480,8 @@ class LibreClawApp(App[None]):
             self.query_one(button_id, Button).disabled = False
         self.query_one("#input", Input).placeholder = self._input_placeholder()
         self._update_shell_chrome()
+        self._update_status_bar()
+        self.call_after_refresh(self._render_transcript)
 
     def _permission_preview(self, call: ToolCall) -> RenderableType:
         arguments = call.arguments
@@ -4323,9 +4334,10 @@ class LibreClawApp(App[None]):
             entries.extend(tool_parts)
         return entries
 
-    def _sync_sidebar_visibility(self) -> None:
+    def _sync_sidebar_visibility(self, *, width: int | None = None) -> None:
+        terminal_width = self.size.width if width is None else width
         self.query_one("#sidebar", Vertical).display = self.sidebar_visible
-        self.query_one("#sidebar-rail", Vertical).display = not self.sidebar_visible
+        self.query_one("#sidebar-rail", Vertical).display = not self.sidebar_visible and terminal_width >= 90
 
     def _append_startup_entry(self) -> None:
         if self.transcript and self.transcript[0].role == "startup":
@@ -4348,31 +4360,47 @@ class LibreClawApp(App[None]):
     def _update_shell_chrome(self) -> None:
         if not self.is_mounted:
             return
-        self.query_one("#workspace-bar", Static).update(self._workspace_bar_text())
-        self.query_one("#composer-meta", Static).update(self._composer_meta_text())
+        self.query_one("#workspace-bar", Static).update(Text(self._workspace_bar_text()))
+        self.query_one("#composer-meta", Static).update(Text(self._composer_meta_text()))
+
+    def _update_status_bar(self) -> None:
+        if not self.is_mounted or not self.config.tui.show_status_bar:
+            return
+        status = self._status_text()
+        if status != self._last_status_text:
+            self.query_one("#status", Static).update(Text(status))
+            self._last_status_text = status
 
     def _workspace_bar_text(self) -> str:
         root = self.config.general.working_directory
         workspace = root.name or str(root)
-        mode = "daemon" if self.daemon_client is not None else "direct"
-        run = _short_run_id(self._active_run_id) if self._active_run_id else "idle"
         change_count = len(self._change_entries())
-        change_label = f"{change_count} edit{'s' if change_count != 1 else ''}"
-        if 0 < self.size.width < 100:
-            return f"WORKSPACE  {workspace}   ·   {change_label}"
-        return f"WORKSPACE  {workspace}   ·   {mode}   ·   RUN  {run}   ·   {change_label}   ·   Ctrl+E review"
+        suffix = f"  ·  {change_count} edit{'s' if change_count != 1 else ''}  ·  Ctrl+E review" if change_count else ""
+        width = self.query_one("#workspace-bar").content_size.width if self.is_mounted else 80
+        width = width or max(8, self.size.width - (30 if self.sidebar_visible else 8 if self.size.width >= 90 else 0) - 4)
+        label = Text(workspace)
+        label.truncate(max(8, width - len(suffix)), overflow="ellipsis")
+        return f"{label.plain}{suffix}"
 
     def _composer_meta_text(self) -> str:
         if self._pending_permission is not None:
-            return "APPROVAL  Review the exact operation above · y allow · n deny · a always tool · ! always exact"
+            return "y allow once · n deny · a always tool · ! exact"
+        if self._pending_key_setup is not None:
+            return "API key hidden · Enter save · /cancel back"
+        if self.palette_open:
+            return "↑↓ choose · Enter run · Tab fill · Esc close"
+        if self._slash_suggestions:
+            return "↑↓ choose · Tab fill · Enter select"
         if self._goal_description is not None:
-            return f"GOAL  turn {self._goal_turn}/{self._goal_max_turns} · /steer adjusts course · Esc interrupts"
+            return f"Goal {self._goal_turn}/{self._goal_max_turns} · /steer adjust · Esc interrupt"
         if self._active_task is not None and not self._active_task.done():
-            return "RUNNING  Streaming output · /btw adds context · Esc interrupts"
+            return "/btw add context · Esc interrupt"
         if self._pending_attachments:
             count = len(self._pending_attachments)
-            return f"MESSAGE  {count} image{'s' if count != 1 else ''} attached · Enter sends · /attach clear removes"
-        return "MESSAGE  Enter send  ·  / commands  ·  Ctrl+B files"
+            return f"{count} image{'s' if count != 1 else ''} attached · Enter send · /attach clear"
+        if self._change_review_visible:
+            return "Ctrl+E close review · Enter send"
+        return "Enter send  ·  Ctrl+P commands  ·  Ctrl+B files"
 
     def _update_palette(self, query: str = "", *, reset_selection: bool = True) -> None:
         palette = self.query_one("#palette", Static)
@@ -4380,13 +4408,15 @@ class LibreClawApp(App[None]):
             palette.add_class("hidden")
             palette.update("")
             self._palette_selected_index = 0
+            self._update_shell_chrome()
             return
         palette.remove_class("hidden")
         matches = self._palette_matches(query)
         if reset_selection:
             self._palette_selected_index = 0
         self._palette_selected_index = _bounded_menu_index(self._palette_selected_index, len(matches))
-        palette.update(self._palette_text(query))
+        palette.update(self._menu_renderable(self._palette_text(query)))
+        self._update_shell_chrome()
 
     def _close_palette(self) -> None:
         self.palette_open = False
@@ -4408,12 +4438,43 @@ class LibreClawApp(App[None]):
 
     def _palette_text(self, query: str) -> str:
         matches = self._palette_matches(query)
-        lines = ["Command palette - Up/Down select, Enter run, Tab fill"]
+        index = _bounded_menu_index(self._palette_selected_index, len(matches))
+        lines = [f"Commands  {index + 1}/{len(matches)}" if matches else "Commands  0 matches"]
+        if not matches:
+            return "\n".join([*lines, "Try a command name, such as model or resume."])
+        start, end = self._menu_window(index, len(matches))
+        width = self._menu_width("#palette")
         lines.extend(
-            _menu_line(command, selected=index == self._palette_selected_index, usage_width=26)
-            for index, command in enumerate(matches)
+            _menu_line(matches[position], selected=position == index, usage_width=26, width=width)
+            for position in range(start, end)
         )
         return "\n".join(lines)
+
+    def _menu_width(self, selector: str) -> int:
+        width = self.query_one(selector).content_size.width if self.is_mounted else 0
+        return width or max(20, self.size.width - 12)
+
+    def _refresh_command_menu(self) -> None:
+        value = self.query_one("#input", Input).value
+        if self.palette_open:
+            self._update_palette(value, reset_selection=False)
+        elif self._slash_suggestions:
+            self._update_slash_suggestions(value, reset_selection=False)
+
+    def _menu_window(self, index: int, count: int) -> tuple[int, int]:
+        limit = min(6, max(2, self.size.height // 5)) if self.size.height else 6
+        start = max(0, min(index - limit // 2, count - limit))
+        return start, min(count, start + limit)
+
+    def _menu_renderable(self, content: str) -> Text:
+        rendered = Text(content)
+        background = Color.parse(self._theme.surface).blend(Color.parse(self._theme.accent), 0.12).hex
+        offset = 0
+        for line in content.splitlines(keepends=True):
+            if line.startswith("> "):
+                rendered.stylize(Style(color=self._theme.text, bgcolor=background, bold=True), offset, offset + len(line.rstrip("\n")))
+            offset += len(line)
+        return rendered
 
     def _help_text(self) -> str:
         command_lines = "\n".join(f"{command.usage} - {command.description}" for command in SLASH_COMMANDS)
@@ -4435,9 +4496,11 @@ class LibreClawApp(App[None]):
             suggestions.add_class("hidden")
             suggestions.update("")
             self._slash_suggestion_index = 0
+            self._update_shell_chrome()
             return
         suggestions.remove_class("hidden")
-        suggestions.update(self._slash_suggestion_text(self._slash_suggestions))
+        suggestions.update(self._menu_renderable(self._slash_suggestion_text(self._slash_suggestions)))
+        self._update_shell_chrome()
 
     def _slash_suggestion_matches(self, text: str) -> list[SlashCommand]:
         stripped = text.lstrip()
@@ -4728,9 +4791,10 @@ class LibreClawApp(App[None]):
         return []
 
     def _slash_suggestion_text(self, suggestions: list[SlashCommand]) -> str:
+        start, end = self._menu_window(self._slash_suggestion_index, len(suggestions))
         return "\n".join(
-            _menu_line(command, selected=index == self._slash_suggestion_index, usage_width=30)
-            for index, command in enumerate(suggestions)
+            _menu_line(suggestions[index], selected=index == self._slash_suggestion_index, usage_width=30, width=self._menu_width("#suggestions"))
+            for index in range(start, end)
         )
 
     def _should_complete_on_submit(self, text: str) -> bool:
@@ -4942,13 +5006,16 @@ class LibreClawApp(App[None]):
         model = _effective_model(self.config)
         meter = self._context_meter()
         elapsed = int(time.monotonic() - self._started_at)
-        if self._goal_description is not None and self._active_task is not None and not self._active_task.done():
+        if self._pending_permission is not None:
+            active = "needs approval"
+        elif self._goal_description is not None and self._active_task is not None and not self._active_task.done():
             active = f"goal {self._goal_turn}/{self._goal_max_turns}"
         else:
             active = "running" if self._active_task is not None and not self._active_task.done() else "idle"
-        activity = f"{elapsed}s | {active}" if active != "idle" else "idle"
+        activity = f"{elapsed}s | {active}" if active not in {"idle", "needs approval"} else active
         if self.is_running and 0 < self.size.width < 140:
-            suffix = f"{_format_usage_cost(self.usage)}  ·  {active}"
+            live_state = f"{active} {elapsed}s" if active == "running" else active
+            suffix = f"{_format_usage_cost(self.usage)}  ·  {live_state}"
             if self.size.width >= 100:
                 suffix = f"ctx {meter.display_percent}  ·  " + suffix
             brand = "LIBRE CLAW"
@@ -4966,11 +5033,7 @@ class LibreClawApp(App[None]):
         self._sync_global_model_if_changed()
         self._sync_daemon_model_later()
         self._update_shell_chrome()
-        if self.config.tui.show_status_bar:
-            status = self._status_text()
-            if status != self._last_status_text:
-                self.query_one("#status", Static).update(status)
-                self._last_status_text = status
+        self._update_status_bar()
 
     def _sync_daemon_model_later(self) -> None:
         if self.daemon_client is None:
@@ -5059,9 +5122,11 @@ class LibreClawApp(App[None]):
         if self._pending_key_setup is not None:
             return f"Paste {self._pending_key_setup.provider} API key. It is hidden. Type /cancel to abort."
         if self._pending_permission is not None:
-            return "Permission prompt active: click a choice or press y/n/a/!"
+            return "Review above · y allow once / n deny"
         if self._goal_description is not None:
             return "Goal mode active... (/goal status, /goal stop)"
+        if self._active_task is not None and not self._active_task.done():
+            return "Use /btw for context, or Esc to interrupt"
         return "What would you like to work on?"
 
 
@@ -6160,9 +6225,16 @@ def _rich_log_selection_text(lines: Sequence[Any]) -> str:
     return "\n".join(str(getattr(line, "text", line)).rstrip() for line in lines)
 
 
-def _menu_line(command: SlashCommand, *, selected: bool, usage_width: int) -> str:
+def _menu_line(command: SlashCommand, *, selected: bool, usage_width: int, width: int | None = None) -> str:
     marker = ">" if selected else " "
-    return f"{marker} {command.usage:<{usage_width}} {command.description}"
+    if width is None:
+        return f"{marker} {command.usage:<{usage_width}} {command.description}"
+    usage_width = min(usage_width, max(10, width // 2))
+    usage = Text(command.usage)
+    usage.truncate(usage_width, overflow="ellipsis", pad=True)
+    line = Text(f"{marker} {usage.plain} {command.description}")
+    line.truncate(max(1, width), overflow="ellipsis", pad=True)
+    return line.plain
 
 
 def _theme_suggestion_commands() -> list[SlashCommand]:

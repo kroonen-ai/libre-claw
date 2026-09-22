@@ -133,11 +133,20 @@ libre-claw chat
 python -m libre_claw
 ```
 
+Use `libre-claw --help` for grouped commands and examples. `libre-claw status`
+shows the configured workspace, model, theme, config files, and live daemon
+health; add `--json` for scripts. Run a single task with
+`libre-claw run "Review the changes"`, or pipe a prompt into `libre-claw run`.
+
 The TUI runs full-screen by default. Use `PageUp` / `PageDown` to scroll the
 transcript, `Ctrl+Home` / `Ctrl+End` to jump, and `Ctrl+Shift+C` to copy the
 current Textual selection. If you want normal terminal scrollback instead, launch
 with `libre-claw tui --inline`. If you want clickable Textual mouse controls,
 launch with `libre-claw tui --mouse` or set `[tui].mouse = true`.
+
+`Ctrl+P` opens the command picker beside the composer. Use Up/Down to choose,
+Tab to fill the command, Enter to select it, and Escape to close. Contextual
+hints show the available keys; narrow terminals keep more room for the chat.
 
 The default **Libre Claw** theme matches the website: warm charcoal, copper
 accents, and monospace type. Use `/theme libre-light --global` for the cream

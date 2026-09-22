@@ -69,7 +69,7 @@ async def plugin_command(config: LibreClawConfig, argument: str) -> str:
 
 @click.group("cordis")
 def cordis_group() -> None:
-    """Manage local Cordis plugins and their project-specific grants."""
+    """Manage local plugins and their project access."""
 
 
 def _config(ctx: click.Context) -> LibreClawConfig:
@@ -116,7 +116,7 @@ def enable_command(ctx: click.Context, plugin_id: str, allow_network: bool, read
             raise ValueError("Cordis is disabled in configuration.")
         _print(manager_for(config).enable(plugin_id, config.general.working_directory,
             allow_network=allow_network, read_paths=read_paths, write_paths=write_paths))
-        click.echo("Start a new task to discover newly enabled tools. Tool calls still require normal approval.")
+        click.echo("Start a new task to discover newly enabled tools. Tool calls still require normal approval.", err=True)
     except (ValueError, OSError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
 

@@ -137,6 +137,7 @@ def worktree_group() -> None:
 @click.option("--include-changes", is_flag=True, help="Copy current staged, unstaged, and nonignored untracked content.")
 @click.pass_context
 def create(ctx: click.Context, ref: str, branch: str | None, include_changes: bool) -> None:
+    """Create an isolated checkout and its associated task."""
     arguments = ["create", ref]
     if branch:
         arguments += ["--branch", branch]
@@ -148,11 +149,19 @@ def create(ctx: click.Context, ref: str, branch: str | None, include_changes: bo
 @worktree_group.command("list")
 @click.pass_context
 def list_worktrees(ctx: click.Context) -> None:
+    """List managed task worktrees."""
     _dispatch(ctx, "/worktree", ["list"])
 
 
+_WORKTREE_HELP = {
+    "use": "Resume the task associated with a worktree.",
+    "remove": "Remove a clean worktree with no active tasks.",
+    "preview": "Review changes before transferring them to the source checkout.",
+}
+
+
 def _worktree_command(action: str) -> click.Command:
-    @click.command(action)
+    @click.command(action, help=_WORKTREE_HELP[action])
     @click.argument("worktree_id")
     @click.pass_context
     def execute(ctx: click.Context, worktree_id: str) -> None:
@@ -169,6 +178,7 @@ for _action in ("use", "remove", "preview"):
 @click.option("--confirm", is_flag=True, help="Apply the exact transfer saved by the preview command.")
 @click.pass_context
 def apply_transfer(ctx: click.Context, worktree_id: str, confirm: bool) -> None:
+    """Apply the saved preview to the source checkout with --confirm."""
     _dispatch(ctx, "/worktree", ["apply", worktree_id, *(["--confirm"] if confirm else [])])
 
 
@@ -177,6 +187,7 @@ def apply_transfer(ctx: click.Context, worktree_id: str, confirm: bool) -> None:
 @click.option("--command", "shell_command", required=True, help="Explicitly authorize this shell command once; existing sandbox restrictions still apply.")
 @click.pass_context
 def setup(ctx: click.Context, worktree_id: str, shell_command: str) -> None:
+    """Run an explicitly authorized setup command in a worktree."""
     _dispatch(ctx, "/worktree", ["setup", worktree_id], raw_tail=shell_command)
 
 
@@ -185,8 +196,16 @@ def review_group() -> None:
     """Inspect diffs, apply reviewed edits, and ask an independent reviewer."""
 
 
+_REVIEW_SCOPE_HELP = {
+    "unstaged": "Review unstaged changes in the working tree.",
+    "staged": "Review changes staged for the next commit.",
+    "last-turn": "Review changes since the last task turn began.",
+    "analyze": "Ask a model to analyze the current code review.",
+}
+
+
 def _review_scope_command(scope: str) -> click.Command:
-    @click.command(scope)
+    @click.command(scope, help=_REVIEW_SCOPE_HELP[scope])
     @click.pass_context
     def execute(ctx: click.Context) -> None:
         _dispatch(ctx, "/review", [scope])
@@ -201,11 +220,19 @@ for _scope in ("unstaged", "staged", "last-turn", "analyze"):
 @click.argument("base_ref")
 @click.pass_context
 def branch_review(ctx: click.Context, base_ref: str) -> None:
+    """Review changes against a branch or commit."""
     _dispatch(ctx, "/review", ["branch", base_ref])
 
 
+_REVIEW_ACTION_HELP = {
+    "stage": "Stage a file or hunk from the saved unstaged review.",
+    "unstage": "Unstage a file or hunk from the saved staged review.",
+    "revert": "Discard reviewed changes to a file or hunk.",
+}
+
+
 def _review_action_command(action: str) -> click.Command:
-    @click.command(action)
+    @click.command(action, help=_REVIEW_ACTION_HELP[action])
     @click.argument("path")
     @click.argument("hunk_id", required=False)
     @click.pass_context
@@ -224,4 +251,5 @@ for _action in ("stage", "unstage", "revert"):
 @click.option("--left", is_flag=True, help="Attach the comment to the original side.")
 @click.pass_context
 def comment(ctx: click.Context, location: str, body: tuple[str, ...], left: bool) -> None:
+    """Attach feedback to PATH:LINE in the current review."""
     _dispatch(ctx, "/review", ["comment", location, *(["--left"] if left else []), *body])
