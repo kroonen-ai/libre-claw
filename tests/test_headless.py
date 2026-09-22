@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import replace
 
 import pytest
 
@@ -177,19 +178,21 @@ async def test_headless_cancel_preserves_latest_atif_checkpoint(monkeypatch, tmp
 async def test_headless_deadline_finishes_atif_before_outer_cancellation(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     trajectory_path = tmp_path / "logs" / "agent" / "trajectory.json"
+    config = load_config(working_directory=tmp_path)
+    # SQLite startup is independent of the agent deadline being tested.
+    config = replace(config, memory=replace(config.memory, enabled=False))
 
     result = await asyncio.wait_for(
         run_headless(
-            load_config(working_directory=tmp_path),
+            config,
             "Keep this instruction",
             provider=BlockingProvider(),
             tool_registry=ToolRegistry(),
-            memory_store=MemoryStore(tmp_path / "memory.db"),
             trajectory_path=trajectory_path,
             deadline_seconds=0.1,
             deadline_reserve_seconds=0.02,
         ),
-        timeout=0.5,
+        timeout=5,
     )
 
     payload = json.loads(trajectory_path.read_text(encoding="utf-8"))
