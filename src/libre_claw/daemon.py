@@ -368,12 +368,18 @@ class DaemonServer:
 
     async def list_models(self, request: web.Request) -> web.Response:
         provider = str(request.query.get("provider") or self.config.general.default_provider).strip().lower()
+        provider_key = _provider_key(provider)
+        settings = self.config.providers.get(provider_key, {})
+        default_model = settings.get("default_model", "") if isinstance(settings, Mapping) else ""
+        if provider_key == _provider_key(self.config.general.default_provider):
+            default_model = self.config.general.default_model
         catalog = await discover_models(
             self.config, provider, refresh=request.query.get("refresh", "").lower() in {"1", "true"}
         )
         return web.json_response(
             {
                 "provider": provider,
+                "default_model": default_model if isinstance(default_model, str) else "",
                 "source": catalog.source,
                 "error": catalog.error,
                 "models": [asdict(item) for item in catalog.models],
@@ -2066,6 +2072,8 @@ def _telegram_token_available(config: LibreClawConfig) -> bool:
 
 def _provider_key(provider: str) -> str:
     normalized = provider.strip().lower()
+    if normalized in {"llama-cpp", "llama_cpp", "llama.cpp", "llama-swap", "llamaswap"}:
+        return "llamacpp"
     return "ollama" if normalized == "local" else normalized
 
 

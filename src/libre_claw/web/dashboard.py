@@ -6,12 +6,16 @@ from __future__ import annotations
 import json
 
 from libre_claw.core.themes import dashboard_theme_id
+from libre_claw.web.dashboard_styles import DASHBOARD_CSS
 
 
 def dashboard_html(theme: str = "lobster") -> str:
     """Return the self-contained local daemon dashboard."""
     fallback_theme = json.dumps(dashboard_theme_id(theme))
-    return _DASHBOARD_HTML.replace("__LIBRE_CLAW_DASHBOARD_THEME__", fallback_theme)
+    return (
+        _DASHBOARD_HTML.replace("__LIBRE_CLAW_DASHBOARD_THEME__", fallback_theme)
+        .replace("__LIBRE_CLAW_DASHBOARD_CSS__", DASHBOARD_CSS)
+    )
 
 
 _DASHBOARD_HTML = r"""<!doctype html>
@@ -39,1442 +43,28 @@ _DASHBOARD_HTML = r"""<!doctype html>
       document.documentElement.dataset.theme = value;
     })();
   </script>
-  <style>
-    :root {
-      color-scheme: dark light;
-      --font-ui: "Satoshi", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "Jetbrains Mono", "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #0b1020;
-      --surface: #111827;
-      --surface-2: #1f2937;
-      --panel: rgba(17, 24, 39, 0.86);
-      --panel-strong: rgba(31, 41, 55, 0.94);
-      --panel-hover: rgba(255, 92, 92, 0.08);
-      --line: rgba(255, 255, 255, 0.11);
-      --line-strong: rgba(255, 255, 255, 0.18);
-      --text: #e4e4e7;
-      --soft: #e4e4e7;
-      --muted: #a1a1aa;
-      --accent: #ff5c5c;
-      --accent-soft: rgba(255, 92, 92, 0.15);
-      --accent-strong: #fecaca;
-      --tool-accent: #3b82f6;
-      --tool-soft: rgba(59, 130, 246, 0.14);
-      --danger: #ff5c5c;
-      --danger-soft: rgba(255, 92, 92, 0.14);
-      --ok: #22c55e;
-      --ok-soft: rgba(34, 197, 94, 0.13);
-      --warn: #f59e0b;
-      --warn-soft: rgba(245, 158, 11, 0.13);
-      --grid-dot: rgba(255, 255, 255, 0.12);
-      --shadow: 0 26px 80px rgba(0, 0, 0, 0.5);
-      --radius: 8px;
-    }
-    html[data-theme="lobster-light"] {
-      color-scheme: light;
-      --font-ui: "Satoshi", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "Jetbrains Mono", "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #fdf6e3;
-      --surface: #fffaf0;
-      --surface-2: #eee8d5;
-      --panel: rgba(255, 250, 240, 0.9);
-      --panel-strong: #fffaf0;
-      --panel-hover: rgba(255, 92, 92, 0.08);
-      --line: rgba(101, 123, 131, 0.18);
-      --line-strong: rgba(101, 123, 131, 0.3);
-      --text: #073642;
-      --soft: #586e75;
-      --muted: #657b83;
-      --accent: #ff5c5c;
-      --accent-soft: rgba(255, 92, 92, 0.14);
-      --accent-strong: #b91c1c;
-      --tool-accent: #268bd2;
-      --tool-soft: rgba(38, 139, 210, 0.12);
-      --danger: #dc322f;
-      --danger-soft: rgba(220, 50, 47, 0.1);
-      --ok: #859900;
-      --ok-soft: rgba(133, 153, 0, 0.1);
-      --warn: #b58900;
-      --warn-soft: rgba(181, 137, 0, 0.1);
-      --grid-dot: rgba(255, 92, 92, 0.11);
-      --shadow: 0 22px 70px rgba(101, 123, 131, 0.14);
-    }
-    html[data-theme="github-dark"] {
-      color-scheme: dark;
-      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-      --bg: #0d1117;
-      --surface: #0d1117;
-      --surface-2: #161b22;
-      --panel: rgba(22, 27, 34, 0.88);
-      --panel-strong: #161b22;
-      --panel-hover: rgba(56, 139, 253, 0.1);
-      --line: rgba(139, 148, 158, 0.22);
-      --line-strong: rgba(201, 209, 217, 0.32);
-      --text: #f0f6fc;
-      --soft: #c9d1d9;
-      --muted: #8b949e;
-      --accent: #2f81f7;
-      --accent-soft: rgba(47, 129, 247, 0.16);
-      --accent-strong: #79c0ff;
-      --tool-accent: #a5d6ff;
-      --tool-soft: rgba(165, 214, 255, 0.12);
-      --danger: #f85149;
-      --danger-soft: rgba(248, 81, 73, 0.14);
-      --ok: #3fb950;
-      --ok-soft: rgba(63, 185, 80, 0.14);
-      --warn: #d29922;
-      --warn-soft: rgba(210, 153, 34, 0.14);
-      --grid-dot: rgba(121, 192, 255, 0.12);
-      --shadow: 0 26px 80px rgba(1, 4, 9, 0.56);
-    }
-    html[data-theme="github-light"] {
-      color-scheme: light;
-      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-      --bg: #f6f8fa;
-      --surface: #ffffff;
-      --surface-2: #f6f8fa;
-      --panel: rgba(255, 255, 255, 0.9);
-      --panel-strong: #ffffff;
-      --panel-hover: rgba(9, 105, 218, 0.08);
-      --line: rgba(31, 35, 40, 0.14);
-      --line-strong: rgba(31, 35, 40, 0.24);
-      --text: #1f2328;
-      --soft: #24292f;
-      --muted: #656d76;
-      --accent: #0969da;
-      --accent-soft: rgba(9, 105, 218, 0.12);
-      --accent-strong: #0550ae;
-      --tool-accent: #8250df;
-      --tool-soft: rgba(130, 80, 223, 0.1);
-      --danger: #cf222e;
-      --danger-soft: rgba(207, 34, 46, 0.1);
-      --ok: #1a7f37;
-      --ok-soft: rgba(26, 127, 55, 0.1);
-      --warn: #9a6700;
-      --warn-soft: rgba(154, 103, 0, 0.12);
-      --grid-dot: rgba(9, 105, 218, 0.12);
-      --shadow: 0 22px 70px rgba(31, 35, 40, 0.12);
-    }
-    html[data-theme="monokai-pro"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "Avenir Next", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "JetBrains Mono", "Fira Code", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #19181a;
-      --surface: #221f22;
-      --surface-2: #2d2a2e;
-      --panel: rgba(45, 42, 46, 0.88);
-      --panel-strong: #2d2a2e;
-      --panel-hover: rgba(255, 97, 136, 0.1);
-      --line: rgba(252, 252, 250, 0.12);
-      --line-strong: rgba(252, 252, 250, 0.22);
-      --text: #fcfcfa;
-      --soft: #e5e1dc;
-      --muted: #939293;
-      --accent: #ff6188;
-      --accent-soft: rgba(255, 97, 136, 0.16);
-      --accent-strong: #ffd866;
-      --tool-accent: #78dce8;
-      --tool-soft: rgba(120, 220, 232, 0.14);
-      --danger: #ff6188;
-      --danger-soft: rgba(255, 97, 136, 0.13);
-      --ok: #a9dc76;
-      --ok-soft: rgba(169, 220, 118, 0.14);
-      --warn: #ffd866;
-      --warn-soft: rgba(255, 216, 102, 0.13);
-      --grid-dot: rgba(255, 216, 102, 0.13);
-      --shadow: 0 28px 86px rgba(0, 0, 0, 0.54);
-    }
-    html[data-theme="night-owl"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "Nunito Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "Dank Mono", "Operator Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #011627;
-      --surface: #061d32;
-      --surface-2: #0b2942;
-      --panel: rgba(6, 29, 50, 0.88);
-      --panel-strong: #0b2942;
-      --panel-hover: rgba(130, 170, 255, 0.11);
-      --line: rgba(127, 219, 202, 0.16);
-      --line-strong: rgba(127, 219, 202, 0.28);
-      --text: #d6deeb;
-      --soft: #c5e4fd;
-      --muted: #637777;
-      --accent: #82aaff;
-      --accent-soft: rgba(130, 170, 255, 0.16);
-      --accent-strong: #addb67;
-      --tool-accent: #7fdbca;
-      --tool-soft: rgba(127, 219, 202, 0.14);
-      --danger: #ef5350;
-      --danger-soft: rgba(239, 83, 80, 0.14);
-      --ok: #addb67;
-      --ok-soft: rgba(173, 219, 103, 0.14);
-      --warn: #ecc48d;
-      --warn-soft: rgba(236, 196, 141, 0.14);
-      --grid-dot: rgba(127, 219, 202, 0.12);
-      --shadow: 0 28px 90px rgba(0, 8, 20, 0.62);
-    }
-    html[data-theme="tokyo-night"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "IBM Plex Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "Cascadia Code", "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #1a1b26;
-      --surface: #1f2335;
-      --surface-2: #24283b;
-      --panel: rgba(36, 40, 59, 0.88);
-      --panel-strong: #24283b;
-      --panel-hover: rgba(122, 162, 247, 0.11);
-      --line: rgba(86, 95, 137, 0.26);
-      --line-strong: rgba(169, 177, 214, 0.3);
-      --text: #c0caf5;
-      --soft: #a9b1d6;
-      --muted: #565f89;
-      --accent: #7aa2f7;
-      --accent-soft: rgba(122, 162, 247, 0.16);
-      --accent-strong: #bb9af7;
-      --tool-accent: #7dcfff;
-      --tool-soft: rgba(125, 207, 255, 0.14);
-      --danger: #f7768e;
-      --danger-soft: rgba(247, 118, 142, 0.14);
-      --ok: #9ece6a;
-      --ok-soft: rgba(158, 206, 106, 0.14);
-      --warn: #e0af68;
-      --warn-soft: rgba(224, 175, 104, 0.14);
-      --grid-dot: rgba(122, 162, 247, 0.12);
-      --shadow: 0 28px 90px rgba(0, 0, 0, 0.52);
-    }
-    html[data-theme="ayu"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "Helvetica Neue", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "Fira Code", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #0b0e14;
-      --surface: #11151c;
-      --surface-2: #1f2430;
-      --panel: rgba(31, 36, 48, 0.88);
-      --panel-strong: #1f2430;
-      --panel-hover: rgba(255, 180, 84, 0.1);
-      --line: rgba(183, 192, 210, 0.14);
-      --line-strong: rgba(183, 192, 210, 0.24);
-      --text: #e6e1cf;
-      --soft: #d9d7ce;
-      --muted: #b3b1ad;
-      --accent: #ffb454;
-      --accent-soft: rgba(255, 180, 84, 0.16);
-      --accent-strong: #ffd580;
-      --tool-accent: #59c2ff;
-      --tool-soft: rgba(89, 194, 255, 0.13);
-      --danger: #f07178;
-      --danger-soft: rgba(240, 113, 120, 0.14);
-      --ok: #aad94c;
-      --ok-soft: rgba(170, 217, 76, 0.14);
-      --warn: #ffb454;
-      --warn-soft: rgba(255, 180, 84, 0.14);
-      --grid-dot: rgba(255, 180, 84, 0.12);
-      --shadow: 0 28px 90px rgba(0, 0, 0, 0.58);
-    }
-    html[data-theme="dracula"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "Nunito Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "JetBrains Mono", "Fira Code", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #282a36;
-      --surface: #21222c;
-      --surface-2: #282a36;
-      --panel: rgba(40, 42, 54, 0.9);
-      --panel-strong: #343746;
-      --panel-hover: rgba(189, 147, 249, 0.12);
-      --line: rgba(248, 248, 242, 0.14);
-      --line-strong: rgba(248, 248, 242, 0.26);
-      --text: #f8f8f2;
-      --soft: #e6e6dc;
-      --muted: #b7b7c9;
-      --accent: #bd93f9;
-      --accent-soft: rgba(189, 147, 249, 0.18);
-      --accent-strong: #ff79c6;
-      --tool-accent: #8be9fd;
-      --tool-soft: rgba(139, 233, 253, 0.14);
-      --danger: #ff5555;
-      --danger-soft: rgba(255, 85, 85, 0.14);
-      --ok: #50fa7b;
-      --ok-soft: rgba(80, 250, 123, 0.12);
-      --warn: #f1fa8c;
-      --warn-soft: rgba(241, 250, 140, 0.12);
-      --grid-dot: rgba(189, 147, 249, 0.14);
-      --shadow: 0 28px 90px rgba(0, 0, 0, 0.5);
-    }
-    html[data-theme="catppuccin-mocha"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "Manrope", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #1e1e2e;
-      --surface: #181825;
-      --surface-2: #1e1e2e;
-      --panel: rgba(30, 30, 46, 0.9);
-      --panel-strong: #313244;
-      --panel-hover: rgba(203, 166, 247, 0.12);
-      --line: rgba(205, 214, 244, 0.14);
-      --line-strong: rgba(205, 214, 244, 0.26);
-      --text: #cdd6f4;
-      --soft: #bac2de;
-      --muted: #9399b2;
-      --accent: #cba6f7;
-      --accent-soft: rgba(203, 166, 247, 0.17);
-      --accent-strong: #89b4fa;
-      --tool-accent: #94e2d5;
-      --tool-soft: rgba(148, 226, 213, 0.13);
-      --danger: #f38ba8;
-      --danger-soft: rgba(243, 139, 168, 0.14);
-      --ok: #a6e3a1;
-      --ok-soft: rgba(166, 227, 161, 0.13);
-      --warn: #f9e2af;
-      --warn-soft: rgba(249, 226, 175, 0.12);
-      --grid-dot: rgba(203, 166, 247, 0.13);
-      --shadow: 0 28px 90px rgba(0, 0, 0, 0.54);
-    }
-    html[data-theme="catppuccin-latte"] {
-      color-scheme: light;
-      --font-ui: "Inter", "Manrope", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #eff1f5;
-      --surface: #ffffff;
-      --surface-2: #e6e9ef;
-      --panel: rgba(255, 255, 255, 0.9);
-      --panel-strong: #ffffff;
-      --panel-hover: rgba(136, 57, 239, 0.08);
-      --line: rgba(76, 79, 105, 0.15);
-      --line-strong: rgba(76, 79, 105, 0.26);
-      --text: #4c4f69;
-      --soft: #5c5f77;
-      --muted: #7c7f93;
-      --accent: #8839ef;
-      --accent-soft: rgba(136, 57, 239, 0.12);
-      --accent-strong: #1e66f5;
-      --tool-accent: #179299;
-      --tool-soft: rgba(23, 146, 153, 0.1);
-      --danger: #d20f39;
-      --danger-soft: rgba(210, 15, 57, 0.1);
-      --ok: #40a02b;
-      --ok-soft: rgba(64, 160, 43, 0.1);
-      --warn: #df8e1d;
-      --warn-soft: rgba(223, 142, 29, 0.1);
-      --grid-dot: rgba(136, 57, 239, 0.1);
-      --shadow: 0 22px 70px rgba(76, 79, 105, 0.14);
-    }
-    html[data-theme="gruvbox-dark"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "Atkinson Hyperlegible", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "Iosevka", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #1d2021;
-      --surface: #282828;
-      --surface-2: #32302f;
-      --panel: rgba(40, 40, 40, 0.9);
-      --panel-strong: #3c3836;
-      --panel-hover: rgba(250, 189, 47, 0.1);
-      --line: rgba(251, 241, 199, 0.14);
-      --line-strong: rgba(251, 241, 199, 0.25);
-      --text: #fbf1c7;
-      --soft: #ebdbb2;
-      --muted: #a89984;
-      --accent: #fabd2f;
-      --accent-soft: rgba(250, 189, 47, 0.16);
-      --accent-strong: #fe8019;
-      --tool-accent: #83a598;
-      --tool-soft: rgba(131, 165, 152, 0.13);
-      --danger: #fb4934;
-      --danger-soft: rgba(251, 73, 52, 0.14);
-      --ok: #b8bb26;
-      --ok-soft: rgba(184, 187, 38, 0.13);
-      --warn: #fabd2f;
-      --warn-soft: rgba(250, 189, 47, 0.13);
-      --grid-dot: rgba(250, 189, 47, 0.12);
-      --shadow: 0 28px 90px rgba(0, 0, 0, 0.52);
-    }
-    html[data-theme="nord"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "IBM Plex Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "Cascadia Code", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #2e3440;
-      --surface: #3b4252;
-      --surface-2: #434c5e;
-      --panel: rgba(59, 66, 82, 0.9);
-      --panel-strong: #434c5e;
-      --panel-hover: rgba(136, 192, 208, 0.11);
-      --line: rgba(216, 222, 233, 0.16);
-      --line-strong: rgba(216, 222, 233, 0.28);
-      --text: #eceff4;
-      --soft: #d8dee9;
-      --muted: #aeb8c4;
-      --accent: #88c0d0;
-      --accent-soft: rgba(136, 192, 208, 0.16);
-      --accent-strong: #8fbcbb;
-      --tool-accent: #81a1c1;
-      --tool-soft: rgba(129, 161, 193, 0.14);
-      --danger: #bf616a;
-      --danger-soft: rgba(191, 97, 106, 0.14);
-      --ok: #a3be8c;
-      --ok-soft: rgba(163, 190, 140, 0.14);
-      --warn: #ebcb8b;
-      --warn-soft: rgba(235, 203, 139, 0.13);
-      --grid-dot: rgba(136, 192, 208, 0.13);
-      --shadow: 0 28px 90px rgba(20, 24, 31, 0.55);
-    }
-    html[data-theme="solarized-dark"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "Source Sans 3", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "Source Code Pro", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #002b36;
-      --surface: #073642;
-      --surface-2: #0b3a46;
-      --panel: rgba(7, 54, 66, 0.9);
-      --panel-strong: #073642;
-      --panel-hover: rgba(38, 139, 210, 0.12);
-      --line: rgba(147, 161, 161, 0.22);
-      --line-strong: rgba(238, 232, 213, 0.28);
-      --text: #eee8d5;
-      --soft: #d7d1bd;
-      --muted: #839496;
-      --accent: #268bd2;
-      --accent-soft: rgba(38, 139, 210, 0.17);
-      --accent-strong: #2aa198;
-      --tool-accent: #b58900;
-      --tool-soft: rgba(181, 137, 0, 0.14);
-      --danger: #dc322f;
-      --danger-soft: rgba(220, 50, 47, 0.14);
-      --ok: #859900;
-      --ok-soft: rgba(133, 153, 0, 0.14);
-      --warn: #b58900;
-      --warn-soft: rgba(181, 137, 0, 0.13);
-      --grid-dot: rgba(42, 161, 152, 0.13);
-      --shadow: 0 28px 90px rgba(0, 18, 24, 0.6);
-    }
-    html[data-theme="solarized-light"] {
-      color-scheme: light;
-      --font-ui: "Inter", "Source Sans 3", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "Source Code Pro", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #fdf6e3;
-      --surface: #fffaf0;
-      --surface-2: #eee8d5;
-      --panel: rgba(255, 250, 240, 0.9);
-      --panel-strong: #fffaf0;
-      --panel-hover: rgba(38, 139, 210, 0.08);
-      --line: rgba(101, 123, 131, 0.18);
-      --line-strong: rgba(101, 123, 131, 0.3);
-      --text: #073642;
-      --soft: #586e75;
-      --muted: #657b83;
-      --accent: #268bd2;
-      --accent-soft: rgba(38, 139, 210, 0.12);
-      --accent-strong: #2aa198;
-      --tool-accent: #b58900;
-      --tool-soft: rgba(181, 137, 0, 0.1);
-      --danger: #dc322f;
-      --danger-soft: rgba(220, 50, 47, 0.1);
-      --ok: #859900;
-      --ok-soft: rgba(133, 153, 0, 0.1);
-      --warn: #b58900;
-      --warn-soft: rgba(181, 137, 0, 0.1);
-      --grid-dot: rgba(38, 139, 210, 0.1);
-      --shadow: 0 22px 70px rgba(101, 123, 131, 0.14);
-    }
-    html[data-theme="one-dark-pro"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "Segoe UI", ui-sans-serif, -apple-system, BlinkMacSystemFont, sans-serif;
-      --font-mono: "Cascadia Code", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #21252b;
-      --surface: #282c34;
-      --surface-2: #2c313a;
-      --panel: rgba(40, 44, 52, 0.9);
-      --panel-strong: #2c313a;
-      --panel-hover: rgba(97, 175, 239, 0.11);
-      --line: rgba(171, 178, 191, 0.16);
-      --line-strong: rgba(171, 178, 191, 0.28);
-      --text: #abb2bf;
-      --soft: #d7dae0;
-      --muted: #7f848e;
-      --accent: #61afef;
-      --accent-soft: rgba(97, 175, 239, 0.16);
-      --accent-strong: #c678dd;
-      --tool-accent: #56b6c2;
-      --tool-soft: rgba(86, 182, 194, 0.14);
-      --danger: #e06c75;
-      --danger-soft: rgba(224, 108, 117, 0.14);
-      --ok: #98c379;
-      --ok-soft: rgba(152, 195, 121, 0.14);
-      --warn: #e5c07b;
-      --warn-soft: rgba(229, 192, 123, 0.13);
-      --grid-dot: rgba(97, 175, 239, 0.12);
-      --shadow: 0 28px 90px rgba(0, 0, 0, 0.52);
-    }
-    html[data-theme="rose-pine"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "Avenir Next", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "Cartograph CF", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #191724;
-      --surface: #1f1d2e;
-      --surface-2: #26233a;
-      --panel: rgba(31, 29, 46, 0.9);
-      --panel-strong: #26233a;
-      --panel-hover: rgba(196, 167, 231, 0.11);
-      --line: rgba(224, 222, 244, 0.13);
-      --line-strong: rgba(224, 222, 244, 0.24);
-      --text: #e0def4;
-      --soft: #d9d4ee;
-      --muted: #908caa;
-      --accent: #c4a7e7;
-      --accent-soft: rgba(196, 167, 231, 0.16);
-      --accent-strong: #ebbcba;
-      --tool-accent: #9ccfd8;
-      --tool-soft: rgba(156, 207, 216, 0.13);
-      --danger: #eb6f92;
-      --danger-soft: rgba(235, 111, 146, 0.14);
-      --ok: #31748f;
-      --ok-soft: rgba(49, 116, 143, 0.16);
-      --warn: #f6c177;
-      --warn-soft: rgba(246, 193, 119, 0.13);
-      --grid-dot: rgba(196, 167, 231, 0.12);
-      --shadow: 0 28px 90px rgba(0, 0, 0, 0.54);
-    }
-    html[data-theme="kanagawa"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "Hiragino Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #1f1f28;
-      --surface: #16161d;
-      --surface-2: #2a2a37;
-      --panel: rgba(31, 31, 40, 0.9);
-      --panel-strong: #2a2a37;
-      --panel-hover: rgba(126, 156, 216, 0.11);
-      --line: rgba(220, 215, 186, 0.14);
-      --line-strong: rgba(220, 215, 186, 0.26);
-      --text: #dcd7ba;
-      --soft: #c8c093;
-      --muted: #727169;
-      --accent: #7e9cd8;
-      --accent-soft: rgba(126, 156, 216, 0.17);
-      --accent-strong: #957fb8;
-      --tool-accent: #7aa89f;
-      --tool-soft: rgba(122, 168, 159, 0.14);
-      --danger: #c34043;
-      --danger-soft: rgba(195, 64, 67, 0.14);
-      --ok: #76946a;
-      --ok-soft: rgba(118, 148, 106, 0.14);
-      --warn: #c0a36e;
-      --warn-soft: rgba(192, 163, 110, 0.13);
-      --grid-dot: rgba(126, 156, 216, 0.13);
-      --shadow: 0 28px 90px rgba(0, 0, 0, 0.55);
-    }
-    html[data-theme="matrix"] {
-      color-scheme: dark;
-      --font-ui: "Inter", "IBM Plex Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --font-mono: "IBM Plex Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-      --bg: #000000;
-      --surface: #020604;
-      --surface-2: #06100a;
-      --panel: rgba(2, 10, 5, 0.9);
-      --panel-strong: #07150b;
-      --panel-hover: rgba(0, 255, 65, 0.1);
-      --line: rgba(0, 255, 65, 0.2);
-      --line-strong: rgba(0, 255, 65, 0.34);
-      --text: #d7ffe1;
-      --soft: #a7ffbd;
-      --muted: #48a868;
-      --accent: #00ff41;
-      --accent-soft: rgba(0, 255, 65, 0.16);
-      --accent-strong: #7cff9b;
-      --tool-accent: #00d084;
-      --tool-soft: rgba(0, 208, 132, 0.14);
-      --danger: #ff4757;
-      --danger-soft: rgba(255, 71, 87, 0.14);
-      --ok: #00ff41;
-      --ok-soft: rgba(0, 255, 65, 0.14);
-      --warn: #baff39;
-      --warn-soft: rgba(186, 255, 57, 0.13);
-      --grid-dot: rgba(0, 255, 65, 0.16);
-      --shadow: 0 28px 90px rgba(0, 0, 0, 0.68);
-    }
-    html[data-theme="harness"] {
-      color-scheme: dark;
-      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Helvetica, Arial, sans-serif;
-      --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, Menlo, monospace;
-      --bg: #151517;
-      --surface: #1b1b1c;
-      --surface-2: #232324;
-      --panel: #1b1b1c;
-      --panel-strong: #2c2c2e;
-      --panel-hover: rgba(255, 255, 255, 0.08);
-      --line: rgba(255, 255, 255, 0.1);
-      --line-strong: rgba(255, 255, 255, 0.16);
-      --text: #f9fafb;
-      --soft: #cfd3d6;
-      --muted: #adb2b8;
-      --accent: #5686fe;
-      --accent-soft: rgba(86, 134, 254, 0.16);
-      --accent-strong: #b7c8fe;
-      --tool-accent: #679efe;
-      --tool-soft: rgba(103, 158, 254, 0.14);
-      --danger: #f25a5a;
-      --danger-soft: rgba(242, 90, 90, 0.15);
-      --ok: #22c55e;
-      --ok-soft: rgba(34, 197, 94, 0.13);
-      --warn: #f59e0b;
-      --warn-soft: rgba(245, 158, 11, 0.13);
-      --grid-dot: transparent;
-      --shadow: 0 0 1px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.32);
-      --sidebar-fill: #1b1b1c;
-      --canvas: #151517;
-    }
-    html[data-theme="harness-light"] {
-      color-scheme: light;
-      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Helvetica, Arial, sans-serif;
-      --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, Menlo, monospace;
-      --bg: #ffffff;
-      --surface: #ffffff;
-      --surface-2: #f5f6f7;
-      --panel: #ffffff;
-      --panel-strong: #ffffff;
-      --panel-hover: rgba(38, 49, 72, 0.06);
-      --line: rgba(0, 0, 0, 0.1);
-      --line-strong: rgba(0, 0, 0, 0.16);
-      --text: #0f1115;
-      --soft: #61666b;
-      --muted: #81858c;
-      --accent: #4176e6;
-      --accent-soft: rgba(65, 118, 230, 0.14);
-      --accent-strong: #2f4c8f;
-      --tool-accent: #4176e6;
-      --tool-soft: rgba(65, 118, 230, 0.12);
-      --danger: #ec1313;
-      --danger-soft: rgba(236, 19, 19, 0.08);
-      --ok: #22c55e;
-      --ok-soft: rgba(34, 197, 94, 0.12);
-      --warn: #f59e0b;
-      --warn-soft: rgba(245, 158, 11, 0.12);
-      --grid-dot: transparent;
-      --shadow: 0 0 1px rgba(0, 0, 0, 0.2), 0 12px 32px rgba(0, 0, 0, 0.08);
-      --sidebar-fill: #f9fafb;
-      --canvas: #ffffff;
-    }
-    * { box-sizing: border-box; }
-    html {
-      background: var(--sidebar-fill, var(--bg));
-      overflow-x: clip;
-      text-rendering: optimizeLegibility;
-      -webkit-font-smoothing: antialiased;
-    }
-    body {
-      margin: 0;
-      background: var(--sidebar-fill, var(--bg));
-      color: var(--text);
-      min-height: 100vh;
-      overflow-x: clip;
-      font-size: 14px;
-      line-height: 1.5;
-      font-family: var(--font-ui);
-    }
-    button, input, textarea, select { font: inherit; color: inherit; }
-    button { cursor: pointer; border: none; background: transparent; padding: 0; }
-    button:disabled { cursor: not-allowed; opacity: .48; }
-    a { color: var(--accent-strong); text-decoration: none; }
-    a:hover { text-decoration: underline; text-underline-offset: 3px; }
-    button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; }
-
-    /* ------ App frame: sidebar column + inset conversation panel ------ */
-    .app {
-      display: grid;
-      grid-template-columns: 288px minmax(0, 1fr);
-      height: 100vh;
-      overflow: clip;
-    }
-    .app.rail { grid-template-columns: 64px minmax(0, 1fr); }
-
-    /* ------ Sidebar ------ */
-    .sidebar {
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      padding: 6px 12px;
-      background: var(--sidebar-fill, var(--bg));
-      border-inline-end: 1px solid var(--line);
-    }
-    .logo-row {
-      flex: none;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      height: 56px;
-      padding: 8px 0 8px 4px;
-      margin-bottom: 8px;
-    }
-    .brand {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
-      font-weight: 650;
-      font-size: 15px;
-      letter-spacing: -0.01em;
-      cursor: pointer;
-      color: var(--text);
-    }
-    .brand .logo-wrap { font-size: 22px; line-height: 1; }
-    .brand .harness-tag {
-      padding: 2px 6px;
-      border-radius: 6px;
-      background: var(--text);
-      color: var(--sidebar-fill, var(--bg));
-      font-family: var(--font-mono);
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: .08em;
-    }
-    .icon-btn {
-      flex: none;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 28px;
-      height: 28px;
-      border-radius: 999px;
-      color: var(--soft);
-      transition: background .16s ease, color .16s ease;
-    }
-    .icon-btn:hover { background: var(--panel-hover); color: var(--text); }
-    .icon-btn svg { width: 16px; height: 16px; }
-    .new-session {
-      flex: none;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      height: 38px;
-      margin: 0 2px 8px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: var(--panel-strong);
-      color: var(--text);
-      font-size: 14px;
-      font-weight: 500;
-      transition: background .16s ease;
-    }
-    .new-session:hover { background: var(--panel-hover); }
-    .section-label {
-      flex: none;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      height: 28px;
-      padding: 0 6px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 500;
-    }
-    .section-label .filters { display: inline-flex; align-items: center; gap: 4px; }
-    .filter-row { flex: none; display: grid; gap: 6px; padding: 0 2px 8px; }
-    .filter-row input[type="search"], .filter-row select {
-      height: 30px;
-      border: none;
-      border-radius: 10px;
-      background: var(--panel-hover);
-      padding: 0 10px;
-      font-size: 12px;
-      color: var(--text);
-      outline: none;
-      width: 100%;
-      min-width: 0;
-    }
-    .runs {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      margin: 0 -4px;
-      padding: 0 4px;
-    }
-    .run-item {
-      flex: none;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      height: 32px;
-      padding: 0 8px;
-      border-radius: 8px;
-      text-align: start;
-      color: var(--text);
-      transition: background .12s ease;
-    }
-    .run-item:hover, .run-item.active { background: var(--panel-hover); }
-    .run-item .state-dot { flex: none; width: 8px; height: 8px; border-radius: 999px; background: var(--muted); }
-    .run-item .state-dot.running, .run-item .state-dot.queued { background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
-    .run-item .state-dot.blocked { background: var(--warn); animation: pulse 1.6s ease-in-out infinite; }
-    .run-item .state-dot.done { background: var(--ok); }
-    .run-item .state-dot.failed, .run-item .state-dot.cancelled { background: var(--danger); }
-    @keyframes pulse { 50% { opacity: .45; } }
-    .run-title {
-      flex: 1;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 14px;
-    }
-    .run-time { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-    .empty { padding: 20px 8px; color: var(--muted); font-size: 13px; text-align: center; }
-    .side-foot { flex: none; border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }
-    .side-foot-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      width: 100%;
-      height: 34px;
-      padding: 0 10px;
-      border-radius: 12px;
-      color: var(--text);
-      font-size: 14px;
-      text-align: start;
-      transition: background .16s ease;
-    }
-    .side-foot-row:hover { background: var(--panel-hover); }
-    .side-foot-row svg { width: 16px; height: 16px; color: var(--soft); flex: none; }
-    .side-foot-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .side-foot-row .tiny { font-size: 11px; color: var(--muted); }
-    .status-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--muted); flex: none; }
-    .status-dot.online { background: var(--ok); }
-    .status-dot.offline { background: var(--danger); }
-
-    /* Rail (collapsed sidebar) */
-    .app.rail .sidebar { padding: 14px 10px 6px; align-items: center; }
-    .app.rail .logo-row { height: 36px; padding: 0; margin-bottom: 12px; justify-content: center; }
-    .app.rail .brand span:not(.logo-wrap), .app.rail .harness-tag { display: none; }
-    .app.rail .logo-row .icon-btn { display: none; }
-    .app.rail .new-session { width: 36px; height: 36px; padding: 0; margin: 0 0 12px; border-color: transparent; background: transparent; }
-    .app.rail .new-session:hover { background: var(--panel-hover); }
-    .app.rail .new-session span { display: none; }
-    .app.rail .section-label, .app.rail .filter-row, .app.rail .runs .run-title, .app.rail .runs .run-time { display: none; }
-    .app.rail .runs { align-items: center; }
-    .app.rail .run-item { width: 36px; justify-content: center; padding: 0; }
-    .app.rail .side-foot { display: flex; flex-direction: column; align-items: center; }
-    .app.rail .side-foot-row { width: 36px; height: 36px; justify-content: center; padding: 0; border-radius: 999px; }
-    .app.rail .side-foot-row .grow, .app.rail .side-foot-row .tiny { display: none; }
-
-    /* ------ Main conversation panel ------ */
-    .main {
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-      min-height: 0;
-      margin: 8px 8px 8px 0;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: var(--canvas, var(--surface));
-      overflow: clip;
-    }
-    .main-head {
-      flex: none;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      min-height: 52px;
-      padding: 10px 14px 0;
-    }
-    .main-head h1 {
-      margin: 0;
-      flex: 1;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 15px;
-      font-weight: 600;
-    }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      height: 26px;
-      padding: 0 10px;
-      border-radius: 999px;
-      background: var(--panel-hover);
-      color: var(--soft);
-      font-size: 12px;
-      font-weight: 500;
-      white-space: nowrap;
-    }
-    .pill.running, .pill.queued { background: var(--accent-soft); color: var(--accent-strong); }
-    .pill.blocked { background: var(--warn-soft); color: var(--warn); }
-    .pill.done, .pill.active { background: var(--ok-soft); color: var(--ok); }
-    .pill.failed, .pill.cancelled, .pill.paused { background: var(--danger-soft); color: var(--danger); }
-    .pill-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      height: 30px;
-      padding: 0 12px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: var(--surface);
-      color: var(--text);
-      font-size: 12px;
-      font-weight: 500;
-      white-space: nowrap;
-      transition: background .16s ease;
-    }
-    .pill-btn:hover { background: var(--panel-hover); }
-    .pill-btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
-    .pill-btn.danger:hover { background: var(--danger-soft); }
-    .view-tabs {
-      flex: none;
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      padding: 4px 16px 0;
-      border-bottom: 1px solid var(--line);
-    }
-    .view-tab {
-      position: relative;
-      padding: 8px 2px 10px;
-      color: var(--muted);
-      font-size: 13px;
-      font-weight: 500;
-      transition: color .16s ease;
-    }
-    .view-tab:hover { color: var(--text); }
-    .view-tab.active { color: var(--text); }
-    .view-tab.active::after {
-      content: "";
-      position: absolute;
-      inset-inline: 0;
-      bottom: -1px;
-      height: 2px;
-      border-radius: 2px;
-      background: var(--text);
-    }
-    .view-tabs .spacer { flex: 1; }
-    .view-tabs select {
-      height: 26px;
-      border: none;
-      border-radius: 999px;
-      background: var(--panel-hover);
-      padding: 0 10px;
-      font-size: 12px;
-      color: var(--soft);
-      outline: none;
-      margin-bottom: 6px;
-    }
-    .view-tabs .tiny { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
-    .conversation {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      padding: 18px clamp(14px, 6vw, 72px) 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
-    .msg-user { display: flex; justify-content: flex-end; }
-    .msg-user > div {
-      max-width: 82%;
-      border-radius: 16px 16px 4px 16px;
-      background: var(--accent-soft);
-      color: var(--text);
-      padding: 10px 14px;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-    }
-    .msg-assistant { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
-    .msg-tool {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: var(--surface);
-      padding: 10px 12px;
-    }
-    .msg-tool summary, .msg-tool .tool-head {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: var(--soft);
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      list-style: none;
-    }
-    .msg-tool summary::-webkit-details-marker { display: none; }
-    .msg-tool .tool-name { font-family: var(--font-mono); color: var(--tool-accent); }
-    .msg-tool.is-error .tool-name { color: var(--danger); }
-    .msg-tool pre {
-      margin: 0;
-      padding: 8px 10px;
-      border-radius: 8px;
-      background: var(--surface-2);
-      font-family: var(--font-mono);
-      font-size: 11.5px;
-      line-height: 1.55;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      max-height: 320px;
-      overflow-y: auto;
-    }
-    .msg-note { color: var(--muted); font-size: 12px; text-align: center; }
-    .msg-error {
-      border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line));
-      background: var(--danger-soft);
-      border-radius: 12px;
-      padding: 10px 12px;
-      font-size: 13px;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-    }
-    .event {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: var(--surface);
-      padding: 10px 12px;
-      display: grid;
-      gap: 6px;
-    }
-    .event.is-error { border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); background: var(--danger-soft); }
-    .event-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-    .event-type { font-size: 12px; font-weight: 600; color: var(--soft); }
-    .event-time { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .event pre {
-      margin: 0;
-      font-family: var(--font-mono);
-      font-size: 11.5px;
-      line-height: 1.55;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      max-height: 340px;
-      overflow-y: auto;
-    }
-    .composer-zone { flex: none; padding: 4px clamp(14px, 6vw, 72px) 4px; }
-    .approval {
-      border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--line));
-      background: var(--warn-soft);
-      border-radius: 14px;
-      padding: 12px;
-      display: grid;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-    .approval .event-type { color: var(--text); }
-    .approval pre {
-      margin: 0;
-      font-family: var(--font-mono);
-      font-size: 11.5px;
-      max-height: 160px;
-      overflow: auto;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-    }
-    .approval .row { display: flex; flex-wrap: wrap; gap: 6px; }
-    .approval .row button {
-      height: 28px;
-      padding: 0 12px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: var(--surface);
-      font-size: 12px;
-      font-weight: 500;
-    }
-    .approval .row button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .approval .row button.danger { color: var(--danger); }
-    .notice { display: none; padding: 0 4px 6px; font-size: 11px; color: var(--muted); }
-    .notice.visible { display: block; }
-    .notice.error { color: var(--danger); }
-    .composer {
-      border: 1px solid var(--line);
-      border-radius: 24px;
-      background: var(--surface);
-      box-shadow: var(--shadow);
-      padding: 10px;
-      transition: box-shadow .2s ease;
-    }
-    .composer textarea {
-      display: block;
-      width: 100%;
-      min-height: 34px;
-      max-height: 160px;
-      border: none;
-      background: transparent;
-      resize: none;
-      outline: none;
-      padding: 4px 8px 8px;
-      font-size: 14px;
-      line-height: 1.55;
-      color: var(--text);
-    }
-    .composer textarea::placeholder { color: var(--muted); }
-    .composer-controls { display: flex; align-items: center; gap: 6px; }
-    .composer-controls select, .composer-controls input {
-      height: 32px;
-      border: none;
-      border-radius: 999px;
-      background: var(--surface-2);
-      padding: 0 12px;
-      font-size: 12px;
-      color: var(--text);
-      outline: none;
-      min-width: 0;
-      transition: background .16s ease;
-    }
-    .composer-controls select:hover, .composer-controls input:hover { background: var(--panel-hover); }
-    .composer-controls input { width: 148px; font-family: var(--font-mono); font-size: 11.5px; }
-    .composer-controls .spacer { flex: 1; }
-    .send-btn {
-      flex: none;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 34px;
-      height: 34px;
-      border-radius: 999px;
-      background: var(--accent);
-      color: #fff;
-      transition: filter .16s ease;
-    }
-    .send-btn:hover { filter: brightness(1.12); }
-    .send-btn:disabled { background: var(--accent-soft); color: color-mix(in srgb, #ffffff 70%, transparent); }
-    .send-btn svg { width: 16px; height: 16px; }
-    .status-strip {
-      flex: none;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-wrap: wrap;
-      gap: 4px 10px;
-      padding: 4px 14px 8px;
-      color: var(--muted);
-      font-size: 11px;
-      font-variant-numeric: tabular-nums;
-    }
-    .status-strip .sep { opacity: .5; }
-
-    /* ------ Markdown rendering ------ */
-    .msg-md { line-height: 1.65; overflow-wrap: anywhere; }
-    .msg-md > :first-child { margin-top: 0; }
-    .msg-md > :last-child { margin-bottom: 0; }
-    .msg-md p { margin: 0 0 10px; }
-    .msg-md h3, .msg-md h4, .msg-md h5, .msg-md h6 { margin: 16px 0 8px; font-size: 15px; font-weight: 650; }
-    .msg-md h3 { font-size: 16px; }
-    .msg-md ul, .msg-md ol { margin: 0 0 10px; padding-inline-start: 22px; }
-    .msg-md li { margin: 2px 0; }
-    .msg-md a { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 3px; }
-    .msg-md a:hover { color: var(--text); }
-    .msg-md code {
-      padding: 1px 6px;
-      border-radius: 6px;
-      background: var(--surface-2);
-      font-family: var(--font-mono);
-      font-size: 12px;
-    }
-    .msg-md blockquote {
-      margin: 0 0 10px;
-      padding: 2px 0 2px 12px;
-      border-inline-start: 3px solid var(--line-strong);
-      color: var(--soft);
-    }
-    .msg-md hr { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
-    .table-wrap { overflow-x: auto; margin: 0 0 10px; }
-    .msg-md table, .usage-table { border-collapse: collapse; font-size: 12.5px; min-width: 50%; }
-    .msg-md th, .msg-md td, .usage-table th, .usage-table td {
-      border: 1px solid var(--line);
-      padding: 6px 10px;
-      text-align: start;
-    }
-    .msg-md th, .usage-table th { background: var(--surface-2); font-weight: 600; }
-    .code-block {
-      margin: 0 0 10px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      overflow: hidden;
-      background: var(--surface);
-    }
-    .code-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 5px 6px 5px 12px;
-      background: var(--surface-2);
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 11px;
-    }
-    .code-copy {
-      height: 22px;
-      padding: 0 10px;
-      border-radius: 999px;
-      background: var(--panel-hover);
-      color: var(--soft);
-      font-size: 11px;
-      transition: background .16s ease;
-    }
-    .code-copy:hover { background: var(--line); color: var(--text); }
-    .code-block pre {
-      margin: 0;
-      padding: 10px 12px;
-      overflow-x: auto;
-      font-family: var(--font-mono);
-      font-size: 12px;
-      line-height: 1.55;
-    }
-    .streaming-caret { display: inline-block; width: 7px; height: 15px; margin-inline-start: 2px; vertical-align: -2px; background: var(--accent); border-radius: 2px; animation: pulse 1s ease-in-out infinite; }
-    .model-chip {
-      height: 28px;
-      padding: 0 12px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: var(--surface);
-      font-family: var(--font-mono);
-      font-size: 12px;
-      transition: background .16s ease, border-color .16s ease;
-    }
-    .model-chip:hover { background: var(--accent-soft); border-color: var(--accent); }
-    .endpoint-row { display: flex; gap: 8px; align-items: center; }
-    .endpoint-row input {
-      flex: 1;
-      min-width: 0;
-      height: 34px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: var(--surface);
-      padding: 0 10px;
-      font-family: var(--font-mono);
-      font-size: 12.5px;
-      color: var(--text);
-      outline: none;
-    }
-    .endpoint-row input:focus { border-color: var(--accent); }
-    .usage-table-wrap { overflow-x: auto; margin-top: 10px; }
-    .usage-sub { margin: 16px 0 4px; font-size: 13px; font-weight: 600; color: var(--soft); }
-
-    /* ------ Settings modal (DSH panel) ------ */
-    .overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 100;
-      display: none;
-      align-items: center;
-      justify-content: center;
-    }
-    .overlay.open { display: flex; }
-    .overlay .mask { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(2px); }
-    .settings-panel {
-      position: relative;
-      z-index: 1;
-      display: flex;
-      width: min(860px, calc(100vw - 32px));
-      height: min(640px, calc(100vh - 48px));
-      border-radius: 24px;
-      overflow: hidden;
-      background: var(--panel-strong);
-      box-shadow: var(--shadow);
-    }
-    .settings-nav {
-      flex: none;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      width: 188px;
-      padding: 22px 12px 12px;
-    }
-    .settings-nav h2 { margin: 0 0 14px; padding: 0 12px; font-size: 16px; font-weight: 600; }
-    .settings-nav button {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      height: 40px;
-      padding: 0 12px;
-      border-radius: 12px;
-      color: var(--text);
-      font-size: 14px;
-      text-align: start;
-      transition: background .16s ease;
-    }
-    .settings-nav button:hover { background: var(--panel-hover); }
-    .settings-nav button.active { background: var(--panel-hover); }
-    .settings-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-    .settings-head { flex: none; display: flex; justify-content: flex-end; padding: 16px 14px 4px; }
-    .settings-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 24px 24px; }
-    .settings-body h3 { margin: 4px 0 2px; font-size: 15px; font-weight: 600; }
-    .settings-body .hint { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
-    .setting-row {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      padding: 14px 0;
-      border-bottom: 1px solid var(--line);
-    }
-    .setting-row:last-child { border-bottom: none; }
-    .setting-row .copy { flex: 1; min-width: 0; }
-    .setting-row .copy strong { display: block; font-size: 14px; font-weight: 500; }
-    .setting-row .copy small { color: var(--muted); font-size: 12px; }
-    .setting-row select, .setting-row input {
-      height: 34px;
-      border: none;
-      border-radius: 999px;
-      background: var(--surface-2);
-      padding: 0 14px;
-      font-size: 13px;
-      color: var(--text);
-      outline: none;
-      max-width: 240px;
-    }
-    .settings-body form.stack, .stack { display: grid; gap: 10px; }
-    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-    .settings-body label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
-    .settings-body label input, .settings-body label select, .settings-body label textarea {
-      width: 100%;
-      max-width: none;
-      height: 34px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: var(--surface);
-      padding: 0 10px;
-      font-size: 13px;
-      color: var(--text);
-      outline: none;
-    }
-    .settings-body label textarea { height: auto; min-height: 74px; padding: 8px 10px; resize: vertical; }
-    .settings-body .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .settings-body .row.end { justify-content: flex-end; }
-    .settings-body .row button, .settings-body form button {
-      height: 32px;
-      padding: 0 14px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: var(--surface);
-      font-size: 12.5px;
-      font-weight: 500;
-      transition: background .16s ease;
-    }
-    .settings-body .row button:hover, .settings-body form button:hover { background: var(--panel-hover); }
-    .settings-body button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .settings-body button.danger { color: var(--danger); }
-    .automation-list { display: grid; gap: 8px; margin-top: 12px; }
-    .automation {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: var(--surface);
-      padding: 12px;
-      display: grid;
-      gap: 8px;
-    }
-    .automation-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-    .automation-meta, .automation .tiny { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-    .about-links { display: grid; gap: 8px; padding-top: 8px; }
-    .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 8px; }
-    .metric {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: var(--surface);
-      padding: 12px;
-      display: grid;
-      gap: 2px;
-    }
-    .metric span { color: var(--muted); font-size: 11px; }
-    .metric strong { font-size: 18px; font-weight: 600; }
-    .metric small { color: var(--muted); font-size: 11px; }
-
-    @media (max-width: 860px) {
-      .app { grid-template-columns: 64px minmax(0, 1fr); }
-      .app:not(.rail) .sidebar { padding: 14px 10px 6px; align-items: center; }
-      .app:not(.rail) .logo-row { height: 36px; padding: 0; margin-bottom: 12px; justify-content: center; }
-      .app:not(.rail) .brand span:not(.logo-wrap), .app:not(.rail) .harness-tag { display: none; }
-      .app:not(.rail) .logo-row .icon-btn { display: none; }
-      .app:not(.rail) .new-session { width: 36px; height: 36px; padding: 0; margin: 0 0 12px; border-color: transparent; background: transparent; }
-      .app:not(.rail) .new-session span { display: none; }
-      .app:not(.rail) .section-label, .app:not(.rail) .filter-row,
-      .app:not(.rail) .runs .run-title, .app:not(.rail) .runs .run-time { display: none; }
-      .app:not(.rail) .runs { align-items: center; }
-      .app:not(.rail) .run-item { width: 36px; justify-content: center; padding: 0; }
-      .app:not(.rail) .side-foot { display: flex; flex-direction: column; align-items: center; }
-      .app:not(.rail) .side-foot-row { width: 36px; height: 36px; justify-content: center; padding: 0; border-radius: 999px; }
-      .app:not(.rail) .side-foot-row .grow, .app:not(.rail) .side-foot-row .tiny { display: none; }
-      .conversation, .composer-zone { padding-inline: 12px; }
-      .settings-nav { width: 132px; }
-      .grid-2, .metric-grid { grid-template-columns: 1fr; }
-    }
-
-    .workflow-panel { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
-    .workflow-panel[hidden], .workflow-panel [hidden], .conversation[hidden] { display: none; }
-    .workflow-panel h2 { margin: 0; font-size: 18px; }
-    .workflow-panel h3 { font-size: 14px; margin: 12px 0; }
-    .workflow-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .workflow-row h2 { margin-inline-end: auto; }
-    .workflow-panel input:not([type=checkbox]), .workflow-panel select, .workflow-panel textarea { min-width: 0; max-width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
-    .workflow-panel textarea { width: 100%; min-height: 70px; resize: vertical; }
-    .workflow-panel button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; background: var(--surface-2); }
-    .workflow-panel button:hover { background: var(--panel-hover); }
-    .workflow-panel button.danger { color: var(--danger); }
-    .workflow-panel button:disabled { opacity: .5; cursor: default; }
-    .workflow-card { padding: 14px; border: 1px solid var(--line); border-radius: 12px; margin: 12px 0; overflow: hidden; }
-    .workflow-card p, .workflow-card .hint { overflow-wrap: anywhere; }
-    .worker-results { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto; font-size: 12px; }
-    .worker-meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 12px; margin: 12px 0; font-size: 12px; }
-    .worker-meta dt { color: var(--muted); }
-    .worker-meta dd { margin: 0; overflow-wrap: anywhere; }
-    .worker-error { color: var(--danger); }
-    .workflow-panel .hint { color: var(--muted); font-size: 12px; margin: 10px 0; }
-    .plan-steps { padding-left: 24px; }
-    .plan-steps li { margin: 10px 0; }
-    .plan-steps input:not([type=checkbox]) { flex: 1; }
-    .diff-patch { overflow: auto; max-height: 360px; font: 12px/1.6 var(--font-mono); white-space: pre; padding: 12px; background: var(--canvas); }
-    .diff-hunk { margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-    .diff-hunk > .workflow-row { padding: 8px; background: var(--surface-2); }
-    .diff-hunk h4 { margin: 0 auto 0 0; font: 11px var(--font-mono); overflow-wrap: anywhere; }
-    .diff-lines { overflow: auto; font: 12px/1.7 var(--font-mono); }
-    .diff-line { display: grid; grid-template-columns: 40px 40px minmax(0,1fr); min-width: 300px; }
-    .diff-line.add { background: color-mix(in srgb, var(--success, #39c18f) 12%, transparent); }
-    .diff-line.remove { background: color-mix(in srgb, var(--danger) 12%, transparent); }
-    .diff-line code { white-space: pre; padding: 0 8px; overflow: visible; background: none; font: inherit; }
-    .diff-line .line-number { padding: 0 3px; border: 0; border-radius: 0; color: var(--muted); font: inherit; }
-    .inline-comment { margin: 5px 10px; padding: 8px 12px; border-inline-start: 2px solid var(--accent); white-space: pre-wrap; font: 12px/1.5 var(--font-ui); overflow-wrap: anywhere; }
-    .comment-form { padding: 10px; }
-    .model-metadata { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 6px 0 0; }
-    .composer-controls { flex-wrap: wrap; }
-    .composer-controls .model-metadata { flex-basis: 100%; order: 10; }
-    .view-tabs { overflow-x: auto; flex-shrink: 0; }
-    .view-tab { white-space: nowrap; }
-    @media (max-width: 700px) { .workflow-panel { padding: 12px; } .view-tabs { gap: 13px; padding-inline: 12px; } .view-tabs #eventCount { display: none; } .composer-controls select { max-width: 140px; } }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after {
-        scroll-behavior: auto !important;
-        transition-duration: 0.01ms !important;
-        animation-duration: 0.01ms !important;
-      }
-    }
-  </style>
+  <style>__LIBRE_CLAW_DASHBOARD_CSS__</style>
 </head>
 <body>
   <div class="app" id="appFrame">
-    <aside class="sidebar">
+    <aside class="sidebar" id="taskSidebar" aria-label="Tasks">
       <div class="logo-row">
         <button class="brand" id="brandHome" type="button" title="Libre Claw Dashboard">
           <span class="logo-wrap" role="img" aria-label="Libre Claw lobster">🦞</span>
           <span>Libre Claw</span>
-          <span class="harness-tag">HARNESS</span>
+          <span class="harness-tag">LOCAL</span>
         </button>
         <button class="icon-btn" id="railToggle" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+        </button>
+        <button class="icon-btn mobile-tasks-close" id="closeMobileTasks" type="button" aria-label="Close tasks">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
       </div>
 
       <button class="new-session" id="focusRunInput" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="15" height="15"><path d="M12 5v14M5 12h14"/></svg>
-        <span>New Session</span>
+        <span>New task</span>
       </button>
 
       <div class="section-label">
@@ -1482,9 +72,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
         <span class="filters"><span id="runCount" class="tiny">0 runs</span></span>
       </div>
       <div class="filter-row" aria-label="Run filters">
-        <input id="runSearch" type="search" placeholder="Search runs">
+        <input id="runSearch" type="search" placeholder="Search tasks" aria-label="Search tasks">
         <select id="runStateFilter" aria-label="Filter runs by state">
           <option value="">All states</option>
+          <option value="queued">Queued</option>
           <option value="running">Running</option>
           <option value="blocked">Blocked</option>
           <option value="done">Done</option>
@@ -1492,7 +83,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           <option value="cancelled">Cancelled</option>
         </select>
       </div>
-      <div class="runs" id="runs"></div>
+      <div class="runs" id="runs" aria-label="Recent tasks"></div>
 
       <div class="side-foot">
         <button class="side-foot-row" id="openSettings" type="button">
@@ -1507,19 +98,23 @@ _DASHBOARD_HTML = r"""<!doctype html>
       </div>
     </aside>
 
-    <main class="main">
+    <button class="sidebar-backdrop" id="sidebarBackdrop" type="button" aria-label="Close tasks" tabindex="-1" hidden></button>
+    <main class="main" id="mainContent">
       <div class="main-head">
-        <h1 id="selectedTitle">No run selected</h1>
+        <button class="icon-btn mobile-tasks-toggle" id="mobileTasks" type="button" aria-label="Open tasks" aria-controls="taskSidebar" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <h1 id="selectedTitle">Your workspace</h1>
         <span class="pill" id="selectedState">idle</span>
         <button id="cancelRun" class="pill-btn danger" type="button" disabled>Cancel</button>
         <button id="refreshAll" class="pill-btn" type="button">Refresh</button>
       </div>
-      <div class="view-tabs" role="tablist">
-        <button class="view-tab active" id="tabChat" role="tab" aria-selected="true" type="button">Chat</button>
-        <button class="view-tab" id="tabTrajectory" role="tab" aria-selected="false" type="button">Trajectory</button>
-        <button class="view-tab" id="tabPlan" role="tab" aria-selected="false" type="button">Plan</button>
-        <button class="view-tab" id="tabChanges" role="tab" aria-selected="false" type="button">Changes</button>
-        <button class="view-tab" id="tabWorktrees" role="tab" aria-selected="false" type="button">Worktrees</button>
+      <div class="view-tabs" role="tablist" aria-label="Task views">
+        <button class="view-tab active" id="tabChat" role="tab" aria-controls="timeline" aria-selected="true" type="button">Chat</button>
+        <button class="view-tab" id="tabTrajectory" role="tab" aria-controls="timeline" aria-selected="false" tabindex="-1" type="button">Activity</button>
+        <button class="view-tab" id="tabPlan" role="tab" aria-controls="planPanel" aria-selected="false" tabindex="-1" type="button">Plan</button>
+        <button class="view-tab" id="tabChanges" role="tab" aria-controls="changesPanel" aria-selected="false" tabindex="-1" type="button">Changes</button>
+        <button class="view-tab" id="tabWorktrees" role="tab" aria-controls="worktreesPanel" aria-selected="false" tabindex="-1" type="button">Worktrees</button>
         <span class="spacer"></span>
         <span class="tiny" id="eventCount">0 events</span>
         <select id="eventFilter" aria-label="Filter timeline events" hidden>
@@ -1532,27 +127,30 @@ _DASHBOARD_HTML = r"""<!doctype html>
         </select>
       </div>
 
-      <div class="conversation" id="timeline"></div>
-      <section class="workflow-panel" id="planPanel" aria-label="Task plan" hidden>
-        <div class="workflow-row"><h2>Task plan</h2><select id="planMode" aria-label="Task execution mode"><option value="default">Build</option><option value="plan">Plan only (read-only)</option></select><button id="refreshPlan" type="button">Refresh</button></div>
-        <p class="hint" id="planStatus">Select a task to edit its plan.</p>
-        <form id="planForm" class="workflow-row"><input id="planNewStep" aria-label="New plan step" placeholder="Add a step" required><button type="submit">Add step</button></form>
-        <ol id="planSteps" class="plan-steps"></ol>
-        <h3>Queued follow-ups</h3><div id="queuedMessages"></div>
-        <h3>Workers</h3><p class="hint" id="workerStatus">Select a task to inspect its workers.</p><div id="taskWorkers" aria-label="Task workers"></div>
+      <div class="conversation" id="timeline" role="tabpanel" aria-labelledby="tabChat" tabindex="0"></div>
+      <section class="workflow-panel" id="planPanel" role="tabpanel" aria-labelledby="tabPlan" tabindex="0" hidden>
+        <div class="panel-header"><div><h2>Task plan</h2><p class="panel-description">Steps, follow-ups, and delegated work.</p></div><div class="workflow-row"><select id="planMode" aria-label="Task execution mode"><option value="default">Build</option><option value="plan">Plan only (read-only)</option></select><button id="refreshPlan" type="button">Refresh</button></div></div>
+        <section class="section-card"><h3>Steps</h3><p class="hint" id="planStatus" role="status">Select a task to edit its plan.</p>
+        <form id="planForm" class="workflow-row"><input id="planNewStep" aria-label="New plan step" placeholder="Add a step to this task" required><button type="submit">Add step</button></form>
+        <ol id="planSteps" class="plan-steps"></ol></section>
+        <section class="section-card"><h3>Queued follow-ups</h3><div id="queuedMessages"></div></section>
+        <section class="section-card"><h3>Workers</h3><p class="hint" id="workerStatus">Select a task to inspect its workers.</p><div id="taskWorkers" aria-label="Task workers"></div></section>
       </section>
-      <section class="workflow-panel" id="changesPanel" aria-label="Code changes" hidden>
-        <div class="workflow-row"><h2>Changes</h2><select id="reviewScope" aria-label="Review scope"><option value="unstaged">Unstaged</option><option value="staged">Staged</option><option value="branch">Branch</option><option value="last-turn">Last turn</option></select><input id="reviewBase" aria-label="Base branch or commit" placeholder="Base branch or commit" hidden><button id="refreshReview" type="button">Refresh</button><button id="analyzeReview" type="button">Independent review</button></div>
+      <section class="workflow-panel" id="changesPanel" role="tabpanel" aria-labelledby="tabChanges" tabindex="0" hidden>
+        <div class="panel-header"><div><h2>Changes</h2><p class="panel-description">Review diffs, stage changes, and leave feedback.</p></div><button id="analyzeReview" type="button">Independent review</button></div>
+        <div class="workflow-row section-card"><select id="reviewScope" aria-label="Review scope"><option value="unstaged">Unstaged</option><option value="staged">Staged</option><option value="branch">Branch</option><option value="last-turn">Last turn</option></select><input id="reviewBase" aria-label="Base branch or commit" placeholder="Base branch or commit" hidden><button id="refreshReview" type="button">Refresh</button></div>
         <p id="reviewStatus" class="hint" role="status"></p>
         <div id="reviewFiles"></div><div id="reviewAnalysis" class="workflow-card" hidden></div>
       </section>
-      <section class="workflow-panel" id="worktreesPanel" aria-label="Managed worktrees" hidden>
-        <div class="workflow-row"><h2>Worktrees</h2><button id="refreshWorktrees" type="button">Refresh</button></div>
-        <form id="worktreeForm" class="workflow-card stack">
-          <div class="workflow-row"><input id="worktreeRef" aria-label="Starting Git reference" value="HEAD" required><input id="worktreeBranch" aria-label="New branch name" placeholder="New branch (optional)"></div>
-          <label><input id="worktreeInclude" type="checkbox"> Include uncommitted changes</label>
-          <label><input id="worktreeAssociate" type="checkbox"> Move the selected task to this worktree</label>
-          <button type="submit">Create worktree</button>
+      <section class="workflow-panel" id="worktreesPanel" role="tabpanel" aria-labelledby="tabWorktrees" tabindex="0" hidden>
+        <div class="panel-header"><div><h2>Worktrees</h2><p class="panel-description">Give a task its own Git checkout.</p></div><button id="refreshWorktrees" type="button">Refresh</button></div>
+        <form id="worktreeForm" class="section-card stack">
+          <h3>Create a worktree</h3>
+          <p class="hint">Requires a Git repository in the current workspace.</p>
+          <div class="field-grid"><label>Starting reference<input id="worktreeRef" value="HEAD" spellcheck="false" required></label><label>Branch name<input id="worktreeBranch" placeholder="Optional" spellcheck="false"></label></div>
+          <label class="checkbox-label"><input id="worktreeInclude" type="checkbox"> Include uncommitted changes</label>
+          <label class="checkbox-label"><input id="worktreeAssociate" type="checkbox"> Move the selected task to this worktree</label>
+          <div class="row"><button class="primary" type="submit">Create worktree</button></div>
         </form>
         <div id="worktreeList"></div>
         <div id="transferPanel" class="workflow-card" hidden><h3>Transfer to the original checkout</h3><p id="transferTarget" class="hint"></p><pre id="transferPatch" class="diff-patch"></pre><button id="applyTransfer" type="button">Apply reviewed changes</button><button id="closeTransfer" type="button">Close</button></div>
@@ -1562,7 +160,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         <div id="permissions"></div>
         <div id="notice" class="notice" role="status"></div>
         <form id="runForm" class="composer">
-          <textarea id="runMessage" required rows="1" placeholder="Describe what you want Libre Claw to do"></textarea>
+          <textarea id="runMessage" aria-label="Message Libre Claw" required rows="1" placeholder="Describe what you want Libre Claw to do"></textarea>
           <div class="composer-controls">
             <select id="runProvider" aria-label="Provider">
               <option value="">default provider</option>
@@ -1576,52 +174,55 @@ _DASHBOARD_HTML = r"""<!doctype html>
               <option value="codex">OpenAI Codex</option>
             </select>
             <input id="runModel" placeholder="default model" aria-label="Model">
+            <span id="sessionModel" class="session-model" hidden></span>
             <select id="runMode" aria-label="New task mode"><option value="default">Build</option><option value="plan">Plan only</option></select>
             <select id="runWorktree" aria-label="Task workspace"><option value="">Current project</option></select>
             <select id="messageAction" aria-label="Message delivery" hidden><option value="message">Send reply</option><option value="steer">Steer active task</option><option value="queue">Queue follow-up</option></select>
             <span class="spacer"></span>
-            <button class="send-btn" type="submit" aria-label="Start run" title="Start run">
+            <button class="send-btn" id="sendMessage" type="submit" aria-label="Start task" title="Start task">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
             </button>
           </div>
         </form>
         <div class="status-strip" id="statusStrip">
-          <span id="stripMeta">Each run keeps its own timeline and approvals.</span>
+          <span id="stripMeta">Ready when you are</span>
           <span class="sep">|</span>
           <span id="activeRunsLabel"><span id="activeRuns">0</span> active</span>
           <span class="sep">|</span>
           <span id="usageTokensLabel"><span id="usageTokens">0</span> tokens</span>
+          <span class="keyboard-hint">Enter to send · Shift Enter for a new line</span>
         </div>
       </div>
     </main>
   </div>
 
-  <div class="overlay" id="settingsOverlay" role="dialog" aria-modal="true" aria-label="Settings">
+  <div class="overlay" id="settingsOverlay" role="dialog" aria-modal="true" aria-label="Settings" hidden>
     <div class="mask" id="settingsMask"></div>
     <div class="settings-panel">
-      <nav class="settings-nav">
+      <nav class="settings-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
         <h2>Settings</h2>
-        <button class="active" data-pane="general" type="button">General</button>
-        <button data-pane="models" type="button">Models</button>
-        <button data-pane="schedules" type="button">Schedules</button>
-        <button data-pane="usage" type="button">Usage</button>
-        <button data-pane="about" type="button">About</button>
+        <button class="active" id="settingsTabGeneral" data-pane="general" role="tab" aria-controls="paneGeneral" aria-selected="true" type="button">General</button>
+        <button id="settingsTabModels" data-pane="models" role="tab" aria-controls="paneModels" aria-selected="false" tabindex="-1" type="button">Models</button>
+        <button id="settingsTabSchedules" data-pane="schedules" role="tab" aria-controls="paneSchedules" aria-selected="false" tabindex="-1" type="button">Schedules</button>
+        <button id="settingsTabUsage" data-pane="usage" role="tab" aria-controls="paneUsage" aria-selected="false" tabindex="-1" type="button">Usage</button>
+        <button id="settingsTabAbout" data-pane="about" role="tab" aria-controls="paneAbout" aria-selected="false" tabindex="-1" type="button">About</button>
       </nav>
       <div class="settings-content">
         <div class="settings-head">
+          <span class="tiny">Workspace settings</span>
           <button class="icon-btn" id="closeSettings" type="button" aria-label="Close settings">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
         </div>
-        <div class="settings-body" id="paneGeneral">
-          <h3>General</h3>
-          <p class="hint">Appearance and dashboard behavior.</p>
-          <div class="setting-row">
+        <div id="settingsNotice" class="settings-notice" role="status" hidden></div>
+        <div class="settings-body" id="paneGeneral" role="tabpanel" aria-labelledby="settingsTabGeneral" tabindex="0">
+          <div class="panel-header"><div><h3>Make it yours</h3><p class="panel-description">Appearance and connection status.</p></div></div>
+          <div class="setting-row section-card">
             <div class="copy">
               <strong>Theme</strong>
-              <small>Applies to this browser and persists to the daemon config.</small>
+              <small>Saved for this browser and your local daemon.</small>
             </div>
-            <select id="themeSelect">
+            <select id="themeSelect" aria-label="Dashboard theme">
               <option value="harness">Harness</option>
               <option value="harness-light">Harness Light</option>
               <option value="lobster">Lobster</option>
@@ -1653,7 +254,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
         </div>
         <div class="settings-body" id="paneModels" hidden>
           <h3>Models</h3>
-          <p class="hint">Default provider and model for new runs.</p>
+          <p class="hint">Choose where your next task runs.</p>
+          <div class="model-route-card">
+            <span class="eyebrow">Current default</span>
+            <strong id="modelRoute">Loading your model…</strong>
+            <span class="hint" id="modelCurrent" role="status"></span>
+          </div>
           <form id="modelForm" class="stack">
             <div class="grid-2">
               <label>Provider<select id="configProvider">
@@ -1666,14 +272,19 @@ _DASHBOARD_HTML = r"""<!doctype html>
               <option value="llamacpp">llama.cpp (llama-swap)</option>
                 <option value="codex">OpenAI Codex</option>
               </select></label>
-              <label>Model<input id="configModel" placeholder="model id"></label>
+              <label>Model<input id="configModel" placeholder="Select or enter a model ID" required spellcheck="false" autocomplete="off"></label>
+            </div>
+            <p class="hint" id="providerRouteHint"></p>
+            <div class="model-discovery-row">
+              <span id="modelDiscoveryStatus" class="hint" role="status" aria-live="polite">Models load from your provider.</span>
+              <button id="refreshModels" type="button">Refresh models</button>
             </div>
             <div class="row end">
-              <span class="tiny" id="modelCurrent" style="margin-inline-end:auto;color:var(--muted);font-size:12px;"></span>
               <button class="primary" type="submit">Save default</button>
             </div>
           </form>
-          <div class="setting-row" style="margin-top:8px;">
+          <section id="llamacppSettings" class="endpoint-settings" hidden aria-label="llama.cpp connection">
+          <div class="setting-row">
             <div class="copy">
               <strong>llama.cpp endpoint</strong>
               <small>llama-server or llama-swap base URL; a trailing /v1 is fine.</small>
@@ -1687,22 +298,23 @@ _DASHBOARD_HTML = r"""<!doctype html>
             </div>
             <div id="llamacppDiscovered" class="row"></div>
           </form>
+          </section>
         </div>
-        <div class="settings-body" id="paneSchedules" hidden>
-          <h3 id="automationFormTitle">Create Schedule</h3>
-          <p class="hint">Recurring checks can write reports or notify Telegram.</p>
-          <form id="automationForm" class="stack">
+        <div class="settings-body" id="paneSchedules" role="tabpanel" aria-labelledby="settingsTabSchedules" tabindex="0" hidden>
+          <div class="panel-header"><div><h3>Schedules</h3><p class="panel-description">Keep recurring work on track.</p></div></div>
+          <form id="automationForm" class="stack section-card">
+            <h4 id="automationFormTitle">Create schedule</h4>
             <div class="grid-2">
-              <label>Name<input id="automationName" placeholder="HN watch"></label>
-              <label>Schedule<input id="automationSchedule" placeholder="every 30 minutes"></label>
+              <label>Name<input id="automationName" placeholder="Daily project review" required></label>
+              <label>Schedule<input id="automationSchedule" placeholder="every 30 minutes" required></label>
             </div>
-            <label>Prompt<textarea id="automationPrompt" placeholder="Fetch Hacker News and summarize new notable stories"></textarea></label>
+            <label>Instructions<textarea id="automationPrompt" placeholder="Review the project and summarize what needs attention." rows="3" required></textarea></label>
             <div class="grid-2">
-              <label>Route<select id="automationRoute"><option value="report">report</option><option value="telegram">telegram</option><option value="tui">tui</option></select></label>
-              <label>Telegram chat id<input id="automationChat" inputmode="numeric" placeholder="optional"></label>
+              <label>Deliver to<select id="automationRoute"><option value="report">Saved report</option><option value="telegram">Telegram</option><option value="tui">Terminal</option></select></label>
+              <label id="automationChatField" hidden>Telegram chat ID<input id="automationChat" inputmode="numeric" placeholder="Use configured chat" disabled></label>
             </div>
             <div class="grid-2">
-              <label>Status<select id="automationStatus"><option value="active">active</option><option value="paused">paused</option></select></label>
+              <label>Status<select id="automationStatus"><option value="active">Active</option><option value="paused">Paused</option></select></label>
               <label>Provider<select id="automationProvider">
                 <option value="">default</option>
                 <option value="anthropic">Anthropic</option>
@@ -1717,28 +329,29 @@ _DASHBOARD_HTML = r"""<!doctype html>
             </div>
             <label>Model<input id="automationModel" placeholder="default"></label>
             <div class="row">
-              <button id="automationSubmit" class="primary" type="submit">Create Schedule</button>
-              <button id="cancelAutomationEdit" type="button" hidden>Cancel Edit</button>
+              <button id="automationSubmit" class="primary" type="submit">Create schedule</button>
+              <button id="cancelAutomationEdit" type="button" hidden>Cancel edit</button>
             </div>
           </form>
+          <div class="panel-header"><h4>Your schedules</h4><button id="refreshSchedules" type="button">Refresh</button></div>
           <div id="automations" class="automation-list"></div>
         </div>
-        <div class="settings-body" id="paneUsage" hidden>
-          <h3>Usage</h3>
-          <p class="hint">Token consumption and cost across recorded runs.</p>
+        <div class="settings-body" id="paneUsage" role="tabpanel" aria-labelledby="settingsTabUsage" tabindex="0" hidden>
+          <div class="panel-header"><div><h3>Usage</h3><p class="panel-description">Tokens and cost across recorded runs.</p></div><button id="refreshUsagePane" type="button">Refresh</button></div>
+          <p id="usagePaneStatus" class="hint" role="status"></p>
           <div class="metric-grid">
             <div class="metric"><span>Total tokens</span><strong id="usagePaneTokens">0</strong><small id="usagePaneTokensExact">0</small></div>
             <div class="metric"><span>Requests</span><strong id="usagePaneRequests">0</strong><small id="usagePaneRuns">0 runs</small></div>
-            <div class="metric"><span>Cost</span><strong id="usagePaneCost">$0</strong><small>provider-reported</small></div>
+            <div class="metric"><span>Cost</span><strong id="usagePaneCost">—</strong><small>When reported by the provider</small></div>
           </div>
           <p class="usage-sub">By model</p>
-          <div class="usage-table-wrap"><table class="usage-table" id="usageByModel"></table></div>
+          <div class="usage-table-wrap"><table class="usage-table" id="usageByModel" aria-label="Usage by model"></table></div>
           <p class="usage-sub">Recent runs</p>
-          <div class="usage-table-wrap"><table class="usage-table" id="usageRecent"></table></div>
+          <div class="usage-table-wrap"><table class="usage-table" id="usageRecent" aria-label="Usage for recent runs"></table></div>
         </div>
-        <div class="settings-body" id="paneAbout" hidden>
-          <h3>About</h3>
-          <p class="hint">Libre Claw dashboard — local control plane for runs, approvals, schedules, and usage.</p>
+        <div class="settings-body" id="paneAbout" role="tabpanel" aria-labelledby="settingsTabAbout" tabindex="0" hidden>
+          <div class="about-brand"><span class="logo-wrap" aria-hidden="true">🦞</span><div><h3>Libre Claw</h3><p class="panel-description">Your workspace. Your models. Your agent.</p></div></div>
+          <section class="section-card"><h4>Built to run locally</h4><p class="hint">Manage tasks, review code, and control what your agent can do from one workspace.</p></section>
           <nav class="about-links" aria-label="Dashboard footer links">
             <a href="https://libreclaw.sh" target="_blank" rel="noreferrer">libreclaw.sh</a>
             <a href="https://github.com/kroonen-ai/libre-claw" target="_blank" rel="noreferrer">GitHub</a>
@@ -1751,7 +364,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     </div>
   </div>
   <script>
-    const state = { selectedRunId: "", runs: [], events: [], editingAutomationId: "", view: "chat", streaming: false, composing: false };
+    const state = { selectedRunId: "", runs: [], events: [], editingAutomationId: "", view: "chat", streaming: false, composing: true, sending: false };
     const $ = (id) => document.getElementById(id);
     const THEME_KEY = "libre-claw-dashboard-theme";
     const RAIL_KEY = "libre-claw-dashboard-rail";
@@ -1827,17 +440,82 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function initRail() {
       if (localStorage.getItem(RAIL_KEY) === "1") $("appFrame").classList.add("rail");
+      const updateRailLabel = () => {
+        const collapsed = $("appFrame").classList.contains("rail");
+        $("railToggle").setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+        $("railToggle").setAttribute("aria-expanded", String(!collapsed));
+      };
+      updateRailLabel();
       $("railToggle").addEventListener("click", () => {
         const rail = $("appFrame").classList.toggle("rail");
         localStorage.setItem(RAIL_KEY, rail ? "1" : "0");
+        updateRailLabel();
       });
       $("brandHome").addEventListener("click", () => {
+        if (mobileSidebarQuery.matches) { newSession(); return; }
         if ($("appFrame").classList.contains("rail")) {
           $("appFrame").classList.remove("rail");
           localStorage.setItem(RAIL_KEY, "0");
+          updateRailLabel();
           return;
         }
         newSession();
+      });
+    }
+
+    const mobileSidebarQuery = window.matchMedia("(max-width: 760px)");
+    let mobileSidebarReturnFocus = null;
+
+    function syncMobileSidebar() {
+      const open = mobileSidebarQuery.matches && $("appFrame").classList.contains("mobile-open");
+      $("taskSidebar").inert = mobileSidebarQuery.matches && !open;
+      $("mainContent").inert = open;
+      $("sidebarBackdrop").hidden = !open;
+      $("mobileTasks").setAttribute("aria-expanded", String(open));
+      if (open) {
+        $("taskSidebar").setAttribute("role", "dialog"); $("taskSidebar").setAttribute("aria-modal", "true");
+      } else {
+        $("taskSidebar").removeAttribute("role"); $("taskSidebar").removeAttribute("aria-modal");
+      }
+    }
+
+    function openMobileSidebar() {
+      if (!mobileSidebarQuery.matches) return;
+      mobileSidebarReturnFocus = document.activeElement;
+      $("appFrame").classList.add("mobile-open"); syncMobileSidebar();
+      $("runSearch").focus();
+    }
+
+    function closeMobileSidebar(restoreFocus = true) {
+      const wasOpen = $("appFrame").classList.contains("mobile-open");
+      $("appFrame").classList.remove("mobile-open"); syncMobileSidebar();
+      if (wasOpen && restoreFocus && mobileSidebarReturnFocus?.isConnected) mobileSidebarReturnFocus.focus();
+      mobileSidebarReturnFocus = null;
+    }
+
+    function handleMobileSidebarKeydown(event) {
+      if (!mobileSidebarQuery.matches || !$("appFrame").classList.contains("mobile-open")) return;
+      if (event.key === "Escape") { event.preventDefault(); closeMobileSidebar(); return; }
+      if (event.key !== "Tab") return;
+      const controls = [...$("taskSidebar").querySelectorAll('button, input, select, [tabindex]')]
+        .filter(element => !element.disabled && element.tabIndex >= 0 && element.getClientRects().length);
+      const first = controls[0], last = controls.at(-1);
+      if (!first) return;
+      if (event.shiftKey && (document.activeElement === first || !$("taskSidebar").contains(document.activeElement))) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+
+    function initMobileSidebar() {
+      syncMobileSidebar();
+      $("mobileTasks").addEventListener("click", openMobileSidebar);
+      $("closeMobileTasks").addEventListener("click", () => closeMobileSidebar());
+      $("sidebarBackdrop").addEventListener("click", () => closeMobileSidebar());
+      document.addEventListener("keydown", handleMobileSidebarKeydown);
+      mobileSidebarQuery.addEventListener("change", () => {
+        const sidebarFocused = $("taskSidebar").contains(document.activeElement);
+        closeMobileSidebar(false);
+        if (mobileSidebarQuery.matches && sidebarFocused) $("mobileTasks").focus();
+        else if (!mobileSidebarQuery.matches && [$("closeMobileTasks"), $("mobileTasks")].includes(document.activeElement)) $("brandHome").focus();
       });
     }
 
@@ -1846,8 +524,14 @@ _DASHBOARD_HTML = r"""<!doctype html>
       const box = $("notice");
       box.textContent = text;
       box.className = `notice visible ${error ? "error" : ""}`;
+      const settingsNotice = $("settingsNotice");
+      if (!$("settingsOverlay").hidden) {
+        settingsNotice.textContent = text;
+        settingsNotice.className = `settings-notice ${error ? "error" : ""}`;
+        settingsNotice.hidden = false;
+      }
       window.clearTimeout(noticeTimer);
-      if (!error) noticeTimer = window.setTimeout(() => { box.className = "notice"; }, 6000);
+      if (!error) noticeTimer = window.setTimeout(() => { box.className = "notice"; settingsNotice.hidden = true; }, 6000);
     }
 
     async function request(path, options = {}) {
@@ -1990,28 +674,32 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function renderRuns() {
       const container = $("runs");
+      const query = $("runSearch").value.trim().toLowerCase();
+      const stateFilter = $("runStateFilter").value;
+      const signature = JSON.stringify([state.selectedRunId, state.runs, query, stateFilter, Math.floor(Date.now() / 60000)]);
+      if (signature === state.runSignature) return;
+      state.runSignature = signature;
       container.replaceChildren();
       $("runCount").textContent = `${state.runs.length} ${state.runs.length === 1 ? "run" : "runs"}`;
       if (!state.runs.length) {
-        container.append(empty("No runs yet."));
+        container.append(empty("No tasks yet", "Your recent work will appear here."));
         state.selectedRunId = "";
         clearSelectedRun();
         return;
       }
-      const query = $("runSearch").value.trim().toLowerCase();
-      const stateFilter = $("runStateFilter").value;
       const filtered = state.runs.filter((run) => {
         const haystack = `${run.title || ""} ${run.run_id || ""} ${run.provider || ""} ${run.model || ""}`.toLowerCase();
         return (!query || haystack.includes(query)) && (!stateFilter || run.state === stateFilter);
       });
       if (!filtered.length) {
-        container.append(empty("No matching runs."));
+        container.append(empty("No matches", "Try another search or status."));
         return;
       }
       for (const run of filtered) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = `run-item ${run.run_id === state.selectedRunId ? "active" : ""}`;
+        button.setAttribute("aria-current", run.run_id === state.selectedRunId ? "true" : "false");
         button.title = `${run.run_id} | ${run.provider}:${run.model}`;
         const dot = document.createElement("span");
         dot.className = `state-dot ${safeClass(run.state)}`;
@@ -2028,14 +716,27 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     async function selectRun(runId) {
+      if (!runId) return;
+      closeMobileSidebar();
+      const changed = runId !== state.selectedRunId;
       state.selectedRunId = runId;
       state.composing = false;
       renderRuns();
-      await refreshRunDetail();
-      if (state.view === "changes") void loadReview();
+      if (changed) {
+        state.events = []; state.streaming = false; window.clearTimeout(streamTimer); resetStreamNode();
+        $("timeline").replaceChildren(empty("Loading task…"));
+      }
+      try {
+        await refreshRunDetail();
+        if (state.view === "changes") void loadReview();
+      } catch (error) {
+        if (runId === state.selectedRunId) $("timeline").replaceChildren(empty("Could not load this task", error.message || String(error)));
+        setNotice(error.message || String(error), true);
+      }
     }
 
     function newSession() {
+      closeMobileSidebar(false);
       state.selectedRunId = "";
       state.composing = true;
       state.streaming = false;
@@ -2051,11 +752,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
     function clearSelectedRun() {
       state.selectedRunState = "";
       syncComposerMode();
-      $("selectedTitle").textContent = "New session";
+      $("selectedTitle").textContent = "New task";
       $("selectedState").textContent = "idle";
       $("selectedState").className = "pill";
       $("cancelRun").disabled = true;
-      $("stripMeta").textContent = "Each run keeps its own timeline and approvals.";
+      $("stripMeta").textContent = "Ready when you are";
       state.events = [];
       renderEvents();
       renderPermissions([]);
@@ -2072,6 +773,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("selectedState").textContent = run.state;
       $("selectedState").className = `pill ${run.state}`;
       state.selectedRunState = run.state;
+      state.selectedProvider = run.provider || ""; state.selectedModel = run.model || "";
       $("cancelRun").disabled = !["queued", "running", "blocked"].includes(run.state);
       syncComposerMode();
       $("stripMeta").textContent = `${run.run_id} | ${run.provider}:${run.model}`;
@@ -2214,6 +916,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
         $(name === "changes" ? "changesPanel" : name === "plan" ? "planPanel" : "worktreesPanel").hidden = view !== name;
       }
       $("timeline").hidden = !["chat", "trajectory"].includes(view);
+      $("timeline").setAttribute("aria-labelledby", view === "trajectory" ? "tabTrajectory" : "tabChat");
+      $("timeline").classList.toggle("trajectory", view === "trajectory");
       if (view === "plan") void loadPlan();
       if (view === "changes") void loadReview();
       if (view === "worktrees") void loadWorktrees();
@@ -2221,6 +925,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("tabChat").setAttribute("aria-selected", String(view === "chat"));
       $("tabTrajectory").classList.toggle("active", view === "trajectory");
       $("tabTrajectory").setAttribute("aria-selected", String(view === "trajectory"));
+      document.querySelectorAll(".view-tab").forEach((tab) => { tab.tabIndex = tab.getAttribute("aria-selected") === "true" ? 0 : -1; });
       $("eventFilter").hidden = view !== "trajectory";
       renderEvents();
     }
@@ -2231,13 +936,16 @@ _DASHBOARD_HTML = r"""<!doctype html>
       container.replaceChildren();
       if (!state.events.length) {
         $("eventCount").textContent = "0 events";
-        container.append(empty(state.selectedRunId ? "No events yet." : "Start a run to see its conversation here."));
+        if (state.selectedRunId) container.append(empty("Waiting for activity", "Messages and tool activity will appear as this task runs."));
+        else if (state.view === "trajectory") container.append(empty("The full picture", "Select a task to inspect its messages, tools, and approvals."));
+        else container.append(welcomeState());
         return;
       }
       const displayEvents = coalescedEvents(state.events);
       if (state.view === "chat") {
         renderChat(container, displayEvents);
-        $("eventCount").textContent = `${displayEvents.length} ${displayEvents.length === 1 ? "card" : "cards"} from ${state.events.length} events`;
+        $("eventCount").textContent = `${state.events.length} events`;
+        if (!container.childElementCount) container.append(empty("Task started", "Libre Claw is preparing a response."));
       } else {
         renderTrajectory(container, displayEvents);
       }
@@ -2603,7 +1311,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
           button.textContent = label;
           if (resolution === "allow_once") button.className = "primary";
           if (resolution === "deny") button.className = "danger";
-          button.addEventListener("click", () => resolvePermission(id, resolution));
+          button.addEventListener("click", async () => {
+            row.querySelectorAll("button").forEach(control => { control.disabled = true; });
+            try { await resolvePermission(id, resolution); }
+            catch (error) { setNotice(error.message || String(error), true); }
+            finally { row.querySelectorAll("button").forEach(control => { control.disabled = false; }); }
+          });
           row.append(button);
         }
         box.append(title, args, row);
@@ -2622,11 +1335,13 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     async function refreshAutomations() {
       const payload = await request("/automations?limit=50");
+      const automations = payload.automations || [], signature = JSON.stringify(automations);
+      if (signature === state.automationSignature) return;
+      state.automationSignature = signature;
       const container = $("automations");
       container.replaceChildren();
-      const automations = payload.automations || [];
       if (!automations.length) {
-        container.append(empty("No schedules yet."));
+        container.append(empty("Nothing scheduled", "Create a schedule above to run recurring work."));
         return;
       }
       for (const automation of automations) {
@@ -2640,7 +1355,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
         const meta = document.createElement("div");
         meta.className = "automation-meta";
         const model = [automation.provider, automation.model].filter(Boolean).join(":") || "default model";
-        meta.textContent = `${automation.schedule} | ${automation.route} | ${model} | next ${formatAutomationNext(automation)}`;
+        const next = formatAutomationNext(automation);
+        meta.textContent = `${automation.schedule} · ${automation.route} · ${model}${next ? ` · Next ${next}` : ""}`;
         const prompt = document.createElement("div");
         prompt.className = "tiny";
         prompt.textContent = truncate(automation.prompt || "", 180);
@@ -2650,7 +1366,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         runNow.type = "button";
         runNow.textContent = "Run now";
         runNow.className = "primary";
-        runNow.addEventListener("click", () => runAutomationNow(automation.automation_id, runNow));
+        runNow.addEventListener("click", () => { void runAutomationNow(automation.automation_id, runNow).catch(error => setNotice(error.message || String(error), true)); });
         const edit = document.createElement("button");
         edit.type = "button";
         edit.textContent = "Edit";
@@ -2658,12 +1374,20 @@ _DASHBOARD_HTML = r"""<!doctype html>
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.textContent = automation.status === "active" ? "Pause" : "Resume";
-        toggle.addEventListener("click", () => toggleAutomation(automation));
+        toggle.addEventListener("click", async () => {
+          toggle.disabled = true;
+          try { await toggleAutomation(automation); } catch (error) { setNotice(error.message || String(error), true); }
+          finally { toggle.disabled = false; }
+        });
         const del = document.createElement("button");
         del.type = "button";
         del.textContent = "Delete";
         del.className = "danger";
-        del.addEventListener("click", () => deleteAutomation(automation.automation_id));
+        del.addEventListener("click", async () => {
+          del.disabled = true;
+          try { await deleteAutomation(automation.automation_id); } catch (error) { setNotice(error.message || String(error), true); }
+          finally { del.disabled = false; }
+        });
         row.append(runNow, edit, toggle, del);
         box.append(head, meta, prompt, row);
         container.append(box);
@@ -2672,8 +1396,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function editAutomation(automation) {
       state.editingAutomationId = automation.automation_id;
-      $("automationFormTitle").textContent = "Edit Schedule";
-      $("automationSubmit").textContent = "Save Changes";
+      $("automationFormTitle").textContent = "Edit schedule";
+      $("automationSubmit").textContent = "Save changes";
       $("cancelAutomationEdit").hidden = false;
       $("automationName").value = automation.name || "";
       $("automationSchedule").value = automation.schedule || "";
@@ -2683,6 +1407,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("automationStatus").value = automation.status || "active";
       $("automationProvider").value = automation.provider || "";
       $("automationModel").value = automation.model || "";
+      syncAutomationRoute();
       openSettingsPane("schedules");
       $("automationName").focus();
       $("automationForm").scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -2690,11 +1415,18 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function resetAutomationForm(form) {
       state.editingAutomationId = "";
-      $("automationFormTitle").textContent = "Create Schedule";
-      $("automationSubmit").textContent = "Create Schedule";
+      $("automationFormTitle").textContent = "Create schedule";
+      $("automationSubmit").textContent = "Create schedule";
       $("cancelAutomationEdit").hidden = true;
       form.reset();
       $("automationStatus").value = "active";
+      syncAutomationRoute();
+    }
+
+    function syncAutomationRoute() {
+      const telegram = $("automationRoute").value === "telegram";
+      $("automationChatField").hidden = !telegram;
+      $("automationChat").disabled = !telegram;
     }
 
     function automationFormPayload() {
@@ -2707,7 +1439,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         status: $("automationStatus").value,
         provider: $("automationProvider").value,
         model: $("automationModel").value,
-        telegram_chat_id: chat || null,
+        telegram_chat_id: $("automationRoute").value === "telegram" ? chat || null : null,
       };
     }
 
@@ -2739,44 +1471,131 @@ _DASHBOARD_HTML = r"""<!doctype html>
       await refreshAutomations();
     }
 
-    function empty(text) {
+    function empty(text, description = "") {
       const node = document.createElement("div");
-      node.className = "empty";
-      node.textContent = text;
+      node.className = "empty empty-state";
+      const title = document.createElement("strong"); title.textContent = text; node.append(title);
+      if (description) { const copy = document.createElement("p"); copy.textContent = description; node.append(copy); }
       return node;
+    }
+
+    function welcomeState() {
+      const node = empty("What are we building?", "Start a task. Keep the work, plan, and changes together.");
+      node.classList.add("welcome-state");
+      const mark = document.createElement("span"); mark.className = "empty-icon"; mark.setAttribute("aria-hidden", "true");
+      const logo = document.createElement("img"); logo.src = "/assets/lobster-icon.svg"; logo.alt = ""; logo.width = 24; logo.height = 24; mark.append(logo); node.prepend(mark);
+      const actions = document.createElement("div"); actions.className = "starter-grid";
+      for (const [label, prompt] of [["Explore the project", "Explore this project and explain its structure and main entry points."], ["Find a bug", "Review this project for a concrete bug, explain it, and propose a focused fix."], ["Plan a change", "Help me plan a change to this project: "]]) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "starter-action"; button.textContent = label;
+        button.addEventListener("click", () => { $("runMessage").value = prompt; autoGrow(); $("runMessage").focus(); });
+        actions.append(button);
+      }
+      node.append(actions); return node;
     }
 
     /* Settings modal */
     const PANES = ["general", "models", "schedules", "usage", "about"];
+    let settingsReturnFocus = null;
     function openSettingsPane(pane) {
-      $("settingsOverlay").classList.add("open");
+      if (!PANES.includes(pane)) return;
+      closeMobileSidebar();
+      const overlay = $("settingsOverlay"), wasOpen = !overlay.hidden;
+      if (!wasOpen) { settingsReturnFocus = document.activeElement; $("settingsNotice").hidden = true; }
+      overlay.hidden = false; overlay.classList.add("open");
+      $("appFrame").inert = true;
       for (const id of PANES) {
         const active = id === pane;
-        $(`pane${id[0].toUpperCase()}${id.slice(1)}`).hidden = !active;
+        const panel = $(`pane${id[0].toUpperCase()}${id.slice(1)}`);
+        panel.hidden = !active;
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", `settingsTab${id[0].toUpperCase()}${id.slice(1)}`);
       }
       document.querySelectorAll(".settings-nav button").forEach((button) => {
-        button.classList.toggle("active", button.dataset.pane === pane);
+        const active = button.dataset.pane === pane;
+        button.classList.toggle("active", active); button.setAttribute("aria-selected", String(active)); button.tabIndex = active ? 0 : -1;
+        if (active && !wasOpen) button.focus();
       });
       if (pane === "models") {
         void loadModelConfig();
         void loadLlamacppConfig();
       }
+      if (pane === "schedules") void refreshAutomations().catch(error => setNotice(error.message || String(error), true));
       if (pane === "usage") void loadUsagePane();
     }
     function closeSettingsPanel() {
-      $("settingsOverlay").classList.remove("open");
+      if ($("settingsOverlay").hidden) return;
+      $("settingsOverlay").classList.remove("open"); $("settingsOverlay").hidden = true;
+      $("appFrame").inert = false;
+      if (settingsReturnFocus?.isConnected) settingsReturnFocus.focus();
+      settingsReturnFocus = null;
+    }
+
+    function handleSettingsKeydown(event) {
+      if ($("settingsOverlay").hidden) return;
+      if (event.key === "Escape") { event.preventDefault(); closeSettingsPanel(); return; }
+      if (event.key !== "Tab") return;
+      const controls = [...$("settingsOverlay").querySelectorAll('button, [href], input, select, textarea, [tabindex]')]
+        .filter(element => !element.disabled && element.tabIndex >= 0 && !element.closest("[hidden]") && element.getClientRects().length);
+      const first = controls[0], last = controls.at(-1);
+      if (!first) return;
+      if (event.shiftKey && (document.activeElement === first || !$("settingsOverlay").contains(document.activeElement))) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+
+    function bindTabNavigation(selector, activate) {
+      const tabs = [...document.querySelectorAll(selector)];
+      tabs.forEach((tab, index) => tab.addEventListener("keydown", (event) => {
+        const moves = {ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1};
+        if (!(event.key in moves) && !["Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + moves[event.key] + tabs.length) % tabs.length;
+        activate(tabs[next]); tabs[next].focus();
+      }));
+    }
+
+    let defaultModelConfig = {provider: "", model: ""};
+    let modelConfigGeneration = 0;
+    const modelPickers = new Map();
+
+    function providerLabel(provider) {
+      return Array.from($("configProvider").options).find((option) => option.value === provider)?.textContent || provider;
+    }
+
+    function syncProviderSettings() {
+      const provider = $("configProvider").value;
+      $("llamacppSettings").hidden = provider !== "llamacpp";
+      $("providerRouteHint").textContent = provider === "deepseek"
+        ? "Connects through your DeepSeek API configuration. Model IDs come directly from DeepSeek."
+        : `Models are discovered from your ${providerLabel(provider)} connection. You can also enter a model ID.`;
+    }
+
+    function applyDefaultModel(payload, updateForm = false) {
+      defaultModelConfig = {provider: payload.provider || "", model: payload.model || ""};
+      const label = providerLabel(defaultModelConfig.provider);
+      $("modelRoute").textContent = [label, defaultModelConfig.model].filter(Boolean).join(" / ") || "No default selected";
+      $("modelCurrent").textContent = "Used for new tasks and schedules that follow the default.";
+      for (const [selectId, inputId] of [["runProvider", "runModel"], ["automationProvider", "automationModel"]]) {
+        const select = $(selectId);
+        const option = Array.from(select.options).find((item) => item.value === "");
+        if (option) option.textContent = label ? `Default · ${label}` : "Default provider";
+        modelPickers.get(inputId)?.refresh();
+      }
+      if (updateForm) {
+        $("configProvider").value = defaultModelConfig.provider;
+        $("configModel").value = defaultModelConfig.model;
+        syncProviderSettings();
+        modelPickers.get("configModel")?.refresh();
+      }
     }
 
     async function loadModelConfig() {
+      const generation = ++modelConfigGeneration;
       try {
         const payload = await request("/config/model");
-        if (payload.provider) {
-          $("configProvider").value = payload.provider;
-          $("configProvider").dispatchEvent(new Event("change"));
-        }
-        if (payload.model) $("configModel").value = payload.model;
-        $("modelCurrent").textContent = `current: ${payload.provider || "?"}:${payload.model || "?"}`;
+        if (generation !== modelConfigGeneration) return;
+        applyDefaultModel(payload, true);
       } catch (error) {
+        if (generation !== modelConfigGeneration) return;
         $("modelCurrent").textContent = String(error.message || error);
       }
     }
@@ -2805,7 +1624,9 @@ _DASHBOARD_HTML = r"""<!doctype html>
         chip.title = `Use ${item.model}`;
         chip.addEventListener("click", () => {
           $("configProvider").value = "llamacpp";
+          $("configProvider").dispatchEvent(new Event("change"));
           $("configModel").value = item.model;
+          $("configModel").dispatchEvent(new Event("input"));
         });
         box.append(chip);
       }
@@ -2846,12 +1667,18 @@ _DASHBOARD_HTML = r"""<!doctype html>
       const headRow = document.createElement("tr");
       for (const header of headers) {
         const th = document.createElement("th");
+        th.scope = "col";
         th.textContent = header;
         headRow.append(th);
       }
       thead.append(headRow);
       table.append(thead);
       const tbody = document.createElement("tbody");
+      if (!rows.length) {
+        const row = document.createElement("tr"), cell = document.createElement("td");
+        cell.colSpan = headers.length; cell.className = "table-empty"; cell.textContent = "No usage recorded yet.";
+        row.append(cell); tbody.append(row);
+      }
       for (const row of rows) {
         const tr = document.createElement("tr");
         for (const cell of row) {
@@ -2865,6 +1692,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     async function loadUsagePane() {
+      $("usagePaneStatus").textContent = "Loading usage…";
+      $("refreshUsagePane").disabled = true;
       try {
         const payload = await request("/usage?limit=250");
         const summary = payload.summary || {};
@@ -2896,13 +1725,19 @@ _DASHBOARD_HTML = r"""<!doctype html>
             formatShortTime(record.timestamp),
           ]),
         );
+        $("usagePaneStatus").textContent = "Usage from the latest 250 runs.";
       } catch (error) {
+        $("usagePaneStatus").textContent = `Could not load usage: ${error.message || error}`;
         setNotice(String(error.message || error), true);
-      }
+      } finally { $("refreshUsagePane").disabled = false; }
     }
 
     $("modelForm").addEventListener("submit", async (event) => {
       event.preventDefault();
+      const generation = ++modelConfigGeneration;
+      const button = $("modelForm").querySelector("button[type=submit]");
+      button.disabled = true;
+      $("modelCurrent").textContent = "Saving default…";
       try {
         const payload = await request("/config/model", {
           method: "PATCH",
@@ -2912,62 +1747,127 @@ _DASHBOARD_HTML = r"""<!doctype html>
             persist_global: true,
           }),
         });
-        $("modelCurrent").textContent = `current: ${payload.provider}:${payload.model}`;
+        applyDefaultModel(payload, generation === modelConfigGeneration);
+        $("modelCurrent").textContent = "Default saved. Ready for your next task.";
         setNotice(`Default model saved: ${payload.provider}:${payload.model}`);
       } catch (error) {
+        $("modelCurrent").textContent = String(error.message || error);
         setNotice(String(error.message || error), true);
+      } finally {
+        button.disabled = false;
       }
     });
+
+    function modelCapabilitySummary(item) {
+      if (!item) return "Capabilities not published for this model.";
+      const parts = [];
+      let missing = false;
+      for (const [key, label] of [["supports_tools", "Tools"], ["supports_vision", "Images"], ["supports_reasoning", "Reasoning"]]) {
+        if (typeof item[key] === "boolean") parts.push(item[key] ? label : `No ${label.toLowerCase()}`);
+        else missing = true;
+      }
+      for (const [key, label] of [["context_window_tokens", "context"], ["max_completion_tokens", "max output"]]) {
+        if (Number.isFinite(item[key]) && item[key] > 0) parts.push(`${formatCompactNumber(item[key])} ${label}`);
+        else missing = true;
+      }
+      const price = (value) => `$${(value * 1000000).toLocaleString(undefined, {maximumFractionDigits: 4})}/M`;
+      if (Number.isFinite(item.input_cost_per_token) && Number.isFinite(item.output_cost_per_token)) {
+        parts.push(`${price(item.input_cost_per_token)} in / ${price(item.output_cost_per_token)} out`);
+      } else missing = true;
+      if (!parts.length) return "Capabilities not published by this provider.";
+      if (missing) parts.push("Some details unavailable");
+      return parts.join(" · ");
+    }
 
     function syncModelDatalist(select, input) {
       const list = document.createElement("datalist");
       list.id = `${input.id}Models`;
       input.after(list);
       input.setAttribute("list", list.id);
-      let generation = 0, models = [];
+      let generation = 0, models = [], discoveredDefault = "";
       const metadata = document.createElement("p"); metadata.className = "model-metadata"; metadata.id = `${input.id}Capabilities`;
       metadata.setAttribute("aria-live", "polite"); input.after(metadata);
+      if (!input.getAttribute("aria-label")) input.setAttribute("aria-label", input.id === "automationModel" ? "Schedule model" : "Model");
+      input.setAttribute("aria-describedby", [input.getAttribute("aria-describedby"), metadata.id].filter(Boolean).join(" "));
+      const effectiveProvider = () => select.value || defaultModelConfig.provider;
+      const defaultModel = () => effectiveProvider() === defaultModelConfig.provider ? defaultModelConfig.model : discoveredDefault;
+      const updatePlaceholder = () => {
+        if (input.id !== "configModel") input.placeholder = defaultModel() ? `Default: ${defaultModel()}` : "Provider default model";
+      };
       const showCapabilities = () => {
-        const item = models.find((model) => model.model === input.value.trim());
-        const support = (value) => value === true ? "yes" : value === false ? "no" : "unknown";
-        const price = (value) => typeof value === "number" && Number.isFinite(value) ? `$${(value * 1000000).toLocaleString(undefined,{maximumFractionDigits:4})}/M` : "unknown";
-        metadata.textContent = `Tools: ${support(item?.supports_tools)} · Images: ${support(item?.supports_vision)} · Reasoning: ${support(item?.supports_reasoning)} · Context: ${item?.context_window_tokens?.toLocaleString() || "unknown"} · Output: ${item?.max_completion_tokens?.toLocaleString() || "unknown"} · Input/output: ${price(item?.input_cost_per_token)} / ${price(item?.output_cost_per_token)}`;
-        if (item?.supported_reasoning_efforts?.length) metadata.textContent += ` · Effort: ${item.supported_reasoning_efforts.join(", ")}`;
+        const model = input.value.trim() || (input.id === "configModel" ? "" : defaultModel());
+        const item = models.find((item) => item.model === model);
+        const hasDetails = item && (
+          ["supports_tools", "supports_vision", "supports_reasoning"].some((key) => typeof item[key] === "boolean")
+          || ["context_window_tokens", "max_completion_tokens"].some((key) => Number.isFinite(item[key]) && item[key] > 0)
+          || (Number.isFinite(item.input_cost_per_token) && Number.isFinite(item.output_cost_per_token))
+        );
+        metadata.hidden = input.hidden || !model || (input.id !== "configModel" && !hasDetails);
+        metadata.textContent = model ? modelCapabilitySummary(item) : "";
       };
       input.addEventListener("input", showCapabilities);
       input.addEventListener("change", showCapabilities);
       showCapabilities();
-      const update = async () => {
+      const update = async (refresh = false) => {
         const requestId = ++generation;
-        const provider = select.value;
+        const provider = effectiveProvider();
         input.dataset.modelProvider = provider;
-        list.replaceChildren(); models = []; showCapabilities();
+        list.replaceChildren(); models = []; discoveredDefault = ""; updatePlaceholder(); showCapabilities();
+        const isConfig = input.id === "configModel";
+        if (isConfig) {
+          $("modelDiscoveryStatus").textContent = `Loading models from ${providerLabel(provider)}…`;
+          $("refreshModels").disabled = true;
+        }
         try {
-          const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-          const payload = await request(`/models${query}`);
+          const query = new URLSearchParams();
+          if (provider) query.set("provider", provider);
+          if (refresh) query.set("refresh", "1");
+          const payload = await request(`/models${query.size ? `?${query}` : ""}`);
           if (requestId !== generation) return;
           models = payload.models || [];
+          discoveredDefault = payload.default_model || "";
           for (const item of models) {
             const option = document.createElement("option");
             option.value = item.model;
             option.label = item.label;
             list.append(option);
           }
-          showCapabilities();
+          updatePlaceholder(); showCapabilities();
           input.title = payload.error
             ? "Discovery unavailable. You can still enter a model ID."
             : "Choose a discovered model or enter any model ID.";
+          if (isConfig) {
+            $("modelDiscoveryStatus").textContent = payload.error
+              ? "Discovery unavailable. Check your provider connection or enter a model ID."
+              : `${models.length} ${models.length === 1 ? "model" : "models"} ${payload.source === "configured" ? "from configuration" : "available"} · Manual IDs supported`;
+          }
         } catch (_error) {
-          if (requestId === generation) input.title = "Discovery unavailable. Enter a model ID.";
+          if (requestId === generation) {
+            input.title = "Discovery unavailable. Enter a model ID.";
+            if (isConfig) $("modelDiscoveryStatus").textContent = "Discovery unavailable. Check your provider connection or enter a model ID.";
+          }
+        } finally {
+          if (isConfig && requestId === generation) $("refreshModels").disabled = false;
         }
       };
-      select.addEventListener("change", update);
-      input.addEventListener("focus", update);
+      select.addEventListener("change", () => {
+        input.value = "";
+        if (input.id === "configModel") {
+          ++modelConfigGeneration;
+          syncProviderSettings();
+        }
+        void update();
+      });
+      input.addEventListener("focus", () => { void update(); });
+      modelPickers.set(input.id, {refresh: update});
     }
 
     syncModelDatalist($("runProvider"), $("runModel"));
     syncModelDatalist($("configProvider"), $("configModel"));
     syncModelDatalist($("automationProvider"), $("automationModel"));
+    $("configModel").addEventListener("input", () => { ++modelConfigGeneration; });
+    $("refreshModels").addEventListener("click", () => { void modelPickers.get("configModel").refresh(true); });
+    void loadModelConfig();
 
     const workflow = { review: null, reviewContext: {}, comments: [], reviewGeneration: 0, planGeneration: 0, planSignature: "", workerSignature: "", workers: [], workerDrafts: new Map(), workerPending: new Set(), worktrees: [], transfer: null };
 
@@ -3008,7 +1908,14 @@ _DASHBOARD_HTML = r"""<!doctype html>
         $("analyzeReview").disabled = !snapshot.files.length;
         renderReview();
       } catch (error) {
-        if (generation === workflow.reviewGeneration) $("reviewStatus").textContent = error.message || String(error);
+        if (generation !== workflow.reviewGeneration) return;
+        const message = error.message || String(error);
+        const needsRepository = /not a git repository/i.test(message);
+        $("reviewStatus").textContent = "";
+        $("reviewFiles").replaceChildren(empty(
+          needsRepository ? "No Git repository in this workspace" : "Unable to load changes",
+          needsRepository ? "Choose a task in a Git project to review and stage its changes." : message,
+        ));
       }
     }
 
@@ -3067,7 +1974,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     function renderReview() {
       const snapshot = workflow.review, context = workflow.reviewContext;
       const container = $("reviewFiles"); container.replaceChildren();
-      if (!snapshot?.files.length) { container.append(empty("No changes in this view.")); return; }
+      if (!snapshot?.files.length) { container.append(empty("All clear", "No file changes in this view.")); return; }
       for (const file of snapshot.files) {
         const card = document.createElement("article"); card.className = "workflow-card";
         const head = document.createElement("div"); head.className = "workflow-row";
@@ -3199,7 +2106,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     async function loadPlan(force = false) {
       const runId = state.selectedRunId, generation = ++workflow.planGeneration;
       $("planForm").hidden = !runId; $("planMode").disabled = !runId;
-      if (!runId) { workflow.planSignature = ""; $("planStatus").textContent = "Select a task to edit its plan."; $("planSteps").replaceChildren(); $("queuedMessages").replaceChildren(); renderWorkers([], true); $("workerStatus").textContent = "Select a task to inspect its workers."; return; }
+      if (!runId) { workflow.planSignature = ""; $("planStatus").textContent = "Select a task to edit its plan."; $("planSteps").replaceChildren(); $("queuedMessages").replaceChildren(empty("No task selected")); renderWorkers([], true); $("workerStatus").textContent = "Select a task to inspect its workers."; return; }
       try {
         const payload = await request(`/runs/${runId}/session?controls=1`);
         if (runId !== state.selectedRunId || generation !== workflow.planGeneration) return;
@@ -3220,10 +2127,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
           row.append(check, input, workflowButton("Save", () => sendTaskControl("plan", `edit ${index + 1} ${input.value}`)));
           item.append(row); list.append(item);
         }
-        if (!(session.plan_steps || []).length) list.append(empty("No steps yet."));
+        if (!(session.plan_steps || []).length) { const item = document.createElement("li"); item.className = "plan-empty"; item.append(empty("A clear next step", "Add a step above, or ask Libre Claw to make a plan.")); list.append(item); }
         $("queuedMessages").replaceChildren();
         for (const item of queued) { const row = document.createElement("p"); row.className = "workflow-card"; row.textContent = item.message; $("queuedMessages").append(row); }
-        if (!queued.length) $("queuedMessages").append(empty("No queued messages."));
+        if (!queued.length) $("queuedMessages").append(empty("Queue is clear", "Choose Queue follow-up in the composer to save the next instruction."));
       } catch (error) { if (generation === workflow.planGeneration) $("planStatus").textContent = error.message || String(error); }
     }
 
@@ -3240,7 +2147,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
           const heading = document.createElement("h3"); heading.textContent = record.branch || record.worktree_id.slice(0, 12);
           const path = document.createElement("p"); path.className = "hint"; path.textContent = record.path;
           const actions = document.createElement("div"); actions.className = "workflow-row";
-          actions.append(workflowButton("Open task", () => selectRun(record.run_id)), workflowButton("Use for new task", () => {
+          if (record.run_id) actions.append(workflowButton("Open task", async () => { await selectRun(record.run_id); setView("chat"); }));
+          actions.append(workflowButton("Use for new task", () => {
             newSession(); $("runWorktree").value = record.worktree_id;
           }), workflowButton("Review transfer", () => previewTransfer(record)), workflowButton("Remove", async () => {
             if (!window.confirm(`Remove worktree ${record.branch || record.worktree_id}? The server will check for work that has not been transferred.`)) return;
@@ -3263,7 +2171,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           });
           card.append(heading, path, actions, setup); list.append(card);
         }
-        if (!workflow.worktrees.length) list.append(empty("No managed worktrees yet."));
+        if (!workflow.worktrees.length) list.append(empty("Room to experiment", "Create a worktree to keep a task's changes in a separate checkout."));
       } catch (error) { $("worktreeList").replaceChildren(empty(error.message || String(error))); }
     }
 
@@ -3294,7 +2202,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
           include_changes:$("worktreeInclude").checked, ...($("worktreeAssociate").checked ? {run_id:state.selectedRunId} : {}),
         }) });
         await loadWorktrees(); await refreshRuns(); await selectRun(payload.run.run_id); setNotice("Worktree ready.");
-      } catch (error) { setNotice(error.message || String(error), true); }
+      } catch (error) {
+        const message = error.message || String(error);
+        setNotice(/not a git repository/i.test(message) ? "Worktrees need a Git repository. Choose a Git project as the current workspace first." : message, true);
+      }
       finally { submit.disabled = false; }
     });
     $("applyTransfer").addEventListener("click", async () => {
@@ -3316,6 +2227,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function syncComposerMode() {
       const mode = composerMode();
+      $("runProvider").hidden = mode !== "new"; $("runProvider").disabled = mode !== "new";
+      $("runModel").hidden = mode !== "new"; $("runModel").disabled = mode !== "new";
+      $("runModel").dispatchEvent(new Event("input"));
+      $("sessionModel").hidden = mode === "new";
+      $("sessionModel").textContent = [state.selectedProvider, state.selectedModel].filter(Boolean).join(" / ");
+      $("sessionModel").title = "This task continues with its saved provider and model. Start a new task to use a different model.";
       $("messageAction").hidden = mode === "new";
       $("runMode").hidden = mode !== "new";
       $("runWorktree").hidden = mode !== "new";
@@ -3325,51 +2242,59 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (mode !== "busy" && $("messageAction").value === "steer") $("messageAction").value = "message";
       $("runMessage").placeholder = mode === "reply"
         ? "Reply to this session"
-        : "Describe what you want Libre Claw to do";
+        : mode === "busy" ? "Guide this task or queue what comes next" : "Describe what you want Libre Claw to do";
+      const label = mode === "new" ? "Start task" : $("messageAction").value === "queue" ? "Queue follow-up" : $("messageAction").value === "steer" ? "Steer task" : "Send reply";
+      $("sendMessage").setAttribute("aria-label", label); $("sendMessage").title = label;
     }
 
     $("runForm").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const mode = composerMode();
-      const delivery = mode === "new" ? "message" : $("messageAction").value;
-      if (delivery !== "message") {
-        await sendTaskControl(delivery, $("runMessage").value, true);
-        return;
-      }
-      if (mode === "busy") { setNotice("Choose steer or queue while this task is running.", true); return; }
-      const body = {
-        message: $("runMessage").value,
-        surface: "dashboard",
-      };
-      if ($("runProvider").value.trim()) body.provider = $("runProvider").value.trim();
-      if ($("runModel").value.trim()) body.model = $("runModel").value.trim();
-      if (mode === "new") {
-        body.session = { mode: $("runMode").value };
-        if ($("runWorktree").value) body.worktree_id = $("runWorktree").value;
-      }
+      if (state.sending || !$("runMessage").value.trim()) return;
+      state.sending = true; $("sendMessage").disabled = true;
+      const draft = $("runMessage").value;
       try {
+        const mode = composerMode();
+        const delivery = mode === "new" ? "message" : $("messageAction").value;
+        if (delivery !== "message") {
+          await sendTaskControl(delivery, $("runMessage").value, true);
+          return;
+        }
+        if (mode === "busy") { setNotice("Choose steer or queue while this task is running.", true); return; }
+        const body = { message: $("runMessage").value, surface: "dashboard" };
+        if (mode === "new") {
+          if ($("runProvider").value.trim()) body.provider = $("runProvider").value.trim();
+          if ($("runModel").value.trim()) body.model = $("runModel").value.trim();
+          body.session = { mode: $("runMode").value };
+          if ($("runWorktree").value) body.worktree_id = $("runWorktree").value;
+        }
         const path = mode === "reply" ? `/runs/${state.selectedRunId}/messages` : "/runs";
         const payload = await request(path, { method: "POST", body: JSON.stringify(body) });
-        $("runMessage").value = "";
+        if ($("runMessage").value === draft) $("runMessage").value = "";
         autoGrow();
         setNotice(mode === "reply" ? "Reply sent." : `Run ${payload.run.run_id} started.`);
         await refreshRuns();
         await selectRun(payload.run.run_id);
       } catch (error) {
         setNotice(String(error.message || error), true);
-      }
+      } finally { state.sending = false; $("sendMessage").disabled = false; syncComposerMode(); }
     });
 
     $("automationForm").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const body = automationFormPayload();
-      const editingId = state.editingAutomationId;
-      const path = editingId ? `/automations/${editingId}` : "/automations";
-      const method = editingId ? "PUT" : "POST";
-      const payload = await request(path, { method, body: JSON.stringify(body) });
-      setNotice(`Schedule ${payload.automation.automation_id} ${editingId ? "updated" : "created"}.`);
-      resetAutomationForm(event.target);
-      await refreshAutomations();
+      const submit = $("automationSubmit");
+      if (submit.disabled) return;
+      submit.disabled = true; const label = submit.textContent; submit.textContent = "Saving…";
+      try {
+        const body = automationFormPayload();
+        const editingId = state.editingAutomationId;
+        const path = editingId ? `/automations/${editingId}` : "/automations";
+        const method = editingId ? "PUT" : "POST";
+        const payload = await request(path, { method, body: JSON.stringify(body) });
+        setNotice(`Schedule ${payload.automation.automation_id} ${editingId ? "updated" : "created"}.`);
+        resetAutomationForm(event.target);
+        await refreshAutomations();
+      } catch (error) { setNotice(error.message || String(error), true); submit.textContent = label; }
+      finally { submit.disabled = false; }
     });
 
     function autoGrow() {
@@ -3380,7 +2305,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     $("runMessage").addEventListener("input", autoGrow);
     $("runMessage").addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !event.shiftKey) {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         $("runForm").requestSubmit();
       }
@@ -3398,24 +2323,37 @@ _DASHBOARD_HTML = r"""<!doctype html>
     $("openSettings").addEventListener("click", () => openSettingsPane("general"));
     $("closeSettings").addEventListener("click", closeSettingsPanel);
     $("settingsMask").addEventListener("click", closeSettingsPanel);
-    document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") closeSettingsPanel();
-    });
+    document.addEventListener("keydown", handleSettingsKeydown);
     document.querySelectorAll(".settings-nav button").forEach((button) => {
       button.addEventListener("click", () => openSettingsPane(button.dataset.pane));
     });
+    bindTabNavigation(".settings-nav button", button => openSettingsPane(button.dataset.pane));
+    bindTabNavigation(".view-tab", button => button.click());
+    $("messageAction").addEventListener("change", syncComposerMode);
+    $("automationRoute").addEventListener("change", syncAutomationRoute);
+    $("refreshUsagePane").addEventListener("click", loadUsagePane);
+    $("refreshSchedules").addEventListener("click", () => { void refreshAutomations().catch(error => setNotice(error.message || String(error), true)); });
     $("cancelAutomationEdit").addEventListener("click", () => resetAutomationForm($("automationForm")));
     $("cancelRun").addEventListener("click", async () => {
       if (!state.selectedRunId) return;
-      await request(`/runs/${state.selectedRunId}/cancel`, { method: "POST" });
-      setNotice("Cancel requested.");
-      await refreshRunDetail();
-      await refreshRuns();
+      $("cancelRun").disabled = true;
+      try {
+        await request(`/runs/${state.selectedRunId}/cancel`, { method: "POST" });
+        setNotice("Cancel requested."); await refreshRunDetail(); await refreshRuns();
+      } catch (error) { setNotice(error.message || String(error), true); $("cancelRun").disabled = false; }
     });
 
     async function refreshAll() {
+      if (state.refreshing) return;
+      state.refreshing = true; $("refreshAll").disabled = true;
       try {
-        await Promise.all([refreshHealth(), refreshUsage(), refreshAutomations()]);
+        const results = await Promise.allSettled([refreshHealth(), refreshUsage(), refreshAutomations()]);
+        if (results[0].status === "rejected") {
+          $("healthDot").className = "status-dot offline"; $("daemonStatus").textContent = "Disconnected"; $("daemonStatusMetric").textContent = "Disconnected";
+          throw results[0].reason;
+        }
+        const failed = results.find(result => result.status === "rejected");
+        if (failed) setNotice(failed.reason?.message || "Some dashboard data could not be refreshed.", true);
         await refreshRuns();
         // While streaming, the incremental poll owns the conversation pane; a
         // full detail refresh here would repaint mid-token.
@@ -3423,14 +2361,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
         else if (state.selectedRunId && state.view === "plan") await loadPlan();
         $("lastRefresh").textContent = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date());
       } catch (error) {
-        $("healthDot").className = "status-dot offline";
         setNotice(error.message || String(error), true);
-      }
+      } finally { state.refreshing = false; $("refreshAll").disabled = false; }
     }
 
     void loadWorktrees();
     initTheme();
     initRail();
+    initMobileSidebar();
+    clearSelectedRun();
     refreshAll();
     setInterval(refreshAll, 3000);
   </script>
