@@ -269,26 +269,32 @@ _DASHBOARD_HTML = r"""<!doctype html>
             <span class="hint" id="modelCurrent" role="status"></span>
           </div>
           <form id="modelForm" class="stack">
-            <div class="grid-2">
-              <label>Provider<select id="configProvider">
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI API</option>
-                <option value="openrouter">OpenRouter</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="moonshot">Kimi Code / Moonshot</option>
-                <option value="ollama">Ollama Cloud/Local</option>
-              <option value="llamacpp">llama.cpp (llama-swap)</option>
-                <option value="codex">OpenAI Codex</option>
-              </select></label>
-              <label>Model<input id="configModel" placeholder="Select or enter a model ID" required spellcheck="false" autocomplete="off"></label>
+            <div class="grid-2 model-fields">
+              <div class="form-field">
+                <label for="configProvider">Provider</label>
+                <select id="configProvider" aria-describedby="providerRouteHint">
+                  <option value="anthropic">Anthropic</option>
+                  <option value="openai">OpenAI API</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="moonshot">Kimi Code / Moonshot</option>
+                  <option value="ollama">Ollama Cloud/Local</option>
+                  <option value="llamacpp">llama.cpp (llama-swap)</option>
+                  <option value="codex">OpenAI Codex</option>
+                </select>
+                <p class="hint" id="providerRouteHint"></p>
+              </div>
+              <div class="form-field">
+                <label for="configModel">Model</label>
+                <input id="configModel" placeholder="Select or enter a model ID" required spellcheck="false" autocomplete="off">
+              </div>
             </div>
-            <p class="hint" id="providerRouteHint"></p>
             <div class="model-discovery-row">
               <span id="modelDiscoveryStatus" class="hint" role="status" aria-live="polite">Models load from your provider.</span>
-              <button id="refreshModels" type="button">Refresh models</button>
-            </div>
-            <div class="row end">
-              <button class="primary" type="submit">Save default</button>
+              <div class="model-actions">
+                <button id="refreshModels" type="button">Refresh models</button>
+                <button class="primary" type="submit">Save default</button>
+              </div>
             </div>
           </form>
           <section id="llamacppSettings" class="endpoint-settings" hidden aria-label="llama.cpp connection">
@@ -336,7 +342,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
                 <option value="codex">OpenAI Codex</option>
               </select></label>
             </div>
-            <label>Model<input id="automationModel" placeholder="default"></label>
+            <div class="form-field">
+              <label for="automationModel">Model</label>
+              <input id="automationModel" placeholder="default">
+            </div>
             <div class="row">
               <button id="automationSubmit" class="primary" type="submit">Create schedule</button>
               <button id="cancelAutomationEdit" type="button" hidden>Cancel edit</button>

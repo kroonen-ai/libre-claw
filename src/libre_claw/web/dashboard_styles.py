@@ -839,9 +839,13 @@ DASHBOARD_CSS = r"""
     .settings-body .panel-header h4 { margin: 0 auto 0 0; font-size: 13px; font-weight: 600; }
     .table-empty { padding: 24px !important; text-align: center !important; color: var(--muted); }
     .settings-body > .hint { margin: 7px 0 23px; max-width: 58ch; }
-    .settings-body label { display: grid; align-content: start; gap: 7px; color: var(--muted); font-size: 11px; }
-    .settings-body label input, .settings-body label select, .settings-body label textarea { width: 100%; font-size: 12px; }
-    .settings-body label textarea { min-height: 90px; }
+    .settings-body label { display: grid; align-content: start; align-self: start; gap: 8px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .settings-body :is(input:not([type=checkbox]), select) { height: 42px; color: var(--text); font-size: 13px; line-height: 1.5; }
+    .settings-body label input, .settings-body label select, .settings-body label textarea { width: 100%; }
+    .settings-body label textarea { min-height: 90px; color: var(--text); font-size: 13px; line-height: 1.6; }
+    .form-field { display: grid; align-content: start; gap: 8px; min-width: 0; }
+    .form-field > :is(input, select) { width: 100%; }
+    .form-field > :is(.hint, .model-metadata) { margin: 0; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
     .settings-body form button { min-height: 36px; font-size: 12px; }
     .settings-notice { margin: 8px 24px 12px; padding: 10px 13px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--soft); background: var(--accent-soft); font-size: 12px; }
     .settings-notice.error { color: var(--danger); background: var(--danger-soft); }
@@ -863,15 +867,16 @@ DASHBOARD_CSS = r"""
     .model-route-card .eyebrow { color: var(--muted); font-size: 10px; }
     #modelRoute { font-size: 14px; font-weight: 600; }
     .model-route-card .hint { margin: 0; font-size: 11px; }
-    .model-discovery-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-block: 12px; border-block: 1px solid var(--line); }
-    .model-discovery-row button { flex: none; }
+    .model-discovery-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; margin-top: 4px; padding-top: 16px; border-top: 1px solid var(--line); }
+    .model-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-inline-start: auto; }
+    .settings-body :is(.model-actions, .endpoint-row) button { min-height: 42px; white-space: nowrap; }
     .endpoint-settings { margin-top: 24px; border-top: 1px solid var(--line); }
-    #modelDiscoveryStatus { font-size: 11px; color: var(--muted); margin: 8px 0; }
-    #providerRouteHint { font-size: 12px; color: var(--soft); line-height: 1.7; }
+    #modelDiscoveryStatus { flex: 1 1 180px; font-size: 11px; color: var(--muted); margin: 0; overflow-wrap: anywhere; }
     .model-chip { min-height: 32px; padding: 5px 10px; font: 11px var(--font-mono); }
     .model-chip:hover { background: var(--accent-soft); border-color: var(--accent); }
-    .endpoint-row { display: flex; flex-wrap: wrap; gap: 8px; }
-    .endpoint-row input { flex: 1; min-width: 120px; }
+    .endpoint-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: start; gap: 8px; }
+    .endpoint-row input { width: 100%; }
+    #llamacppStatus { margin: 0; overflow-wrap: anywhere; }
     .automation-list { display: grid; gap: 12px; margin-top: 22px; }
     .automation { border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--bg); padding: 17px; display: grid; gap: 10px; }
     .automation-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -934,6 +939,13 @@ DASHBOARD_CSS = r"""
       .metric { padding: 12px; }
       .metric strong { font-size: 20px; }
       .metric-grid { gap: 8px; }
+    }
+    @media (max-width: 600px) {
+      .model-fields { grid-template-columns: 1fr; gap: 20px; }
+      .model-actions { width: 100%; }
+      .model-actions button { flex: 1; }
+      .endpoint-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .endpoint-row input { grid-column: 1 / -1; }
     }
     @media (max-width: 480px) {
       .main-head .pill { display: none; }
