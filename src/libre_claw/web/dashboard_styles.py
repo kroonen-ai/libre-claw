@@ -232,8 +232,9 @@ DASHBOARD_CSS = r"""
     .settings-body form button { min-height: 36px; font-size: 12px; }
     .settings-notice { margin: 8px 24px 12px; padding: 10px 13px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--soft); background: var(--accent-soft); font-size: 12px; }
     .settings-notice.error { color: var(--danger); background: var(--danger-soft); }
-    .setting-row { display: flex; align-items: center; gap: 22px; padding: 17px 0; border-bottom: 1px solid var(--line); }
-    .setting-row:last-child { border-bottom: 0; }
+    .setting-row { display: flex; align-items: center; gap: 22px; }
+    .setting-row:not(.section-card) { padding: 17px 0; border-bottom: 1px solid var(--line); }
+    .setting-row:not(.section-card):last-child { border-bottom: 0; }
     .setting-row .copy { flex: 1; min-width: 0; }
     .setting-row strong { display: block; font-size: 13px; font-weight: 600; }
     .setting-row small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.6; }
