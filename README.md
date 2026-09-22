@@ -214,6 +214,11 @@ For direct DeepSeek access, run `/setup key deepseek`, then `/setup deepseek`.
 Use `/models deepseek` to discover available models. See the
 [DeepSeek guide](docs/DEEPSEEK.md) for thinking settings and image support.
 
+For OpenCode Zen or Go, use `libre-claw auth connect-opencode opencode` or
+`libre-claw auth connect-opencode opencode-go`, then discover models with
+`/models <provider>`. Existing OpenCode API keys can be imported explicitly.
+See the [OpenCode authentication and provider guide](docs/OPENCODE.md).
+
 Prompt caching is configured automatically for supported providers. See the
 [caching guide](docs/PROMPT_CACHING.md) for controls and cache usage reports.
 

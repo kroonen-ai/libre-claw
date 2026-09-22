@@ -41,11 +41,11 @@ class Element {
   dispatchEvent(event) { for (const callback of this.listeners[event.type] || []) callback(event); }
   querySelector() { return submitButton; }
 }
-const ids = ['configProvider', 'runProvider', 'automationProvider', 'configModel', 'runModel', 'automationModel', 'modelRoute', 'modelCurrent', 'llamacppSettings', 'providerRouteHint', 'modelDiscoveryStatus', 'refreshModels', 'modelForm', 'llamacppBaseUrl', 'llamacppDiscover', 'llamacppSave', 'llamacppForm', 'llamacppStatus', 'llamacppDiscovered'];
+const ids = ['configProvider', 'runProvider', 'automationProvider', 'configModel', 'runModel', 'automationModel', 'modelRoute', 'modelCurrent', 'llamacppSettings', 'providerRouteHint', 'providerAuthLink', 'modelDiscoveryStatus', 'refreshModels', 'modelForm', 'llamacppBaseUrl', 'llamacppDiscover', 'llamacppSave', 'llamacppForm', 'llamacppStatus', 'llamacppDiscovered'];
 const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
 const $ = id => elements[id];
 const submitButton = new Element('submit');
-const options = [{value:'deepseek', textContent:'DeepSeek'}, {value:'openrouter', textContent:'OpenRouter'}, {value:'llamacpp', textContent:'llama.cpp'}];
+const options = [{value:'deepseek', textContent:'DeepSeek'}, {value:'openrouter', textContent:'OpenRouter'}, {value:'opencode', textContent:'OpenCode Zen'}, {value:'opencode-go', textContent:'OpenCode Go'}, {value:'llamacpp', textContent:'llama.cpp'}];
 for (const id of ['configProvider', 'runProvider', 'automationProvider']) $(id).options = [...(id === 'configProvider' ? [] : [{value: '', textContent: 'default'}]), ...options];
 $('configProvider').value = 'openrouter';
 const document = {createElement: () => new Element()};
@@ -102,6 +102,31 @@ def test_default_route_is_visible_on_load_and_after_save(tmp_path: Path) -> None
   assert.equal(submitButton.disabled, false);
   const saved = JSON.parse(calls.find(call => call.options?.method === 'PATCH').options.body);
   assert.deepEqual(saved, {provider:'openrouter', model:'provider/new-model', persist_global:true});
+})().catch(error => { console.error(error); process.exitCode = 1; });
+""")
+
+
+def test_opencode_providers_have_auth_guidance_and_dynamic_models(tmp_path: Path) -> None:
+    html = dashboard_html()
+    for provider, label in (("opencode", "OpenCode Zen"), ("opencode-go", "OpenCode Go")):
+        assert html.count(f'<option value="{provider}">{label}</option>') == 3
+    assert 'href="https://opencode.ai/auth"' in html
+    run_model_script(tmp_path, r"""
+(async () => {
+  await flush();
+  for (const provider of ['opencode', 'opencode-go']) {
+    $('configProvider').value = provider;
+    await $('configProvider').emit('change'); await flush();
+    assert.equal($('providerAuthLink').hidden, false);
+    assert.ok($('providerRouteHint').textContent.includes(`/setup ${provider}`));
+    assert.ok(calls.some(call => call.path.includes(`provider=${provider}`)));
+    const list = $('configModel').siblings.find(node => node.id === 'configModelModels');
+    assert.deepEqual(list.children.map(option => option.value), ['provider/new-model']);
+    assert.equal(currentDefault.provider, 'deepseek');
+  }
+  $('configProvider').value = 'deepseek';
+  await $('configProvider').emit('change'); await flush();
+  assert.equal($('providerAuthLink').hidden, true);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """)
 

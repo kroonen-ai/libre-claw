@@ -75,6 +75,20 @@ thinking = "enabled" # enabled | disabled
 reasoning_effort = "high" # low | high | max
 auto_context_window = true
 
+[providers.opencode]
+api_key_env = "OPENCODE_API_KEY"
+base_url = "https://opencode.ai/zen/v1"
+default_model = "" # choose an ID from /models opencode
+max_tokens = 16384
+api_format = "auto" # discovered protocol; or chat | responses | anthropic | google
+
+[providers.opencode-go]
+api_key_env = "OPENCODE_GO_API_KEY" # optional dedicated key; falls back to OPENCODE_API_KEY
+base_url = "https://opencode.ai/zen/go/v1"
+default_model = "" # choose an ID from /models opencode-go
+max_tokens = 16384
+api_format = "auto"
+
 [providers.moonshot]
 service = "kimi_code" # kimi_code | platform
 api_key_env = "KIMI_API_KEY"

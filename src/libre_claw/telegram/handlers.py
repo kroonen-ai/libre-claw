@@ -31,6 +31,7 @@ from libre_claw.core.heartbeat import HeartbeatError, heartbeat_prompt, parse_he
 from libre_claw.core.permissions import PermissionResolution
 from libre_claw.core.session import UserAttachment
 from libre_claw.kimi import normalize_moonshot_selection
+from libre_claw.opencode import canonical_opencode_provider
 from libre_claw.providers.model_display import model_capability_summary
 from libre_claw.providers.model_catalog import ModelCatalog, ModelInfo, discover_models
 from libre_claw.telegram.auth import TelegramAuth
@@ -122,6 +123,8 @@ TELEGRAM_PROVIDER_LABELS: dict[str, str] = {
     "anthropic": "Anthropic",
     "openai": "OpenAI API",
     "openrouter": "OpenRouter",
+    "opencode": "OpenCode Zen",
+    "opencode-go": "OpenCode Go",
     "deepseek": "DeepSeek",
     "moonshot": "Kimi Code / Moonshot",
     "ollama": "Ollama Cloud/Local",
@@ -1940,7 +1943,7 @@ def _restart_entry_command() -> list[str]:
 
 
 def _canonical_telegram_provider(provider: str) -> str:
-    normalized = provider.strip().lower()
+    normalized = canonical_opencode_provider(provider)
     if normalized in {"local", "ollama-cloud", "ollama_cloud"}:
         return "ollama"
     if normalized in {"openai-codex", "openai_codex"}:
@@ -2071,6 +2074,12 @@ def _provider_model_text(config: Any, provider: str, catalog: ModelCatalog, page
         )
     else:
         lines.append("No models found. Refresh or enter a model ID.")
+    if provider in {"opencode", "opencode-go"} and (catalog.error or not catalog.models):
+        lines.extend([
+            "",
+            "Sign in and create an API key at https://opencode.ai/auth.",
+            f"Store it in your local terminal: libre-claw auth set-key {provider}",
+        ])
     lines.extend(["", f"Or send /model {provider}:<model-id> [--global]"])
     return "\n".join(lines)
 

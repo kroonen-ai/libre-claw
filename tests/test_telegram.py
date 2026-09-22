@@ -25,6 +25,7 @@ from libre_claw.telegram.bridge import (
     TelegramPermissionPrompt,
     TelegramText,
     TelegramToolNotice,
+    _canonical_provider,
     _tool_call_notice,
     _tool_result_notice,
 )
@@ -32,6 +33,8 @@ from libre_claw.telegram.handlers import (
     TELEGRAM_MODEL_PAGE_SIZE,
     TelegramExpandablePayload,
     TelegramHandlers,
+    _canonical_telegram_provider,
+    _parse_telegram_model_argument,
     _cancel_task,
     _finish_text_response,
     _message_chunks,
@@ -850,6 +853,8 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
     assert any("OpenRouter" in button.text for row in provider_keyboard.inline_keyboard for button in row)
     assert any("Kimi Code / Moonshot" in button.text for row in provider_keyboard.inline_keyboard for button in row)
     assert any("DeepSeek" in button.text for row in provider_keyboard.inline_keyboard for button in row)
+    assert any("OpenCode Zen" in button.text for row in provider_keyboard.inline_keyboard for button in row)
+    assert any("OpenCode Go" in button.text for row in provider_keyboard.inline_keyboard for button in row)
     assert not any("(" in button.text for row in provider_keyboard.inline_keyboard for button in row)
 
 
@@ -1018,7 +1023,7 @@ class ModelQuery:
         await handlers.callback(SimpleNamespace(callback_query=self), object())
 
 
-@pytest.mark.parametrize("provider", ["openrouter", "openai", "anthropic", "deepseek", "moonshot", "ollama", "llamacpp", "codex"])
+@pytest.mark.parametrize("provider", ["openrouter", "openai", "anthropic", "opencode", "opencode-go", "deepseek", "moonshot", "ollama", "llamacpp", "codex"])
 async def test_telegram_model_callback_discovers_future_model(monkeypatch, tmp_path: Path, provider: str) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -1047,6 +1052,16 @@ async def test_telegram_model_callback_discovers_future_model(monkeypatch, tmp_p
     assert daemon.model_updates == [(provider, model_id, False)]
     assert query.answers[-1] == "Model selected."
     assert "Your next Telegram message will use this model." in query.edits[-1]
+
+
+@pytest.mark.parametrize("alias,provider", [
+    ("zen", "opencode"), ("opencode-zen", "opencode"), ("opencode_zen", "opencode"),
+    ("go", "opencode-go"), ("opencode_go", "opencode-go"),
+])
+def test_telegram_opencode_aliases_select_the_expected_route(alias: str, provider: str) -> None:
+    assert _canonical_provider(alias) == provider
+    assert _canonical_telegram_provider(alias) == provider
+    assert _parse_telegram_model_argument(f"{alias}:vendor/future:model --global", "deepseek") == (provider, "vendor/future:model", True)
 
 
 async def test_telegram_model_pages_keep_catalog_snapshot(monkeypatch, tmp_path: Path) -> None:

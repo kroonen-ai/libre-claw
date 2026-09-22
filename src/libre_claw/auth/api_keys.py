@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import socket
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Literal, Protocol
 from cryptography.fernet import Fernet, InvalidToken
 
 from libre_claw.config import AuthConfig
+from libre_claw.opencode import canonical_opencode_provider, opencode_key_accounts, OPENCODE_PROVIDERS, lookup_opencode_key
 
 try:
     import keyring
@@ -83,7 +85,10 @@ class ApiKeyStore:
                 return ApiKeyLookup(value=value, source="environment")
 
         accounts = tuple(
-            dict.fromkeys(_account_name(name) for name in (provider_name, *aliases))
+            dict.fromkeys([
+                _account_name(provider_name), *opencode_key_accounts(provider_name),
+                *(_account_name(name) for name in aliases), *(name.strip().lower() for name in aliases),
+            ])
         )
 
         # The encrypted mirror is noninteractive and is deliberately checked
@@ -108,6 +113,8 @@ class ApiKeyStore:
         cleaned = api_key.strip()
         if not cleaned:
             raise KeyStorageError("API key must not be empty.")
+        if account in OPENCODE_PROVIDERS and (len(cleaned) > 16384 or any(not 33 <= ord(character) <= 126 for character in cleaned)):
+            raise KeyStorageError("OpenCode API keys must be single-line tokens.")
 
         stored_in_keyring = self._set_keyring_password(account, cleaned)
         # Keep a local encrypted mirror even when Keychain works. GUI, launchd,
@@ -117,13 +124,18 @@ class ApiKeyStore:
         return "keyring" if stored_in_keyring else "encrypted_file"
 
     def delete_api_key(self, provider_name: str) -> bool:
-        account = _account_name(provider_name)
-        removed = self._delete_keyring_password(account)
-        return self._encrypted_file.delete(account) or removed
+        accounts = opencode_key_accounts(provider_name) or (_account_name(provider_name),)
+        removed = False
+        for account in accounts:
+            removed = self._delete_keyring_password(account) or removed
+            removed = self._encrypted_file.delete(account) or removed
+        return removed
 
     def key_status(self, providers: list[tuple[str, str | None]]) -> dict[str, ApiKeySource]:
         return {
-            provider_name: self.get_api_key(provider_name, env_var).source
+            provider_name: (lookup_opencode_key(self, provider_name, env_var)
+                            if canonical_opencode_provider(provider_name) in OPENCODE_PROVIDERS
+                            else self.get_api_key(provider_name, env_var)).source
             for provider_name, env_var in providers
         }
 
@@ -305,7 +317,7 @@ class EncryptedKeyFile:
 
 
 def _account_name(provider_name: str) -> str:
-    return provider_name.strip().lower()
+    return canonical_opencode_provider(provider_name)
 
 
 def _derive_machine_key() -> bytes:

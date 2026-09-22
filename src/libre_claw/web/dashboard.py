@@ -195,6 +195,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
               <option value="anthropic">Anthropic</option>
               <option value="openai">OpenAI API</option>
               <option value="openrouter">OpenRouter</option>
+              <option value="opencode">OpenCode Zen</option>
+              <option value="opencode-go">OpenCode Go</option>
               <option value="deepseek">DeepSeek</option>
               <option value="moonshot">Kimi Code / Moonshot</option>
               <option value="ollama">Ollama Cloud/Local</option>
@@ -277,6 +279,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
                   <option value="anthropic">Anthropic</option>
                   <option value="openai">OpenAI API</option>
                   <option value="openrouter">OpenRouter</option>
+                  <option value="opencode">OpenCode Zen</option>
+                  <option value="opencode-go">OpenCode Go</option>
                   <option value="deepseek">DeepSeek</option>
                   <option value="moonshot">Kimi Code / Moonshot</option>
                   <option value="ollama">Ollama Cloud/Local</option>
@@ -284,6 +288,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
                   <option value="codex">OpenAI Codex</option>
                 </select>
                 <p class="hint" id="providerRouteHint"></p>
+                <a id="providerAuthLink" href="https://opencode.ai/auth" target="_blank" rel="noopener noreferrer" hidden>Sign in to OpenCode</a>
               </div>
               <div class="form-field">
                 <label for="configModel">Model</label>
@@ -344,6 +349,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
                 <option value="anthropic">Anthropic</option>
                 <option value="openai">OpenAI API</option>
                 <option value="openrouter">OpenRouter</option>
+                <option value="opencode">OpenCode Zen</option>
+                <option value="opencode-go">OpenCode Go</option>
                 <option value="deepseek">DeepSeek</option>
                 <option value="moonshot">Kimi Code / Moonshot</option>
                 <option value="ollama">Ollama Cloud/Local</option>
@@ -1690,8 +1697,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function syncProviderSettings() {
       const provider = $("configProvider").value;
+      const isOpenCode = provider === "opencode" || provider === "opencode-go";
       $("llamacppSettings").hidden = provider !== "llamacpp";
-      $("providerRouteHint").textContent = provider === "deepseek"
+      $("providerAuthLink").hidden = !isOpenCode;
+      $("providerRouteHint").textContent = isOpenCode
+        ? `${providerLabel(provider)} uses an OpenCode API key. Connect with /setup ${provider} in the terminal UI, or libre-claw auth set-key ${provider}, then refresh models.`
+        : provider === "deepseek"
         ? "Connects through your DeepSeek API configuration. Model IDs come directly from DeepSeek."
         : `Models are discovered from your ${providerLabel(provider)} connection. You can also enter a model ID.`;
     }

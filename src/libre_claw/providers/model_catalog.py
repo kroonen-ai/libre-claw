@@ -28,6 +28,8 @@ from libre_claw.kimi import normalize_moonshot_selection
 from libre_claw.providers.capabilities import apply_model_overrides, parse_capabilities
 from libre_claw.providers.llamacpp import normalize_llamacpp_base_url
 from libre_claw.providers.local import _ollama_api_url, _openai_base_url
+from libre_claw.opencode import canonical_opencode_provider, lookup_opencode_key
+from libre_claw.providers.opencode import OPENCODE_BASE_URLS, discover_opencode_rows
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,7 @@ _DEFAULT_URLS = {
     "moonshot": "https://api.kimi.com/coding/v1",
     "ollama": "http://localhost:11434",
     "llamacpp": "http://localhost:8080",
+    **OPENCODE_BASE_URLS,
 }
 _KEY_ENVS = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -96,6 +99,8 @@ _KEY_ENVS = {
     "openrouter": "OPENROUTER_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "moonshot": "KIMI_API_KEY",
+    "opencode": "OPENCODE_API_KEY",
+    "opencode-go": "OPENCODE_GO_API_KEY",
 }
 
 
@@ -255,10 +260,10 @@ async def _discover_cached(
             elif provider in {"openai", "anthropic", "deepseek", "moonshot"} and not api_key:
                 raise _DiscoveryError("Set a provider API key to load available models.")
             elif client is not None:
-                models = await _discover_http(client, provider, settings, api_key)
+                models = await _discover_http(client, provider, settings, api_key, refresh=refresh)
             else:
                 async with httpx.AsyncClient(timeout=8.0) as owned_client:
-                    models = await _discover_http(owned_client, provider, settings, api_key)
+                    models = await _discover_http(owned_client, provider, settings, api_key, refresh=refresh)
         if not models:
             raise _DiscoveryError("The provider returned no available models.")
     except (httpx.HTTPError, OSError, RuntimeError, TimeoutError, ValueError) as exc:
@@ -300,7 +305,7 @@ def _store_cache(key: tuple[str, str], entry: _CachedCatalog) -> None:
 
 
 def _canonical_provider(provider: str) -> str:
-    provider = provider.strip().lower()
+    provider = canonical_opencode_provider(provider)
     if provider == "local":
         return "ollama"
     if provider in {"llama-cpp", "llama_cpp", "llama.cpp", "llama-swap", "llamaswap"}:
@@ -332,6 +337,7 @@ def _settings_scope(config: LibreClawConfig, provider: str, settings: Mapping[st
         env, os.getenv(env, ""),
         os.getenv("MOONSHOT_API_KEY", "") if provider == "moonshot" else "",
         os.getenv("KIMI_API_KEY", "") if provider == "moonshot" else "",
+        os.getenv("OPENCODE_API_KEY", "") if provider == "opencode-go" else "",
         str(config.auth.fallback_keys_path), config.auth.keyring_service,
     ]
     if provider == "codex":
@@ -368,6 +374,9 @@ def _resolve_api_key(
 ) -> str:
     store = store or ApiKeyStore.from_config(config.auth)
     env = _text(settings.get("api_key_env"), _KEY_ENVS.get(provider, ""))
+    if provider in OPENCODE_BASE_URLS:
+        configured_env = settings.get("api_key_env")
+        return lookup_opencode_key(store, provider, configured_env if isinstance(configured_env, str) else None).value or ""
     aliases = {
         "moonshot": ("kimi",), "ollama": ("local",), "llamacpp": ("llama-cpp", "llama-swap"),
     }.get(provider, ())
@@ -410,9 +419,13 @@ def _merge_models(
 
 
 async def _discover_http(
-    client: httpx.AsyncClient, provider: str, settings: Mapping[str, Any], api_key: str
+    client: httpx.AsyncClient, provider: str, settings: Mapping[str, Any], api_key: str,
+    *, refresh: bool = False,
 ) -> tuple[ModelInfo, ...]:
     base_url = _base_url(provider, settings)
+    if provider in OPENCODE_BASE_URLS:
+        rows = await discover_opencode_rows(client, provider, base_url, api_key, refresh=refresh)
+        return _parse_models(provider, rows)
     headers: dict[str, str] = {}
     if provider == "anthropic":
         headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
@@ -478,18 +491,22 @@ def _parse_models(provider: str, rows: Sequence[Any]) -> tuple[ModelInfo, ...]:
         )
         top_provider = row.get("top_provider")
         top_provider = top_provider if isinstance(top_provider, Mapping) else {}
+        limit = row.get("limit") if provider in OPENCODE_BASE_URLS else {}
+        limit = limit if isinstance(limit, Mapping) else {}
         context = (
             _positive_int(row.get("context_length"))
             or _positive_int(row.get("context_window"))
             or _positive_int(row.get("context_window_tokens"))
             or _positive_int(row.get("max_input_tokens"))
             or _positive_int(top_provider.get("context_length"))
+            or _positive_int(limit.get("context"))
         )
         output = (
             _positive_int(row.get("max_completion_tokens"))
             or _positive_int(row.get("max_output_tokens"))
             or _positive_int(row.get("max_tokens"))
             or _positive_int(top_provider.get("max_completion_tokens"))
+            or _positive_int(limit.get("output"))
         )
         result.append(ModelInfo(provider, model_id, label, context, output, **parse_capabilities(provider, row)))
     return tuple(result)

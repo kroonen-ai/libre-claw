@@ -12,6 +12,8 @@ __all__ = [
     "MoonshotProvider",
     "OllamaProvider",
     "OpenAIProvider",
+    "OpenCodeProvider",
+    "ResponsesProvider",
     "OpenRouterProvider",
     "ReasoningDelta",
     "ProviderConfigurationError",
@@ -49,4 +51,6 @@ from libre_claw.providers.local import LocalProvider
 from libre_claw.providers.moonshot import MoonshotProvider
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider
+from libre_claw.providers.opencode import OpenCodeProvider
+from libre_claw.providers.responses import ResponsesProvider
 from libre_claw.providers.openrouter import OpenRouterProvider

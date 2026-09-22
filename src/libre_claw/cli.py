@@ -22,6 +22,7 @@ import httpx
 
 from libre_claw import __version__
 from libre_claw.cli_ui import LibreGroup, status_text
+from libre_claw.opencode import OPENCODE_AUTH_URL, OPENCODE_PROVIDERS, canonical_opencode_provider
 from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
 from libre_claw.auth.codex import CodexCliError, CodexCommandResult, codex_logout, codex_status, stream_codex_command
 from libre_claw.config import (
@@ -1362,6 +1363,7 @@ def auth_command(ctx: click.Context) -> None:
 def auth_set_key(ctx: click.Context, provider: str, api_key: str | None) -> None:
     """Store an API key in keyring or the encrypted fallback file."""
     config = _load_context_config(ctx)
+    provider = canonical_opencode_provider(provider)
     value = api_key or click.prompt(f"{provider} API key", hide_input=True, confirmation_prompt=True)
     store = ApiKeyStore.from_config(config.auth)
     try:
@@ -1390,6 +1392,7 @@ def _set_api_key_verified(store: ApiKeyStore, provider: str, value: str) -> str:
 def auth_delete_key(ctx: click.Context, provider: str) -> None:
     """Delete a stored provider API key."""
     config = _load_context_config(ctx)
+    provider = canonical_opencode_provider(provider)
     store = ApiKeyStore.from_config(config.auth)
     try:
         removed = store.delete_api_key(provider)
@@ -1402,15 +1405,31 @@ def auth_delete_key(ctx: click.Context, provider: str) -> None:
 
 
 @auth_command.command("status")
+@click.argument("provider", required=False)
 @click.pass_context
-def auth_status(ctx: click.Context) -> None:
+def auth_status(ctx: click.Context, provider: str | None = None) -> None:
     """Show whether configured provider keys are available without printing them."""
     config = _load_context_config(ctx)
     store = ApiKeyStore.from_config(config.auth)
+    if provider:
+        provider = canonical_opencode_provider(provider)
+        if provider == "codex":
+            status = asyncio.run(codex_status())
+            click.echo(f"codex: {'logged_in' if status.logged_in else 'missing'}")
+            return
+        if provider not in config.providers and provider != "telegram":
+            raise click.UsageError("Choose a configured provider or omit PROVIDER to list all credentials.")
+        env = config.telegram.bot_token_env if provider == "telegram" else _provider_api_key_env(config.providers.get(provider))
+        try:
+            source = store.key_status([(provider, env)])[provider]
+        except KeyStorageError as exc:
+            _raise_click_error(str(exc))
+        click.echo(f"{provider}: {source}")
+        return
     providers = [
         (name, _provider_api_key_env(provider_config))
         for name, provider_config in config.providers.items()
-        if name in {"anthropic", "openai", "openrouter", "deepseek", "moonshot", "ollama"}
+        if name in {"anthropic", "openai", "openrouter", "deepseek", "opencode", "opencode-go", "moonshot", "ollama"}
     ]
     providers.append(("telegram", config.telegram.bot_token_env))
     try:
@@ -1421,6 +1440,48 @@ def auth_status(ctx: click.Context) -> None:
         click.echo(f"{name}: {statuses[name]}")
     status = asyncio.run(codex_status())
     click.echo(f"codex: {'logged_in' if status.logged_in else 'missing'}")
+
+
+@auth_command.command("connect-opencode")
+@click.argument("provider", default="opencode")
+@click.option("--browser", "open_browser", is_flag=True, help="Open the official sign-in page before entering the API key.")
+@click.pass_context
+def auth_connect_opencode(ctx: click.Context, provider: str, open_browser: bool) -> None:
+    """Connect OpenCode Zen or Go with a securely entered console API key."""
+    provider = canonical_opencode_provider(provider)
+    if provider not in OPENCODE_PROVIDERS:
+        raise click.UsageError("Choose opencode (Zen) or opencode-go (Go).")
+    config = _load_context_config(ctx)
+    label = "OpenCode Go" if provider == "opencode-go" else "OpenCode Zen"
+    click.echo(f"Sign in at {OPENCODE_AUTH_URL} and copy your console API key.")
+    if open_browser:
+        click.launch(OPENCODE_AUTH_URL)
+    value = click.prompt(f"{label} API key", hide_input=True, confirmation_prompt=True)
+    try:
+        location = _set_api_key_verified(ApiKeyStore.from_config(config.auth), provider, value)
+    except KeyStorageError as exc:
+        _raise_click_error(str(exc))
+    click.echo(f"Stored {label} key in {location.replace('_', ' ')}. Discover models with /models {provider}.")
+
+
+@auth_command.command("import-opencode")
+@click.argument("provider", default="opencode")
+@click.option("--path", "auth_path", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="Explicit OpenCode auth.json path; defaults to its XDG data directory.")
+@click.option("--replace", "replace_key", is_flag=True, help="Replace a different key already stored in Libre Claw.")
+@click.pass_context
+def auth_import_opencode(ctx: click.Context, provider: str, auth_path: Path | None, replace_key: bool) -> None:
+    """Explicitly copy one saved OpenCode Zen/Go API key into Libre Claw."""
+    from libre_claw.auth.opencode import import_opencode_key
+    provider = canonical_opencode_provider(provider)
+    if provider not in OPENCODE_PROVIDERS:
+        raise click.UsageError("Choose opencode (Zen) or opencode-go (Go).")
+    config = _load_context_config(ctx)
+    try:
+        location = import_opencode_key(ApiKeyStore.from_config(config.auth), provider, path=auth_path, replace=replace_key)
+    except KeyStorageError as exc:
+        _raise_click_error(str(exc))
+    click.echo(f"Imported {provider} key into {location.replace('_', ' ')}. Current provider and model selections are unchanged.")
 
 
 @auth_command.command("codex-login")

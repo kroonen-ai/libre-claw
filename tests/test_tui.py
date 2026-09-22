@@ -507,7 +507,7 @@ def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_pat
     assert app._slash_suggestion_matches("/model custom-local")[0].name == "/model ollama:custom-local:latest"
 
 
-@pytest.mark.parametrize("provider", ["openrouter", "deepseek"])
+@pytest.mark.parametrize("provider", ["openrouter", "deepseek", "opencode", "opencode-go"])
 async def test_models_discovers_filters_refreshes_and_accepts_unlisted_ids(monkeypatch, tmp_path: Path, provider: str) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -1296,6 +1296,55 @@ async def test_deepseek_setup_uses_configured_model_and_supports_fallback_and_ju
         _, label = app._create_goal_judge_provider()
         assert label == "deepseek:future-deepseek-model"
         assert captured[0].general.default_provider == "deepseek"
+
+
+@pytest.mark.parametrize("alias,provider", [
+    ("opencode", "opencode"), ("zen", "opencode"), ("opencode-zen", "opencode"), ("opencode_zen", "opencode"),
+    ("opencode-go", "opencode-go"), ("go", "opencode-go"), ("opencode_go", "opencode-go"),
+])
+def test_opencode_model_aliases_preserve_arbitrary_model_ids(alias: str, provider: str) -> None:
+    assert _parse_model_argument(f"{alias}:vendor/future-model:revision", "deepseek") == (provider, "vendor/future-model:revision")
+    assert _parse_model_argument("vendor/future-model:revision", alias) == (provider, "vendor/future-model:revision")
+
+
+@pytest.mark.parametrize("alias,provider", [("opencode", "opencode"), ("opencode-go", "opencode-go"), ("zen", "opencode"), ("go", "opencode-go")])
+async def test_opencode_setup_stores_masked_key_and_discovers_without_changing_defaults(
+    monkeypatch, tmp_path: Path, alias: str, provider: str,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    store = FakeApiKeyStore()
+    monkeypatch.setattr("libre_claw.tui.app.ApiKeyStore.from_config", lambda _auth: store)
+    config = load_config()
+    original = (config.general.default_provider, config.general.default_model)
+    calls = []
+
+    async def discover(selected, discovered_provider, *, refresh=False):
+        assert (selected.general.default_provider, selected.general.default_model) == original
+        assert store.keys == {provider: "sk-opencode-test-key"}
+        calls.append((discovered_provider, refresh))
+        return ModelCatalog((ModelInfo(provider, "vendor/future-model", "Future model"),), "live")
+
+    monkeypatch.setattr("libre_claw.tui.app.discover_models", discover)
+    app = LibreClawApp(config=config)
+    async with app.run_test():
+        await app._handle_command(f"/setup {alias}")
+        assert app.query_one("#input").password is True
+        assert app._pending_key_setup.provider == provider
+        await app.handle_user_input("sk-opencode-test-key")
+        assert app.query_one("#input").password is False
+        assert calls == [(provider, True)]
+        assert (app.config.general.default_provider, app.config.general.default_model) == original
+        text = "\n".join(entry.content for entry in app.transcript)
+        assert "https://opencode.ai/auth" in text
+        assert "vendor/future-model" in text
+        assert "sk-opencode-test-key" not in text
+        assert app._slash_suggestion_matches(f"/provider {provider}")[0].name == f"/provider {provider}"
+        await app._handle_command(f"/fallback set 1 {alias}:vendor/future-model")
+        assert app.config.fallback.routes[0].provider == provider
+        assert app.config.fallback.routes[0].model == "vendor/future-model"
+    reloaded = load_config()
+    assert (reloaded.general.default_provider, reloaded.general.default_model) == original
 
 
 async def test_transcript_from_run_events_reconstructs_tool_entries(tmp_path: Path) -> None:

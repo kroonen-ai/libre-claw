@@ -50,6 +50,25 @@ def _strings(value: Any) -> tuple[str, ...] | None:
 def parse_capabilities(provider: str, row: Mapping[str, Any]) -> dict[str, Any]:
     """Parse advertised fields without deriving support from a model name."""
     result: dict[str, Any] = {}
+    if provider in {"opencode", "opencode-go"}:
+        for field, key in (("supports_tools", "tool_call"), ("supports_reasoning", "reasoning"),
+                           ("supports_temperature", "temperature")):
+            if isinstance(row.get(key), bool):
+                result[field] = row[key]
+        modalities = row.get("modalities")
+        if isinstance(modalities, Mapping) and (inputs := _strings(modalities.get("input"))) is not None:
+            result["supports_vision"] = "image" in inputs
+        options = row.get("reasoning_options")
+        if isinstance(options, list):
+            for option in options:
+                if isinstance(option, Mapping) and option.get("type") == "effort":
+                    if (efforts := _strings(option.get("values"))) is not None:
+                        result["supported_reasoning_efforts"] = efforts
+        cost = row.get("cost")
+        if isinstance(cost, Mapping):
+            for field, key in zip(_PRICE_FIELDS, ("input", "output")):
+                if (price := _price(cost.get(key))) is not None:
+                    result[field] = price / 1_000_000
     for field in _BOOLEAN_FIELDS:
         if isinstance(row.get(field), bool):
             result[field] = row[field]
@@ -104,7 +123,7 @@ def parse_capabilities(provider: str, row: Mapping[str, Any]) -> dict[str, Any]:
         if (price := _price(row.get(field))) is not None:
             result[field] = price
     if result:
-        result["capability_source"] = "provider"
+        result["capability_source"] = "models.dev" if row.get("_opencode_metadata") else "provider"
     return result
 
 

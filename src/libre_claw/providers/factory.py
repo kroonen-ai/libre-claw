@@ -8,8 +8,9 @@ from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlparse
 
-from libre_claw.auth.api_keys import ApiKeyStore
+from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
 from libre_claw.config import LibreClawConfig
+from libre_claw.opencode import OPENCODE_PROVIDERS, OPENCODE_KEY_ENVS, canonical_opencode_provider, lookup_opencode_key
 from libre_claw.kimi import (
     KIMI_CODE_BASE_URL,
     moonshot_service,
@@ -80,6 +81,8 @@ def _create_provider(
         "openai",
         "openrouter",
         "deepseek",
+        "opencode",
+        "opencode-go",
         "moonshot",
         "ollama",
         "llamacpp",
@@ -87,7 +90,7 @@ def _create_provider(
     }:
         msg = (
             f"Provider '{resolved_provider_name}' is not supported. "
-            "Use 'anthropic', 'openai', 'openrouter', 'deepseek', 'moonshot', 'ollama', 'llamacpp', or 'codex'."
+            "Use 'anthropic', 'openai', 'openrouter', 'deepseek', 'opencode', 'opencode-go', 'moonshot', 'ollama', 'llamacpp', or 'codex'."
         )
         raise ProviderConfigurationError(msg)
     if provider_config is None:
@@ -118,7 +121,12 @@ def _create_provider(
         _default_api_key_env(resolved_provider_name),
     )
     store = api_key_store or ApiKeyStore.from_config(config.auth)
-    if resolved_provider_name == "moonshot":
+    if resolved_provider_name in OPENCODE_PROVIDERS:
+        try:
+            api_key_lookup = lookup_opencode_key(store, resolved_provider_name, resolved_api_key_env)
+        except KeyStorageError as exc:
+            raise ProviderConfigurationError(str(exc)) from exc
+    elif resolved_provider_name == "moonshot":
         api_key_lookup = store.get_api_key(
             resolved_provider_name,
             resolved_api_key_env,
@@ -151,12 +159,29 @@ def _create_provider(
             )
         raise ProviderConfigurationError(msg)
 
-    if resolved_provider_name == "deepseek" and "max_tokens" in provider_config:
+    if resolved_provider_name in {"deepseek", *OPENCODE_PROVIDERS} and "max_tokens" in provider_config:
         token_limit = provider_config["max_tokens"]
         if not isinstance(token_limit, int) or isinstance(token_limit, bool) or token_limit <= 0:
-            raise ProviderConfigurationError("[providers.deepseek].max_tokens must be a positive integer.")
+            raise ProviderConfigurationError(f"[providers.{resolved_provider_name}].max_tokens must be a positive integer.")
     max_tokens = _provider_max_tokens(provider_config)
     try:
+        if resolved_provider_name in OPENCODE_PROVIDERS:
+            from libre_claw.providers.opencode import OpenCodeProvider
+            effort = provider_config.get("reasoning_effort")
+            if effort is not None and (not isinstance(effort, str) or not effort.strip()):
+                raise ProviderConfigurationError(f"[providers.{resolved_provider_name}].reasoning_effort must be a non-empty string.")
+            if not resolved_model:
+                raise ProviderConfigurationError(
+                    f"Select a model from /models {resolved_provider_name}, then use /model {resolved_provider_name}:<model-id>."
+                )
+            return OpenCodeProvider(
+                api_key=api_key_lookup.value, model=resolved_model, max_tokens=max_tokens,
+                provider=resolved_provider_name,
+                base_url=_str_provider_value(provider_config, "base_url", "") or None,
+                api_format=provider_config.get("api_format", "auto"),
+                reasoning_effort=effort.strip().lower() if effort is not None else None,
+                prompt_caching=_prompt_caching_value(provider_config, resolved_provider_name) or False,
+            )
         if resolved_provider_name == "anthropic":
             return AnthropicProvider(
                 api_key=api_key_lookup.value,
@@ -358,7 +383,7 @@ def _create_llamacpp_provider(
 
 
 def _canonical_provider_name(provider_name: str) -> str:
-    normalized = provider_name.lower()
+    normalized = canonical_opencode_provider(provider_name)
     if normalized == "local":
         return "ollama"
     if normalized in {"llama-cpp", "llama_cpp", "llama.cpp", "llama-swap", "llamaswap"}:
@@ -451,6 +476,8 @@ def _moonshot_thinking_value(config: Mapping[str, Any]) -> MoonshotThinking:
 
 
 def _default_api_key_env(provider_name: str) -> str:
+    if provider_name in OPENCODE_KEY_ENVS:
+        return OPENCODE_KEY_ENVS[provider_name]
     if provider_name == "deepseek":
         return "DEEPSEEK_API_KEY"
     if provider_name == "openrouter":
@@ -468,6 +495,8 @@ def _provider_label(provider_name: str) -> str:
         "openai": "OpenAI",
         "openrouter": "OpenRouter",
         "deepseek": "DeepSeek",
+        "opencode": "OpenCode Zen",
+        "opencode-go": "OpenCode Go",
         "moonshot": "Moonshot AI",
         "llamacpp": "llama.cpp",
         "codex": "Codex",
@@ -493,6 +522,8 @@ def _resolve_model(
 
 
 def _fallback_model(provider_name: str) -> str:
+    if provider_name in OPENCODE_PROVIDERS:
+        return ""
     if provider_name == "deepseek":
         return "deepseek-flash"
     if provider_name == "openai":

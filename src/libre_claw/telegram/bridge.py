@@ -50,6 +50,7 @@ from libre_claw.core.tools import ToolCall
 from libre_claw.daemon import DaemonClient
 from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
 from libre_claw.kimi import normalize_moonshot_selection
+from libre_claw.opencode import canonical_opencode_provider
 from libre_claw.providers import (
     ProviderConfigurationError,
     Usage,
@@ -1098,7 +1099,7 @@ def _format_token_count(value: int) -> str:
 
 
 def _canonical_provider(provider: str) -> str:
-    cleaned = provider.strip().lower()
+    cleaned = canonical_opencode_provider(provider)
     return "ollama" if cleaned == "local" else cleaned
 
 

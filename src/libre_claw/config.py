@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from libre_claw.opencode import OPENCODE_ALIASES, canonical_opencode_provider
 from libre_claw.kimi import (
     canonical_kimi_code_model,
     moonshot_service,
@@ -312,6 +313,7 @@ def load_config(
     user_path = _resolve_user_config_path(config_path)
     if user_path is not None:
         user_data = _read_toml(user_path)
+        _normalize_opencode_tables(user_data)
         _deep_merge(data, user_data)
         source_paths.append(user_path)
 
@@ -346,7 +348,7 @@ def set_global_default_model(
     config_path: Path | str | None = None,
 ) -> Path:
     """Persist the default provider/model in the user-level config file."""
-    clean_provider = provider.strip().lower()
+    clean_provider = canonical_opencode_provider(provider)
     clean_model = model.strip()
     if not clean_provider:
         raise ConfigError("Provider cannot be empty.")
@@ -403,7 +405,7 @@ def set_global_provider_values(
     config_path: Path | str | None = None,
 ) -> Path:
     """Persist provider table values in the user-level config file."""
-    clean_provider = provider.strip().lower()
+    clean_provider = canonical_opencode_provider(provider)
     if not clean_provider:
         raise ConfigError("Provider cannot be empty.")
     clean_values = {key: value for key, value in values.items() if value is not None}
@@ -630,6 +632,16 @@ def _load_default_config() -> ConfigTable:
                 "thinking": "enabled",
                 "reasoning_effort": "high",
                 "auto_context_window": True,
+            },
+            "opencode": {
+                "api_key_env": "OPENCODE_API_KEY",
+                "base_url": "https://opencode.ai/zen/v1",
+                "default_model": "", "max_tokens": 16384, "api_format": "auto",
+            },
+            "opencode-go": {
+                "api_key_env": "OPENCODE_GO_API_KEY",
+                "base_url": "https://opencode.ai/zen/go/v1",
+                "default_model": "", "max_tokens": 16384, "api_format": "auto",
             },
             "moonshot": {
                 "service": "kimi_code",
@@ -974,7 +986,7 @@ def _fallback_section_lines(
 
 
 def _clean_fallback_route(route: FallbackRouteConfig, index: int) -> FallbackRouteConfig:
-    provider = route.provider.strip().lower()
+    provider = canonical_opencode_provider(route.provider)
     model = route.model.strip()
     api_key_env = route.api_key_env.strip()
     if provider == "local":
@@ -1024,7 +1036,25 @@ def _apply_environment_overrides(data: ConfigTable) -> None:
             section_data[key] = value
 
 
+def _normalize_opencode_tables(data: ConfigTable) -> None:
+    providers = data.get("providers")
+    if not isinstance(providers, MutableMapping):
+        return
+    for alias, canonical in OPENCODE_ALIASES.items():
+        alias_config = providers.pop(alias, None)
+        if isinstance(alias_config, Mapping):
+            merged = dict(alias_config)
+            existing = providers.get(canonical)
+            if isinstance(existing, Mapping):
+                _deep_merge(merged, existing)
+            providers[canonical] = merged
+
+
 def _normalize_provider_aliases(data: ConfigTable) -> None:
+    for section_name in ("general", "telegram"):
+        section = data.get(section_name)
+        if isinstance(section, MutableMapping) and isinstance(section.get("default_provider"), str):
+            section["default_provider"] = canonical_opencode_provider(section["default_provider"])
     general = data.setdefault("general", {})
     if isinstance(general, MutableMapping) and str(general.get("default_provider", "")).lower() == "local":
         general["default_provider"] = "ollama"
@@ -1036,6 +1066,8 @@ def _normalize_provider_aliases(data: ConfigTable) -> None:
     providers = data.get("providers")
     if not isinstance(providers, MutableMapping):
         return
+
+    _normalize_opencode_tables(data)
 
     local_config = providers.pop("local", None)
     if isinstance(local_config, Mapping):

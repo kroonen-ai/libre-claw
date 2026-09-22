@@ -115,6 +115,7 @@ from libre_claw.core.workspace import (
 from libre_claw.daemon import DaemonClient, daemon_base_url
 from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
 from libre_claw.kimi import normalize_moonshot_selection
+from libre_claw.opencode import canonical_opencode_provider, lookup_opencode_key
 from libre_claw.providers import (
     LLMProvider,
     ProviderConfigurationError,
@@ -300,12 +301,12 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/theme", "/theme list|<name> [--global]", "Switch or persist the TUI/dashboard theme"),
     SlashCommand(
         "/provider",
-        "/provider anthropic|openai|openrouter|deepseek|moonshot|ollama|llamacpp|codex",
+        "/provider anthropic|openai|openrouter|opencode|opencode-go|deepseek|moonshot|ollama|llamacpp|codex",
         "Switch provider for new turns",
     ),
     SlashCommand(
         "/setup",
-        "/setup status|provider|key|model|openrouter|deepseek|moonshot|ollama-cloud|codex",
+        "/setup status|provider|key|model|openrouter|opencode|opencode-go|deepseek|moonshot|ollama-cloud|codex",
         "First-run provider and key setup",
     ),
     SlashCommand("/codex", "/codex login|status|logout|use [model]", "Manage Codex/ChatGPT login"),
@@ -338,7 +339,9 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
 )
 SLASH_COMMAND_NAMES = frozenset(command.name for command in SLASH_COMMANDS)
 
-SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "deepseek", "moonshot", "ollama", "llamacpp", "codex")
+SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "opencode", "opencode-go", "deepseek", "moonshot", "ollama", "llamacpp", "codex")
+OPENCODE_PROVIDER_LABELS = {"opencode": "OpenCode Zen", "opencode-go": "OpenCode Go"}
+API_KEY_PROVIDERS = {"anthropic", "openai", "openrouter", "opencode", "opencode-go", "deepseek", "moonshot", "ollama"}
 
 
 PERMISSION_KEYS: dict[str, PermissionResolution] = {
@@ -2423,8 +2426,13 @@ class LibreClawApp(App[None]):
         self._end_key_setup()
         self._rebuild_agent()
         self._update_status()
-        suffix = " Provider is ready." if self.provider_error is None else f" {self.provider_error}"
+        suffix = ""
+        if provider not in OPENCODE_PROVIDER_LABELS:
+            suffix = " Provider is ready." if self.provider_error is None else f" {self.provider_error}"
         self._append_system(f"Stored {provider} API key in {location.replace('_', ' ')}.{suffix}")
+        if provider in OPENCODE_PROVIDER_LABELS:
+            await self._show_models(f"{provider} --refresh")
+            self._append_system(f"Choose a discovered model with `/model {provider}:<model-id>`. Add `--global` to save it as your default.")
 
     def _begin_key_setup(self, provider: str) -> None:
         self._pending_key_setup = PendingProviderKeySetup(provider=provider)
@@ -2877,7 +2885,7 @@ class LibreClawApp(App[None]):
 
     async def _handle_setup_command(self, argument: str) -> None:
         parts = argument.split(maxsplit=2)
-        action = parts[0].lower() if parts else "status"
+        action = _canonical_tui_provider(parts[0]) if parts else "status"
         value = parts[1].strip() if len(parts) > 1 else ""
         rest = parts[2].strip() if len(parts) > 2 else ""
 
@@ -2900,13 +2908,21 @@ class LibreClawApp(App[None]):
             self._set_model(" ".join(part for part in (value, rest) if part))
             return
 
+        if action in OPENCODE_PROVIDER_LABELS:
+            value, action = action, "key"
+
         if action == "key":
             provider = _canonical_tui_provider(value)
-            if provider not in {"anthropic", "openai", "openrouter", "deepseek", "moonshot", "ollama"}:
+            if provider not in API_KEY_PROVIDERS:
                 self._append_system(
-                    "Usage: /setup key anthropic|openai|openrouter|deepseek|moonshot|ollama"
+                    "Usage: /setup key anthropic|openai|openrouter|opencode|opencode-go|deepseek|moonshot|ollama"
                 )
                 return
+            if provider in OPENCODE_PROVIDER_LABELS:
+                self._append_system(
+                    f"{OPENCODE_PROVIDER_LABELS[provider]}: sign in at https://opencode.ai/auth and create an API key with access to this service. "
+                    "After you save the key, Libre Claw will discover the available models for you to choose."
+                )
             self._append_system(f"Ready for {provider} API key. Paste it into the input box; it will be hidden.")
             self._begin_key_setup(provider)
             return
@@ -2951,10 +2967,14 @@ class LibreClawApp(App[None]):
         providers = [
             (name, _provider_api_key_env(provider_config))
             for name, provider_config in self.config.providers.items()
-            if name in {"anthropic", "openai", "openrouter", "deepseek", "moonshot", "ollama"}
+            if name in API_KEY_PROVIDERS
         ]
         try:
             statuses = await asyncio.to_thread(store.key_status, providers)
+            for name in OPENCODE_PROVIDER_LABELS:
+                if name in self.config.providers:
+                    lookup = await asyncio.to_thread(lookup_opencode_key, store, name, env_var=_provider_api_key_env(self.config.providers[name]))
+                    statuses[name] = lookup.source
         except KeyStorageError as exc:
             statuses = {"error": str(exc)}
         codex = await codex_status()
@@ -2975,6 +2995,8 @@ class LibreClawApp(App[None]):
                 "- /setup key openrouter",
                 "- /model openrouter:qwen/qwen3.7-max --global",
                 "- /setup deepseek",
+                "- /setup opencode",
+                "- /setup opencode-go",
                 "- /setup moonshot",
                 "- /setup codex",
             ]
@@ -3538,7 +3560,7 @@ class LibreClawApp(App[None]):
         if provider not in SUPPORTED_PROVIDERS:
             raise ProviderConfigurationError(
                 "[goal].judge_provider must be 'current', 'anthropic', 'openai', "
-                "'openrouter', 'deepseek', 'moonshot', 'ollama', 'llamacpp', or 'codex'."
+                "'openrouter', 'opencode', 'opencode-go', 'deepseek', 'moonshot', 'ollama', 'llamacpp', or 'codex'."
             )
 
         model = self.config.goal.judge_model.strip()
@@ -4575,6 +4597,10 @@ class LibreClawApp(App[None]):
                 SlashCommand("/setup status", "/setup status", "Show provider and key readiness"),
                 SlashCommand("/setup provider openrouter", "/setup provider openrouter", "Switch to OpenRouter"),
                 SlashCommand("/setup key openrouter", "/setup key openrouter", "Store OpenRouter key inside the TUI"),
+                SlashCommand("/setup opencode", "/setup opencode", "Connect OpenCode Zen and discover models"),
+                SlashCommand("/setup opencode-go", "/setup opencode-go", "Connect OpenCode Go and discover models"),
+                SlashCommand("/setup key opencode", "/setup key opencode", "Store an OpenCode Zen API key"),
+                SlashCommand("/setup key opencode-go", "/setup key opencode-go", "Store an OpenCode Go API key"),
                 SlashCommand("/setup deepseek", "/setup deepseek", "Configure DeepSeek with your default model"),
                 SlashCommand("/setup key deepseek", "/setup key deepseek", "Store DeepSeek key inside the TUI"),
                 SlashCommand("/setup moonshot", "/setup moonshot", "Configure Kimi Code with Kimi K3"),
@@ -5139,8 +5165,7 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         "log_level": config.general.log_level,
     }
     general_values.update(changes)
-    if str(general_values["default_provider"]).lower() == "local":
-        general_values["default_provider"] = "ollama"
+    general_values["default_provider"] = _canonical_tui_provider(str(general_values["default_provider"]))
     general_values["working_directory"] = Path(general_values["working_directory"]).expanduser().resolve()
     general = GeneralConfig(**general_values)
     return LibreClawConfig(
@@ -5287,7 +5312,7 @@ def _append_session_note(summary: str | None, note: str, *, limit: int = 4000) -
 
 
 def _effective_model(config: LibreClawConfig) -> str:
-    provider_name = "ollama" if config.general.default_provider.lower() == "local" else config.general.default_provider.lower()
+    provider_name = _canonical_tui_provider(config.general.default_provider)
     provider_config = config.providers.get(provider_name, {})
     provider_default = str(provider_config.get("default_model", config.general.default_model))
     other_defaults = {
@@ -5305,7 +5330,7 @@ def _parse_model_argument(argument: str, current_provider: str) -> tuple[str, st
     if not cleaned or cleaned.lower() == "list":
         return None
 
-    provider = "ollama" if current_provider.lower() == "local" else current_provider.lower()
+    provider = _canonical_tui_provider(current_provider)
     model = cleaned
     parts = cleaned.split(maxsplit=1)
     if len(parts) == 2 and _canonical_tui_provider(parts[0]) in SUPPORTED_PROVIDERS:
@@ -5356,7 +5381,7 @@ def _parse_fallback_key_env(tokens: Sequence[str]) -> tuple[str, str | None]:
 
 
 def _canonical_tui_provider(provider: str) -> str:
-    normalized = provider.strip().lower()
+    normalized = canonical_opencode_provider(provider)
     if normalized == "local":
         return "ollama"
     if normalized in {"llama-cpp", "llama_cpp", "llama.cpp", "llama-swap", "llamaswap"}:
@@ -5432,10 +5457,11 @@ def _provider_help_text(config: LibreClawConfig) -> str:
     lines = [
         f"Current provider: {provider}",
         (
-            "Use `/provider anthropic|openai|openrouter|deepseek|moonshot|ollama|llamacpp|codex`, "
+            "Use `/provider anthropic|openai|openrouter|opencode|opencode-go|deepseek|moonshot|ollama|llamacpp|codex`, "
             + "or use `/model <provider>:<name>` to switch both."
         ),
         "For Codex/ChatGPT auth, run `/codex login` then `/provider codex`.",
+        "For OpenCode Zen or Go, run `/setup opencode` or `/setup opencode-go` to connect and discover models.",
     ]
     return "\n".join(lines)
 
@@ -5445,11 +5471,13 @@ def _setup_help_text() -> str:
         [
             "Libre Claw first-run setup:",
             "/setup status",
-            "/setup provider anthropic|openai|openrouter|deepseek|moonshot|ollama|llamacpp|codex",
-            "/setup key anthropic|openai|openrouter|deepseek|moonshot|ollama",
+            "/setup provider anthropic|openai|openrouter|opencode|opencode-go|deepseek|moonshot|ollama|llamacpp|codex",
+            "/setup key anthropic|openai|openrouter|opencode|opencode-go|deepseek|moonshot|ollama",
             "/setup model <provider>:<model> [--global]",
             "/setup openrouter",
             "/setup deepseek",
+            "/setup opencode",
+            "/setup opencode-go",
             "/setup moonshot",
             "/setup ollama-cloud",
             "/setup codex",
