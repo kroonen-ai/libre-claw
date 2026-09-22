@@ -12,7 +12,7 @@ import pytest
 
 from libre_claw.config import load_config
 from libre_claw.core import AgentDone, Session
-from libre_claw.core.runs import RunStore
+import libre_claw.core.runs as runs_module
 from libre_claw.telegram.bridge import TelegramBridge
 from libre_claw.telegram.handlers import TelegramHandlers
 from libre_claw.tui.app import LibreClawApp
@@ -42,7 +42,7 @@ async def resumed_bridge(config, tmp_path: Path):
     workspace = tmp_path / "resumed"
     workspace.mkdir()
     bridge = TelegramBridge(config)
-    bridge.run_store = RunStore(tmp_path / "runs")
+    bridge.run_store = runs_module.RunStore(tmp_path / "runs")
     run = await bridge.run_store.create_run(
         "saved task", kind="chat", provider="ollama", model="saved-model", working_directory=workspace, state="done",
     )
@@ -121,7 +121,7 @@ async def test_telegram_document_uploads_use_resumed_workspace(local_config, tmp
 
 @pytest.mark.parametrize("kind", ["chat", "goal"])
 async def test_tui_remains_busy_until_session_and_run_finalization_finish(local_config, tmp_path: Path, monkeypatch, kind: str) -> None:
-    store = RunStore(tmp_path / "runs")
+    store = runs_module.RunStore(tmp_path / "runs")
     run = await store.create_run("task", kind=kind, provider="ollama", model="model", working_directory=tmp_path)
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -177,7 +177,7 @@ async def test_tui_remains_busy_until_session_and_run_finalization_finish(local_
 
 @pytest.mark.parametrize("kind", ["chat", "goal"])
 async def test_tui_claimed_followup_keeps_ownership_until_next_task_is_registered(local_config, tmp_path: Path, monkeypatch, kind: str) -> None:
-    store = RunStore(tmp_path / "runs")
+    store = runs_module.RunStore(tmp_path / "runs")
     run = await store.create_run("task", kind=kind, provider="ollama", model="model", working_directory=tmp_path)
     await store.queue_message(run.run_id, "queued follow-up")
     starting, release_start, streaming, release_stream = (asyncio.Event() for _ in range(4))
@@ -258,7 +258,7 @@ async def test_tui_claimed_followup_keeps_ownership_until_next_task_is_registere
 
 
 async def test_returned_queue_claim_is_idempotent_fifo_and_recovers_journal_gap(tmp_path: Path, monkeypatch) -> None:
-    store = RunStore(tmp_path / "runs")
+    store = runs_module.RunStore(tmp_path / "runs")
     run = await store.create_run("task", kind="chat", provider="ollama", model="model")
     first = await store.queue_message(run.run_id, "first")
     second = await store.queue_message(run.run_id, "second")
@@ -267,7 +267,6 @@ async def test_returned_queue_claim_is_idempotent_fifo_and_recovers_journal_gap(
     await store.release_queued_message(run.run_id, first)
     assert await store.queued_messages(run.run_id) == [first, second]
     assert await store.take_queued_message(run.run_id) == first
-    import libre_claw.core.runs as runs_module
     write = runs_module._write_json
 
     def crash_before_queue_snapshot(path, payload):
@@ -278,7 +277,7 @@ async def test_returned_queue_claim_is_idempotent_fifo_and_recovers_journal_gap(
     monkeypatch.setattr(runs_module, "_write_json", crash_before_queue_snapshot)
     with pytest.raises(OSError):
         await store.release_queued_message(run.run_id, first)
-    restarted = RunStore(store.root)
+    restarted = runs_module.RunStore(store.root)
     assert await restarted.queued_messages(run.run_id) == [first, second]
     monkeypatch.setattr(runs_module, "_write_json", write)
     assert await restarted.take_queued_message(run.run_id) == first
@@ -339,7 +338,7 @@ async def test_stop_during_finalization_restores_unstarted_followup(local_config
 
 
 async def test_tui_idle_queue_reserves_execution_and_uses_existing_run(local_config, tmp_path: Path) -> None:
-    store = RunStore(tmp_path / "runs")
+    store = runs_module.RunStore(tmp_path / "runs")
     run = await store.create_run("task", kind="chat", provider="ollama", model="model", state="done")
     entered, release = asyncio.Event(), asyncio.Event()
     observed = []
@@ -426,7 +425,7 @@ async def test_telegram_queue_uses_normal_renderer_without_sending_command(local
 
 
 async def test_tui_late_queue_after_final_claim_wakes_when_cleanup_ends(local_config, tmp_path: Path) -> None:
-    store = RunStore(tmp_path / "runs")
+    store = runs_module.RunStore(tmp_path / "runs")
     run = await store.create_run("task", kind="chat", provider="ollama", model="model", state="done")
     release = asyncio.Event()
     prior = asyncio.create_task(release.wait())

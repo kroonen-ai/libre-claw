@@ -1537,7 +1537,15 @@ async def test_daemon_continue_run_rejects_active_run(monkeypatch, tmp_path: Pat
     monkeypatch.chdir(tmp_path)
 
     class HangingProvider(ScriptedProvider):
-        async def complete(self, messages, tools=None, system=None, max_tokens=None):  # type: ignore[override]
+        async def complete(
+            self,
+            messages: Sequence[ChatMessage],
+            tools: Sequence[ToolSchema] | None = None,
+            system: str | None = None,
+            stream: bool = True,
+            temperature: float = 0.7,
+            max_tokens: int | None = None,
+        ) -> AsyncIterator[StreamEvent]:
             yield TextDelta("thinking")
             await asyncio.sleep(30)
 
@@ -1565,6 +1573,7 @@ async def test_daemon_continue_run_rejects_active_run(monkeypatch, tmp_path: Pat
         try:
             await active.task
         except asyncio.CancelledError:
+            # The test intentionally cancels its hanging provider during teardown.
             pass
 
 

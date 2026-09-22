@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+__all__ = ["WORDMARK_ROWS"]
+
 # The same seven-by-nine letterforms used on libreclaw.sh.
 _WORDMARK_GLYPHS: dict[str, tuple[str, ...]] = {
     "L": ("1100000", "1100000", "1100000", "1100000", "1100000", "1100000", "1100000", "1111111", "1111111"),

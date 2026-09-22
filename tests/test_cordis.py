@@ -164,7 +164,8 @@ def test_remove_purges_only_this_plugin_snapshots_and_private_state(manager, tmp
     (state / "example" / "private.json").write_text("private")
     (state / "unrelated").mkdir()
     (state / "unrelated" / "preserve").write_text("preserve")
-    assert manager.remove("example") == {"id": "example", "removed": True}
+    removed = manager.remove("example")
+    assert removed == {"id": "example", "removed": True}
     assert manager.list_plugins(workspace) == []
     assert not (manager.root / "plugins" / "example").exists()
     assert not (state / "example").exists()

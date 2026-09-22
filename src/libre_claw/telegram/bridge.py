@@ -277,7 +277,6 @@ class TelegramBridge:
                     )
                     continue
                 if isinstance(event, AgentToolResult):
-                    status = "error" if event.result.is_error else "result"
                     await self._send_petdex_state(
                         "error" if event.result.is_error else "success",
                         message=f"{event.call.name} {'failed' if event.result.is_error else 'finished'}",
@@ -879,6 +878,7 @@ class TelegramBridge:
                     project_root=runtime.general.working_directory,
                 )
             except Exception:
+                # Summary storage is optional; still attempt independent memory extraction.
                 pass
         if not runtime.memory.auto_extract:
             return

@@ -21,7 +21,6 @@ from urllib.parse import unquote, urlparse
 from pygments.token import Token as PygmentsToken
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown
-from rich.markup import escape
 from rich.style import Style
 from rich.syntax import Syntax, SyntaxTheme
 from rich.text import Text
@@ -93,7 +92,7 @@ from libre_claw.core.runs import settle_finalization
 from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, pending_approvals, run_changes_text, run_plan_text
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.agent import AgentSubagentUpdate
-from libre_claw.core.task_control import update_plan, plan_text, request_subagent_resume, saved_subagent_snapshots
+from libre_claw.core.task_control import update_plan, request_subagent_resume, saved_subagent_snapshots
 from libre_claw.core.session import session_from_payload
 from libre_claw.core.session import ChatMessage, UserAttachment, estimate_context_tokens, session_to_payload
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
@@ -409,7 +408,6 @@ class LobsterSyntaxTheme(SyntaxTheme):
         orange_style = Style(color=orange, bgcolor=background)
         cyan_style = Style(color=cyan, bgcolor=background)
         red_style = Style(color=red, bgcolor=background)
-        green_style = Style(color=green, bgcolor=background)
         purple_style = Style(color=purple, bgcolor=background)
 
         self.background_color = background
@@ -2292,6 +2290,7 @@ class LibreClawApp(App[None]):
                         project_root=source_root,
                     )
                 except Exception:
+                    # Summary storage is optional; still attempt independent memory extraction.
                     pass
         if not self.config.memory.auto_extract:
             return
@@ -2333,7 +2332,7 @@ class LibreClawApp(App[None]):
     async def _finish_active_run(self, state: str, *, summary: str = "") -> dict[str, Any] | None:
         run_id = self._active_run_id
         if run_id is None:
-            return
+            return None
         if state not in {"queued", "running", "blocked", "done", "failed", "cancelled"}:
             state = "failed"
         if self._run_background_tasks:
@@ -3827,7 +3826,6 @@ class LibreClawApp(App[None]):
         self._change_review_cursor = max(0, min(self._change_review_cursor, len(changes) - 1))
         transcript_index, entry = changes[self._change_review_cursor]
         del transcript_index
-        metadata = entry.metadata or {}
         title = entry.title or "File edit"
         position = f"{self._change_review_cursor + 1}/{len(changes)}"
         self.query_one("#change-title", Static).update(f"CHANGE {position} · {title}")
@@ -4983,6 +4981,7 @@ class LibreClawApp(App[None]):
                     self._append_system(text)
                     return
             except Exception:
+                # Local records below remain available when the daemon cannot report usage.
                 pass
 
         records = await load_usage_records(self.run_store, provider=provider, limit=250)
@@ -6299,8 +6298,10 @@ def _theme_help_text(current_theme: str) -> str:
     lines.extend(
         [
             "",
-            "Aliases: `dark`, `default`, and `libre-default` = `libre`; "
-            "`clear` and `lobster-clear` = `lobster-light`; `light` = `libre-light`.",
+            (
+                "Aliases: `dark`, `default`, and `libre-default` = `libre`; "
+                "`clear` and `lobster-clear` = `lobster-light`; `light` = `libre-light`."
+            ),
         ]
     )
     return "\n".join(lines)

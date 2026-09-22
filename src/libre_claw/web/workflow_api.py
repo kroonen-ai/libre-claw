@@ -73,6 +73,7 @@ class WorkflowAPI:
             try:
                 directory = await repository_root(directory)
             except (ValueError, OSError):
+                # Non-Git runs still reserve their working directory for the overlap check.
                 pass
             if any(directory.is_relative_to(root) or root.is_relative_to(directory) for root in roots):
                 raise WorkspaceBusyError(run.run_id)

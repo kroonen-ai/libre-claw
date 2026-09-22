@@ -97,7 +97,8 @@ async def test_openai_provider_streams_text_and_formats_request() -> None:
         Done(usage=Usage(input_tokens=4, output_tokens=2), stop_reason="stop"),
     ]
     request = dict(client.chat.completions.last_request)
-    assert request.pop("extra_body")["prompt_cache_key"].startswith("libre-claw:")
+    extra_body = request.pop("extra_body")
+    assert extra_body["prompt_cache_key"].startswith("libre-claw:")
     assert request == {
         "model": "gpt-4o",
         "messages": [

@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import json
-from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from abc import ABC
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
@@ -105,15 +105,25 @@ class ToolRegistryError(RuntimeError):
 
 
 class BaseTool(ABC):
+    """A schema-defined handler with a uniform mapping-based invocation API.
+
+    Each tool's ``execute`` callable accepts the arguments described by its
+    schema. Concrete handlers may keep their own required and optional Python
+    parameters; callers dispatching arbitrary tools should use ``invoke``.
+    """
+
     name: ClassVar[str]
     description: ClassVar[str]
     parameters: ClassVar[Mapping[str, Any]]
     required: ClassVar[tuple[str, ...]] = ()
     permission_level: ClassVar[PermissionLevel] = "ask"
     read_only: ClassVar[bool | None] = None
+    execute: Callable[..., Awaitable[ToolResult]]
 
     def __init__(self, context: ToolContext) -> None:
         self.context = context
+        if not callable(getattr(self, "execute", None)):
+            raise TypeError(f"{type(self).__name__} must define a callable execute handler")
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -126,9 +136,9 @@ class BaseTool(ABC):
             },
         }
 
-    @abstractmethod
-    async def execute(self, **kwargs: Any) -> ToolResult:
-        """Execute the tool and return a normalized result."""
+    async def invoke(self, arguments: Mapping[str, Any]) -> ToolResult:
+        """Bind schema arguments to this tool's handler and execute it."""
+        return await self.execute(**dict(arguments))
 
     def is_read_only(self, arguments: Mapping[str, Any]) -> bool:
         """Permission approval does not imply a tool is free of side effects."""
@@ -198,7 +208,7 @@ class ToolRegistry:
     async def execute(self, call: ToolCall) -> ToolResult:
         try:
             tool = self.get(call.name)
-            return await tool.execute(**dict(call.arguments))
+            return await tool.invoke(call.arguments)
         except Exception as exc:
             return ToolResult(error=str(exc))
 

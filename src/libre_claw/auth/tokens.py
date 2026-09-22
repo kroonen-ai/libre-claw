@@ -130,6 +130,7 @@ def _load_or_create_local_secret(config: AuthConfig) -> str:
             _harden_local_secret(secret_path)
             return secret
     except FileNotFoundError:
+        # First use has no persisted secret; generate and securely save one below.
         pass
     except OSError as exc:
         raise TokenError(f"Could not read local JWT secret at {secret_path}: {exc}") from exc

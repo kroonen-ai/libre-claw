@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from libre_claw.config import PermissionsConfig
-from libre_claw.core.agent import Agent, AgentPermissionRequest, AgentSubagentUpdate, AgentToolResult
+from libre_claw.core.agent import Agent, AgentPermissionRequest, AgentSubagentUpdate
 from libre_claw.core.permissions import PermissionManager
 from libre_claw.core.session import Session
 from libre_claw.core.tools import ToolCall, ToolContext, ToolRegistry

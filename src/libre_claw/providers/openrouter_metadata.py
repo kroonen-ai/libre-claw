@@ -81,6 +81,7 @@ async def detect_openrouter_model_limits(
             try:
                 await active_client.aclose()
             except Exception:
+                # Optional client cleanup must not discard discovered limits.
                 pass
     _CACHE[cache_key] = (now, limits)
     return limits

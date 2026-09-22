@@ -406,6 +406,7 @@ def _atomic_private_write(path: Path, content: bytes) -> None:
         try:
             os.close(descriptor)
         except OSError:
+            # fdopen may already have closed the descriptor; preserve the original write error.
             pass
         temporary_path.unlink(missing_ok=True)
         raise

@@ -13,7 +13,6 @@ import pytest
 from libre_claw.core.agent import Agent, AgentPermissionRequest
 from libre_claw.core.session import Session, session_from_payload, session_to_payload
 from libre_claw.core.subagents import SubagentState
-from libre_claw.core.tools import ToolCall
 from libre_claw.providers.base import Done, TextDelta, ToolCallReady, Usage
 from libre_claw.tools_builtin.subagents import SubagentResumeTool
 from test_subagents import WorkerProvider, make_parent

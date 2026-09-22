@@ -177,8 +177,10 @@ def openrouter_attribution_text() -> str:
             f"- Docs: {OPENROUTER_DOCS_URL}",
             f"- Analytics: {OPENROUTER_ANALYTICS_URL}",
             "- Status: configured for Libre Claw app attribution on every OpenRouter request.",
-            "- Note: OpenRouter documents attribution headers for site, title, and categories; "
-            "add the docs URL in the OpenRouter app profile if their UI exposes it.",
+            (
+                "- Note: OpenRouter documents attribution headers for site, title, and categories; "
+                "add the docs URL in the OpenRouter app profile if their UI exposes it."
+            ),
         ]
     )
 

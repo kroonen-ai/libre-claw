@@ -15,7 +15,7 @@ from typing import Any
 
 import structlog
 
-from libre_claw.auth.codex import CodexCommandResult, CodexCommandEvent, codex_status, stream_codex_command
+from libre_claw.auth.codex import CodexCommandResult, codex_status, stream_codex_command
 from libre_claw.core.session import ChatMessage
 from libre_claw.providers.base import Done, LLMProvider, ProviderConfigurationError, ProviderError, StreamEvent, TextDelta, ToolSchema, Usage
 from libre_claw.providers.capabilities import configured_reasoning_effort, has_images, prepare_request
@@ -60,7 +60,7 @@ class CodexProvider(LLMProvider):
     ) -> AsyncIterator[StreamEvent]:
         del stream, temperature
         try:
-            tools, max_tokens = prepare_request(self, messages, tools, max_tokens)
+            prepare_request(self, messages, tools, max_tokens)
             effort = configured_reasoning_effort(self)
         except ProviderConfigurationError as exc:
             yield ProviderError(str(exc))

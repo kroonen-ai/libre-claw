@@ -89,7 +89,8 @@ async def test_automation_store_create_list_due_mark_and_delete(tmp_path: Path) 
     paused = await store.update_status(record.automation_id, "paused")
     assert paused is not None
     assert paused.status == "paused"
-    assert await store.delete(record.automation_id) is True
+    deleted = await store.delete(record.automation_id)
+    assert deleted is True
     assert await store.load(record.automation_id) is None
 
 

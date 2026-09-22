@@ -72,7 +72,7 @@ from libre_claw.core.usage import (
     usage_summary_payload,
 )
 from libre_claw.core.agent import AgentSubagentUpdate
-from libre_claw.core.task_control import update_plan, plan_text, request_subagent_resume, saved_subagent_snapshots
+from libre_claw.core.task_control import update_plan, request_subagent_resume, saved_subagent_snapshots
 from libre_claw.core.session import ChatMessage, UserAttachment, session_from_payload, session_to_payload, text_block
 from libre_claw.integrations.petdex import PetdexClient, petdex_message_preview, petdex_tool_details
 from libre_claw.kimi import normalize_moonshot_selection
@@ -954,7 +954,7 @@ class DaemonServer:
                     return _json_error("The daemon is shutting down.", status=503)
                 surface = str(payload.get("surface", "daemon")).strip() or "daemon"
                 attachments = _attachments_from_payload(payload.get("attachments"))
-                run = await self.run_store.set_runtime(run_id, provider=run_config.general.default_provider, model=run_config.general.default_model)
+                await self.run_store.set_runtime(run_id, provider=run_config.general.default_provider, model=run_config.general.default_model)
                 run = await self.run_store.update_state(run_id, "queued")
                 task = asyncio.create_task(
                     self._run_agent(
@@ -1860,7 +1860,7 @@ class DaemonServer:
                     project_root=run.working_directory or config.general.working_directory,
                 )
             except Exception:
-                pass
+                LOGGER.warning("memory_summary_failed", run_id=run.run_id)
         if not config.memory.auto_extract:
             return
         try:

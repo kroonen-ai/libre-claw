@@ -700,10 +700,7 @@ def _remove_process_state_if_current() -> None:
     state = _read_process_state()
     if _state_pid(state) != os.getpid():
         return
-    try:
-        _process_state_path().unlink()
-    except FileNotFoundError:
-        pass
+    _process_state_path().unlink(missing_ok=True)
 
 
 def _state_pid(state: dict[str, Any]) -> int | None:
@@ -1023,10 +1020,7 @@ def _wait_for_pid_exit(pid: int, timeout: float) -> bool:
 
 
 def _clear_process_state() -> None:
-    try:
-        _process_state_path().unlink()
-    except FileNotFoundError:
-        pass
+    _process_state_path().unlink(missing_ok=True)
 
 
 def _start_background_process(
@@ -1097,6 +1091,7 @@ def _wait_for_daemon_health(base_url: str, *, timeout: float) -> bool:
             if response.status_code == 200:
                 return True
         except httpx.HTTPError:
+            # The daemon may still be binding its socket; retry until the deadline.
             pass
         time.sleep(0.2)
     return False

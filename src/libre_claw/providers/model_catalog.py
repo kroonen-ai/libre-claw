@@ -572,6 +572,7 @@ async def _discover_codex(
             try:
                 process.terminate()
             except ProcessLookupError:
+                # The child exited before terminate; still reap it below.
                 pass
             try:
                 await asyncio.wait_for(process.wait(), timeout=1.0)
@@ -579,6 +580,7 @@ async def _discover_codex(
                 try:
                     process.kill()
                 except ProcessLookupError:
+                    # The child exited between the wait timeout and kill.
                     pass
                 await process.wait()
 

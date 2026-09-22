@@ -12,7 +12,7 @@ from libre_claw.config import _build_config, _load_default_config
 from libre_claw.core.session import ChatMessage
 from libre_claw.providers.base import ProviderConfigurationError, ProviderError
 from libre_claw.providers.capabilities import apply_model_overrides, bind_model_capabilities, parse_capabilities
-from libre_claw.providers.model_catalog import ModelInfo
+from libre_claw.providers import codex as codex_provider, model_catalog
 from libre_claw.providers.openrouter import OpenRouterProvider
 from libre_claw.providers.anthropic import AnthropicProvider
 from libre_claw.providers.local import LocalProvider
@@ -75,7 +75,7 @@ def test_anthropic_and_codex_capability_shapes_preserve_unknown_tools():
 
 
 def test_model_override_precedence_and_explicit_unknown():
-    original = ModelInfo("openrouter", "future/model", "Future", supports_tools=True, input_cost_per_token=0.1)
+    original = model_catalog.ModelInfo("openrouter", "future/model", "Future", supports_tools=True, input_cost_per_token=0.1)
     info = apply_model_overrides(original, {"model_capabilities": {"future/model": {
         "supports_tools": False, "input_cost_per_token": "unknown", "max_completion_tokens": 512,
     }}})
@@ -91,7 +91,7 @@ def test_model_override_precedence_and_explicit_unknown():
 async def test_openrouter_omits_known_unsupported_parameters_but_preserves_unknown(known):
     client = OpenAIClient()
     provider = OpenRouterProvider("key", "future/model", 1000, client=client)
-    provider.model_info = ModelInfo("openrouter", "future/model", "Future", max_completion_tokens=123 if known else None,
+    provider.model_info = model_catalog.ModelInfo("openrouter", "future/model", "Future", max_completion_tokens=123 if known else None,
                                   supports_tools=False if known else None,
                                   supports_temperature=False if known else None)
     events = [event async for event in provider.complete([ChatMessage(role="user", content=[{"type":"text", "text":"Hi"}])],
@@ -105,7 +105,7 @@ async def test_openrouter_omits_known_unsupported_parameters_but_preserves_unkno
 async def test_known_nonvision_model_rejects_images_before_request():
     client = OpenAIClient()
     provider = OpenRouterProvider("key", "future/model", 1000, client=client)
-    provider.model_info = ModelInfo("openrouter", "future/model", "Future", supports_vision=False)
+    provider.model_info = model_catalog.ModelInfo("openrouter", "future/model", "Future", supports_vision=False)
     events = [event async for event in provider.complete([ChatMessage(role="user", content=[
         {"type": "image", "media_type": "image/png", "data": "encoded"},
     ])])]
@@ -117,7 +117,7 @@ async def test_known_nonvision_model_rejects_images_before_request():
 async def test_reasoning_effort_validated_and_sent_for_new_openrouter_model():
     client = OpenAIClient()
     provider = OpenRouterProvider("key", "future/model", 1000, client=client)
-    info = ModelInfo("openrouter", "future/model", "Future", supports_reasoning=True,
+    info = model_catalog.ModelInfo("openrouter", "future/model", "Future", supports_reasoning=True,
                      supported_reasoning_efforts=("low", "medium"))
     bind(provider, "openrouter", info, reasoning_effort="medium")
     [event async for event in provider.complete([ChatMessage(role="user", content=[{"type":"text", "text":"Hi"}])])]
@@ -139,7 +139,7 @@ async def test_anthropic_request_respects_published_limits_and_effort():
         calls.append(request)
         return Stream()
     provider = AnthropicProvider("key", "new-model", 5000, client=SimpleNamespace(messages=SimpleNamespace(stream=stream)))
-    bind(provider, "anthropic", ModelInfo("anthropic", "new-model", "New", max_completion_tokens=500,
+    bind(provider, "anthropic", model_catalog.ModelInfo("anthropic", "new-model", "New", max_completion_tokens=500,
          supports_tools=False, supports_reasoning=True, supported_reasoning_efforts=("high",)), reasoning_effort="high")
     events = [event async for event in provider.complete([ChatMessage(role="user", content=[{"type":"text", "text":"Hi"}])], tools=[{"name":"read"}])]
     assert not any(isinstance(event, ProviderError) for event in events)
@@ -150,7 +150,7 @@ async def test_anthropic_request_respects_published_limits_and_effort():
 
 async def test_ollama_request_omits_unsupported_thinking_and_tools():
     provider = LocalProvider("http://local.test", "new-model", 900, think="high")
-    provider.model_info = ModelInfo("ollama", "new-model", "New", max_completion_tokens=400,
+    provider.model_info = model_catalog.ModelInfo("ollama", "new-model", "New", max_completion_tokens=400,
                                    supports_tools=False, supports_reasoning=False, supports_temperature=False)
     calls=[]
     async def stream(request):
@@ -165,10 +165,9 @@ async def test_ollama_request_omits_unsupported_thinking_and_tools():
 async def test_codex_forwards_image_and_known_reasoning_then_cleans_temp_files(monkeypatch, tmp_path):
     import base64
     from pathlib import Path
-    import libre_claw.providers.codex as module
     from libre_claw.auth.codex import CodexCommandResult, CodexStatus
-    provider = module.CodexProvider("future/model", tmp_path, replay_delay=0)
-    bind(provider, "codex", ModelInfo("codex", "future/model", "Future", context_window_tokens=65536,
+    provider = codex_provider.CodexProvider("future/model", tmp_path, replay_delay=0)
+    bind(provider, "codex", model_catalog.ModelInfo("codex", "future/model", "Future", context_window_tokens=65536,
          supports_vision=True, supports_reasoning=True, supported_reasoning_efforts=("medium",)), reasoning_effort="medium")
     captured=[]
     async def status(*args): return CodexStatus(available=True,logged_in=True,detail="ok")
@@ -179,8 +178,8 @@ async def test_codex_forwards_image_and_known_reasoning_then_cleans_temp_files(m
         assert "model_context_window=65536" in args
         assert "Image attached" in input_text
         yield CodexCommandResult(args=tuple(args),exit_code=0,stdout="ok",stderr="")
-    monkeypatch.setattr(module,"codex_status",status)
-    monkeypatch.setattr(module,"stream_codex_command",stream)
+    monkeypatch.setattr(codex_provider,"codex_status",status)
+    monkeypatch.setattr(codex_provider,"stream_codex_command",stream)
     events=[event async for event in provider.complete([ChatMessage(role="user",content=[
         {"type":"image","data":base64.b64encode(b"image-bytes").decode(),"media_type":"image/png"},
     ])])]
@@ -189,9 +188,8 @@ async def test_codex_forwards_image_and_known_reasoning_then_cleans_temp_files(m
 
 
 async def test_codex_rejects_known_nonvision_model_without_spawning(monkeypatch, tmp_path):
-    from libre_claw.providers.codex import CodexProvider
-    provider = CodexProvider("future/text",tmp_path)
-    provider.model_info=ModelInfo("codex","future/text","Text",supports_vision=False)
+    provider = codex_provider.CodexProvider("future/text",tmp_path)
+    provider.model_info=model_catalog.ModelInfo("codex","future/text","Text",supports_vision=False)
     events=[event async for event in provider.complete([ChatMessage(role="user",content=[{"type":"image","data":"a"}])])]
     assert len(events)==1 and isinstance(events[0],ProviderError)
     assert "does not support image input" in events[0].message
@@ -200,7 +198,6 @@ async def test_codex_rejects_known_nonvision_model_without_spawning(monkeypatch,
 async def test_factory_discovery_callback_preserves_fallback_credentials(monkeypatch):
     from libre_claw.providers.factory import create_provider
     from libre_claw.auth.api_keys import ApiKeyLookup
-    import libre_claw.providers.model_catalog as catalog
     config = _build_config(_load_default_config(), ())
     class KeyStore:
         def get_api_key(self,*args,**kwargs): return ApiKeyLookup('test-key','environment')
@@ -208,8 +205,8 @@ async def test_factory_discovery_callback_preserves_fallback_credentials(monkeyp
     calls=[]
     async def discover(config_arg,name,model,**kwargs):
         calls.append((config_arg,name,model,kwargs))
-        return ModelInfo(name,model,model)
-    monkeypatch.setattr(catalog,'discover_model',discover)
+        return model_catalog.ModelInfo(name,model,model)
+    monkeypatch.setattr(model_catalog,'discover_model',discover)
     provider = create_provider(config,store,provider_name='openrouter',model='future/fallback',api_key_env='BACKUP_KEY')
     assert not calls
     await provider.ensure_model_info()

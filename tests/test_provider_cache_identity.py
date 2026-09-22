@@ -25,7 +25,7 @@ def test_cache_identity_changes_between_processes() -> None:
     source = Path(__file__).resolve().parents[1] / "src"
     command = [
         sys.executable, "-c",
-        "from libre_claw.providers.cache_identity import cache_identity; "
+        "from libre_claw.providers.cache_identity import cache_identity; " +
         "print(cache_identity('example-credential', purpose='models'))",
     ]
     environment = {**os.environ, "PYTHONPATH": str(source)}

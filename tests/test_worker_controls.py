@@ -12,7 +12,7 @@ import pytest
 
 from libre_claw.config import load_config
 from libre_claw.core.runs import RunStore
-from libre_claw.core.session import Session, session_from_payload, session_to_payload
+from libre_claw.core.session import session_from_payload, session_to_payload
 from libre_claw.core.task_control import request_subagent_resume, saved_subagent_snapshots
 from libre_claw.daemon import DaemonServer
 from libre_claw.telegram.bridge import TelegramBridge

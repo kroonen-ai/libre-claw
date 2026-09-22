@@ -445,6 +445,7 @@ def _read_queue(path: Path) -> list[dict[str, Any]]:
             except (ValueError, AttributeError):
                 continue
     except OSError:
+        # A new or unavailable event journal cannot reconcile claims; keep the durable queue.
         pass
     items = [item for item in payload.get("messages", []) if isinstance(item, dict) and isinstance(item.get("message"), str) and item.get("id") not in started]
     missing = [item for key, item in returned.items() if not any(pending.get("id") == key for pending in items)]

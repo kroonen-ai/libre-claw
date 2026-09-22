@@ -115,6 +115,7 @@ async def git_bytes(
                 process.stdin.write(stdin or b"")
                 await process.stdin.drain()
             except (BrokenPipeError, ConnectionResetError):
+                # Git exited before consuming stdin; its exit status and stderr are collected below.
                 pass
             finally:
                 process.stdin.close()
@@ -134,6 +135,7 @@ async def git_bytes(
             elif process.returncode is None:
                 process.kill()
         except ProcessLookupError:
+            # Git may exit between the return-code check and the kill request.
             pass
         await process.wait()
         for task in tasks:

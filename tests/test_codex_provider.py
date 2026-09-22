@@ -10,7 +10,6 @@ import libre_claw.providers.codex as codex_provider
 from libre_claw.auth.codex import CodexCommandEvent, CodexCommandResult, CodexStatus
 from libre_claw.core.session import ChatMessage, text_block
 from libre_claw.providers.base import Done, ProviderError, TextDelta
-from libre_claw.providers.codex import CodexProvider, _chunk_text, _extract_codex_text, _usage_from_codex_jsonl
 
 
 def test_extract_codex_text_from_jsonl_and_plain_fallback() -> None:
@@ -22,11 +21,11 @@ def test_extract_codex_text_from_jsonl_and_plain_fallback() -> None:
         ]
     )
 
-    assert _extract_codex_text(output) == ["Hello", " world", "plain line\n"]
+    assert codex_provider._extract_codex_text(output) == ["Hello", " world", "plain line\n"]
 
 
 def test_codex_usage_is_parsed_from_turn_completed() -> None:
-    usage = _usage_from_codex_jsonl(
+    usage = codex_provider._usage_from_codex_jsonl(
         '{"type":"turn.completed","usage":'
         '{"input_tokens":10,"cached_input_tokens":4,"output_tokens":3,"reasoning_output_tokens":2}}\n'
     )
@@ -39,7 +38,7 @@ def test_codex_usage_is_parsed_from_turn_completed() -> None:
 
 
 def test_codex_completed_text_chunks_on_word_boundaries() -> None:
-    assert _chunk_text("hello beautiful world", 10) == ["hello ", "beautiful ", "world"]
+    assert codex_provider._chunk_text("hello beautiful world", 10) == ["hello ", "beautiful ", "world"]
 
 
 async def test_codex_provider_requires_login(monkeypatch, tmp_path: Path) -> None:
@@ -48,7 +47,7 @@ async def test_codex_provider_requires_login(monkeypatch, tmp_path: Path) -> Non
         return CodexStatus(available=True, logged_in=False, detail="Not logged in")
 
     monkeypatch.setattr(codex_provider, "codex_status", fake_status)
-    provider = CodexProvider(model="gpt-5.5", working_directory=tmp_path)
+    provider = codex_provider.CodexProvider(model="gpt-5.5", working_directory=tmp_path)
 
     events = [
         event
@@ -83,7 +82,7 @@ async def test_codex_provider_streams_codex_exec_with_prompt(monkeypatch, tmp_pa
 
     monkeypatch.setattr(codex_provider, "codex_status", fake_status)
     monkeypatch.setattr(codex_provider, "stream_codex_command", fake_stream)
-    provider = CodexProvider(model="gpt-5.5", working_directory=tmp_path, timeout=12, replay_delay=0)
+    provider = codex_provider.CodexProvider(model="gpt-5.5", working_directory=tmp_path, timeout=12, replay_delay=0)
 
     events = [
         event
@@ -116,7 +115,7 @@ async def test_codex_provider_reports_stream_exit_errors(monkeypatch, tmp_path: 
 
     monkeypatch.setattr(codex_provider, "codex_status", fake_status)
     monkeypatch.setattr(codex_provider, "stream_codex_command", fake_stream)
-    provider = CodexProvider(model="gpt-5.5", working_directory=tmp_path)
+    provider = codex_provider.CodexProvider(model="gpt-5.5", working_directory=tmp_path)
 
     events = [
         event
@@ -143,7 +142,7 @@ async def test_closing_provider_stream_closes_native_command(monkeypatch, tmp_pa
 
     monkeypatch.setattr(codex_provider, "codex_status", fake_status)
     monkeypatch.setattr(codex_provider, "stream_codex_command", fake_stream)
-    provider = CodexProvider(model="arbitrary-model", working_directory=tmp_path, replay_delay=0)
+    provider = codex_provider.CodexProvider(model="arbitrary-model", working_directory=tmp_path, replay_delay=0)
     stream = provider.complete(messages=[ChatMessage(role="user", content=[text_block("inspect")])])
     assert isinstance(await anext(stream), TextDelta)
     await stream.aclose()

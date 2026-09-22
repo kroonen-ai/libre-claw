@@ -44,8 +44,8 @@ from libre_claw.telegram.bridge import (
     TelegramToolNotice,
 )
 from libre_claw.telegram.formatting import (
-    TELEGRAM_HARD_MESSAGE_LIMIT,
-    TELEGRAM_SAFE_MESSAGE_LIMIT,
+    TELEGRAM_HARD_MESSAGE_LIMIT as TELEGRAM_HARD_MESSAGE_LIMIT,
+    TELEGRAM_SAFE_MESSAGE_LIMIT as TELEGRAM_SAFE_MESSAGE_LIMIT,
     TelegramFormattedChunk,
     markdown_to_telegram_html,
     plain_text_chunks,

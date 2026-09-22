@@ -9,7 +9,6 @@ import os
 import signal
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 from libre_claw.core.sandbox import SandboxViolation
 from libre_claw.core.tools import BaseTool, ToolResult, register_tool

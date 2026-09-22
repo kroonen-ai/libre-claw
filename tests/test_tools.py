@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from abc import abstractmethod
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
@@ -96,6 +97,52 @@ async def test_tool_registry_schema_duplicate_missing_and_execute(tmp_path: Path
         registry.register(ExampleTool(context(tmp_path)))
     with pytest.raises(ToolRegistryError):
         registry.get("missing")
+
+
+def test_tool_requires_a_handler_and_preserves_subclass_abstract_methods(tmp_path: Path) -> None:
+    class MissingHandlerTool(BaseTool):
+        pass
+
+    class AbstractTool(ExampleTool):
+        @abstractmethod
+        def prepare(self) -> None:
+            """Prepare tool-specific resources."""
+
+    with pytest.raises(TypeError, match="must define a callable execute handler"):
+        MissingHandlerTool(context(tmp_path))
+    with pytest.raises(TypeError, match="abstract"):
+        AbstractTool(context(tmp_path))
+
+
+async def test_schema_handlers_preserve_required_and_keyword_only_arguments(tmp_path: Path) -> None:
+    class JoinTool(BaseTool):
+        name = "join"
+        description = "Join two required values."
+        parameters = {
+            "first": {"type": "string"},
+            "second": {"type": "string"},
+            "uppercase": {"type": "boolean"},
+        }
+        required = ("first", "second")
+
+        async def execute(self, first: str, second: str, *, uppercase: bool = False) -> ToolResult:
+            text = first + second
+            return ToolResult(content=text.upper() if uppercase else text)
+
+    tool = JoinTool(context(tmp_path))
+    direct = await tool.execute("hello", " world")
+    invoked = await tool.invoke({"first": "hello", "second": " world", "uppercase": True})
+    registry = ToolRegistry([tool])
+    dispatched = await registry.execute(
+        ToolCall(id="joined", name="join", arguments={"first": "hello", "second": " world"})
+    )
+    missing = await registry.execute(ToolCall(id="missing", name="join", arguments={"first": "hello"}))
+
+    assert direct.content == "hello world"
+    assert invoked.content == "HELLO WORLD"
+    assert dispatched == direct
+    assert missing.is_error
+    assert "second" in missing.as_text()
 
 
 def test_builtin_registry_exposes_production_toolset(monkeypatch, tmp_path: Path) -> None:

@@ -155,7 +155,9 @@ provider = "deepseek"
 model = "new-model-from-the-api"
 api_key_env = "DEEPSEEK_BACKUP_KEY"
 ''', encoding="utf-8")
-    fallback, = create_fallback_providers(load_config(path))
+    fallbacks = create_fallback_providers(load_config(path))
+    assert len(fallbacks) == 1
+    fallback = fallbacks[0]
     assert fallback.label == "deepseek:new-model-from-the-api via DEEPSEEK_BACKUP_KEY"
     provider = fallback.provider
     assert isinstance(provider, DeepSeekProvider)

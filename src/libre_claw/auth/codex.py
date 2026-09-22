@@ -160,6 +160,7 @@ async def _stop_codex_process(process: asyncio.subprocess.Process) -> None:
         elif process.returncode is None:
             process.kill()
     except ProcessLookupError:
+        # The process may exit between the return-code check and the kill request.
         pass
     await process.wait()
 

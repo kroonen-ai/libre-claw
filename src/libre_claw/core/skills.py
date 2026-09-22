@@ -9,11 +9,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, ParamSpec, TypeVar
+from typing import Literal, ParamSpec, TypeVar
 from uuid import uuid4
-
-if TYPE_CHECKING:
-    from libre_claw.config import SkillsConfig
 
 SkillScope = Literal["bundled", "external", "user", "project"]
 MAX_SKILL_CHARS = 6000
@@ -172,6 +169,7 @@ class SkillStore:
             try:
                 existing.path.parent.rmdir()
             except OSError:
+                # Remove only empty skill directories; retain supporting files and assets.
                 pass
         return True
 
@@ -391,6 +389,7 @@ def _sync_git_catalog(*, root: Path, url: str, ref: str, refresh_seconds: int, f
     try:
         sentinel.write_text(str(now), encoding="utf-8")
     except OSError:
+        # The checkout is synced; an unavailable timestamp only forces an earlier refresh.
         pass
     return f"{root.name}: synced"
 

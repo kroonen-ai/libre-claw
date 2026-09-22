@@ -373,7 +373,6 @@ class Agent:
 
                 failed_provider_label = provider_chain[provider_index][0]
                 provider_index = next_provider_index
-                active_provider_index = provider_index
                 active_provider = provider_chain[provider_index][1]
                 provider_attempt = 0
                 fallback_calls_since_recheck = 0
