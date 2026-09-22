@@ -55,7 +55,7 @@ from libre_claw.core.workspace import (
     workspace_result_text,
     workspace_status_text,
 )
-from libre_claw.daemon import DaemonServer, daemon_base_url
+from libre_claw.daemon import DaemonServer, daemon_base_url, daemon_client_base_url
 from libre_claw.headless import run_headless
 from libre_claw.telegram.bot import TelegramBot
 from libre_claw.tui.app import LibreClawApp
@@ -200,6 +200,15 @@ def _status_daemon_url(value: str) -> str | None:
     return str(parsed).rstrip("/")
 
 
+def _configured_daemon_url(config: LibreClawConfig, *, host: str | None = None, port: int | None = None) -> str | None:
+    try:
+        return daemon_base_url(config, host=host, port=port)
+    except (httpx.InvalidURL, ValueError):
+        # Status and lifecycle discovery must tolerate malformed configuration
+        # without displaying credentials that may have been pasted into host.
+        return None
+
+
 @main.command("status")
 @click.option("--json", "as_json", is_flag=True, help="Print only machine-readable JSON.")
 @click.option("--timeout", type=click.FloatRange(min=0.1, max=10), default=1.0, show_default=True,
@@ -211,7 +220,7 @@ def status_command(ctx: click.Context, as_json: bool, timeout: float) -> None:
     from libre_claw.providers.factory import _canonical_provider_name, _resolve_model
 
     config = _load_context_config(ctx)
-    base_url = _status_daemon_url(daemon_base_url(config))
+    base_url = _status_daemon_url(_configured_daemon_url(config) or "")
     health: dict[str, Any] | None = None
     for candidate in _lifecycle_target_urls(config, host=None, port=None):
         candidate = _status_daemon_url(candidate)
@@ -451,7 +460,7 @@ def telegram_status_command(ctx: click.Context) -> None:
     click.echo(f"use_daemon: {config.telegram.use_daemon}")
     click.echo(f"allowed_user_ids: {list(config.telegram.allowed_user_ids)}")
     click.echo(f"bot_token: {token_source}")
-    click.echo(f"daemon: http://{config.daemon.host}:{config.daemon.port}")
+    click.echo(f"daemon: {daemon_base_url(config)}")
 
 
 def _run_telegram_bot(ctx: click.Context) -> None:
@@ -467,6 +476,9 @@ def _run_telegram_bot(ctx: click.Context) -> None:
 
 
 async def _run_telegram_stack(config: LibreClawConfig, host: str | None = None, port: int | None = None) -> None:
+    config = replace(config, daemon=replace(
+        config.daemon, host=host or config.daemon.host, port=port or config.daemon.port,
+    ))
     server = DaemonServer(config, start_telegram_bridge=False)
     server_task = asyncio.create_task(server.run(host=host, port=port), name="libre-claw-daemon")
     await asyncio.sleep(0.25)
@@ -891,7 +903,7 @@ def _request_daemon_json(method: str, base_url: str, path: str, *, timeout: floa
 
 
 def _lifecycle_target_urls(config: LibreClawConfig, *, host: str | None, port: int | None) -> list[str]:
-    configured_url = daemon_base_url(config, host=host, port=port)
+    configured_url = _configured_daemon_url(config, host=host, port=port)
     state = _read_process_state()
     state_url = state.get("base_url") if isinstance(state.get("base_url"), str) else None
     return _unique_urls([configured_url if host or port else state_url, configured_url])
@@ -960,9 +972,7 @@ def _port_from_base_url(base_url: str) -> int | None:
 
 
 def _client_base_url(base_url: str) -> str:
-    if base_url.startswith("http://0.0.0.0:"):
-        return "http://127.0.0.1:" + base_url.rsplit(":", maxsplit=1)[-1]
-    return base_url.rstrip("/")
+    return daemon_client_base_url(base_url)
 
 
 def _is_pid_running(pid: int) -> bool:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import json
 import re
 import time
@@ -253,6 +254,11 @@ class DaemonServer:
         )
 
     async def run(self, host: str | None = None, port: int | None = None) -> None:
+        self.config = replace(self.config, daemon=replace(
+            self.config.daemon,
+            host=host or self.config.daemon.host,
+            port=port or self.config.daemon.port,
+        ))
         self._shutdown_event = asyncio.Event()
         runner = web.AppRunner(self.app(host=host))
         await runner.setup()
@@ -1975,7 +1981,7 @@ class DaemonClient:
         timeout: float = 30.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = daemon_client_base_url(base_url)
         self.timeout = timeout
         self.transport = transport
 
@@ -2086,7 +2092,26 @@ class DaemonClient:
 
 
 def daemon_base_url(config: LibreClawConfig, *, host: str | None = None, port: int | None = None) -> str:
-    return f"http://{host or config.daemon.host}:{port or config.daemon.port}"
+    """Return a connectable local URL without changing the listener's bind host."""
+    bind_host = (host or config.daemon.host).strip("[]")
+    try:
+        url = httpx.URL(scheme="http", host=bind_host, port=port or config.daemon.port)
+    except (httpx.InvalidURL, ValueError):
+        raise ValueError("Invalid daemon address. Check [daemon].host and [daemon].port.") from None
+    return daemon_client_base_url(str(url))
+
+
+def daemon_client_base_url(base_url: str) -> str:
+    """Translate wildcard listener addresses to loopback for local API clients."""
+    url = httpx.URL(base_url)
+    try:
+        address = ipaddress.ip_address(url.host)
+    except ValueError:
+        return base_url.rstrip("/")
+    if address.is_unspecified:
+        url = url.copy_with(host="::1" if address.version == 6 else "127.0.0.1")
+        return str(url).rstrip("/")
+    return base_url.rstrip("/")
 
 
 async def _run_telegram_bot_bridge(config: LibreClawConfig) -> None:

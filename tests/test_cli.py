@@ -16,6 +16,7 @@ from click.testing import CliRunner
 from libre_claw import __version__
 from libre_claw.cli import StartedProcess, main
 from libre_claw.config import LibreClawConfig
+from libre_claw.daemon import daemon_base_url
 from libre_claw.headless import HeadlessRunResult, TextCallback
 
 
@@ -457,7 +458,8 @@ def test_cli_start_uses_configured_detach(monkeypatch, tmp_path) -> None:
         port: int | None,
     ) -> StartedProcess:
         del ctx
-        base_url = f"http://{config.daemon.host}:{config.daemon.port}"
+        assert config.daemon.host == "0.0.0.0"
+        base_url = daemon_base_url(config, host=host, port=port)
         selected.append((mode, host, port, base_url))
         return StartedProcess(
             pid=5000,
@@ -472,9 +474,9 @@ def test_cli_start_uses_configured_detach(monkeypatch, tmp_path) -> None:
     result = runner.invoke(main, ["--config", str(config_path), "start"])
 
     assert result.exit_code == 0
-    assert selected == [("daemon", None, None, "http://0.0.0.0:8766")]
+    assert selected == [("daemon", None, None, "http://127.0.0.1:8766")]
     assert "Started Libre Claw daemon with pid 5000" in result.output
-    assert "Dashboard: http://0.0.0.0:8766/dashboard" in result.output
+    assert "Dashboard: http://127.0.0.1:8766/dashboard" in result.output
 
 
 def test_cli_start_reports_port_conflict_without_traceback(monkeypatch, tmp_path) -> None:
