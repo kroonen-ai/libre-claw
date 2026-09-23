@@ -27,6 +27,8 @@ htmlcov/
 .venv/
 venv/
 env/
+node_modules/
+.pnpm-store/
 
 build/
 dist/

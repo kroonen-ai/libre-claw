@@ -45,9 +45,10 @@ and the [implementation checklist](docs/CODING_WORKFLOW_CHECKLIST.md) for verifi
 
 Libre Claw uses Python 3.11+, pip, and Node.js for its Cordis engine. Use Node
 22.19+ on macOS with `sandbox-exec`, or Node 25+ on Linux for enforced offline
-execution. Check your setup with `libre-claw engine check`. Run the commands below from the app
-repository. `npm install` is for the separate [website repository](https://github.com/kroonen-ai/libreclaw);
-running it here can select an unrelated `package.json` in a parent directory.
+execution. Check your setup with `libre-claw engine check`. Run the commands below
+from the app repository. Python installs the application; the root pnpm workspace
+manages its JavaScript build tools. The [website](https://github.com/kroonen-ai/libreclaw)
+has its own repository and dependencies.
 
 Recommended local install:
 
@@ -59,6 +60,22 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
+
+To rebuild and package the application, keep that virtual environment active and
+use the pinned pnpm version from `package.json`:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm run test:runtime
+pnpm run package
+```
+
+`pnpm run package` produces the wheel, source archive, checksums, and an artifact
+manifest in `dist/`. CI checks the generated bundles, runs Python and Node tests,
+validates the archives, then installs the wheel outside the checkout and checks
+both CLI commands and the offline engine. Download the `libre-claw-dist` artifact
+from a successful CI run. See [the packaging guide](docs/PACKAGING.md) for details.
 
 One-command installer:
 

@@ -13,22 +13,30 @@ runtime code from these exact npm releases:
 
 The full copyright and permission notices accompany the bundle in
 `vendor/CORDIS-LICENSE` and `vendor/COSMOKIT-LICENSE`. Both derive from Shigma's
-upstream Cordis and Cosmokit projects. The lockfile records the registry
-archive URLs and integrity hashes for reproducible dependency installation.
+upstream Cordis and Cosmokit projects. The repository's `pnpm-lock.yaml` records
+exact package versions and integrity hashes for reproducible installation.
 `@standard-schema/spec` is a type-only dependency and adds no bundled runtime
 code. Esbuild is a development tool, not a runtime dependency.
 
-To regenerate the checked-in bundle with Node 22 or newer:
+To regenerate the checked-in bundles with Node 22.19 or newer and the pnpm
+version pinned in the root `package.json`, run from the repository root:
 
 ```sh
-npm ci --ignore-scripts --no-audit --no-fund
-npm run build
-npm test
+pnpm install --frozen-lockfile --ignore-scripts
+pnpm build
+pnpm test:runtime
+git diff --exit-code -- src/libre_claw/cordis_runtime/vendor
 ```
 
-Run these commands in this directory. Libre Claw never runs npm when starting
-plugins. The Python wheel includes the generated bundle and notices; it does
-not need a `node_modules` directory or a network connection.
+The workspace uses a project-local virtual store and disables installation
+scripts. Esbuild uses the pinned optional platform binary without running an
+install hook. Both build scripts preserve logical dependency symlink paths,
+keeping generated source labels independent of the checkout and physical pnpm
+store. Regeneration retains the existing bundled bytes.
+
+Libre Claw never runs a package manager when starting plugins. The Python wheel
+includes the generated bundles and notices; it does not need a `node_modules`
+directory or a network connection.
 
 Cordis manages dependencies and reversible effects. It is not a JavaScript
 security sandbox. Libre Claw supplies the separate process restrictions and

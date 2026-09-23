@@ -18,6 +18,9 @@ for (const file of record.files) {
 await mkdir(path.join(directory, 'vendor'), { recursive: true });
 const options = {
   absWorkingDir: directory, bundle: true, platform: 'node', format: 'esm',
+  // Dependencies are pinned directly in this package; their logical symlink
+  // paths keep source labels stable across pnpm stores and checkout paths.
+  preserveSymlinks: true,
   target: 'node22', minify: false, sourcemap: false, legalComments: 'inline',
 };
 await build({

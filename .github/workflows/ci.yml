@@ -20,6 +20,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  runtime:
+    name: Install and build with pnpm
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm and Node
+        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@26
+          cache: true
+          install: false
+
+      - name: Install locked JavaScript dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Rebuild bundled Cordis runtime
+        run: pnpm run build
+
+      - name: Check bundle reproducibility
+        run: git diff --exit-code -- src/libre_claw/cordis_runtime/vendor
+
+      - name: Test Cordis runtime
+        run: pnpm run test:runtime
+
   test:
     name: Test Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
@@ -69,9 +96,9 @@ jobs:
         run: git diff --check
 
   package:
-    name: Build package
+    name: Package and verify distribution
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, runtime]
 
     steps:
       - name: Checkout
@@ -83,16 +110,37 @@ jobs:
           python-version: "3.14"
           cache: pip
 
+      - name: Set up pnpm and Node
+        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@26
+          cache: true
+          install: false
+
+      - name: Install locked JavaScript dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install build
 
-      - name: Build wheel and source distribution
-        run: python -m build
+      - name: Build and validate packages
+        run: pnpm run package
+
+      - name: Check packaged bundles match the tested source
+        run: git diff --exit-code -- src/libre_claw/cordis_runtime/vendor
+
+      - name: Test installation outside the checkout
+        run: python scripts/smoke_package.py
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v7
         with:
           name: libre-claw-dist
-          path: dist/*
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/package-manifest.json
+          if-no-files-found: error

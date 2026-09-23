@@ -15,6 +15,9 @@ await build({
   },
   outfile: path.join(directory, 'vendor/cordis.mjs'),
   bundle: true,
+  // Keep module identities and source labels relative to this package instead
+  // of embedding pnpm's machine-dependent physical store paths.
+  preserveSymlinks: true,
   platform: 'node',
   format: 'esm',
   target: 'node22',

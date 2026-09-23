@@ -1,0 +1,18 @@
+{
+  "name": "libre-claw-build",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Development and packaging commands for Libre Claw",
+  "packageManager": "pnpm@12.5.1",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "pnpm --filter libre-claw-cordis-runtime run build",
+    "test:runtime": "pnpm --filter libre-claw-cordis-runtime test",
+    "test:python": "python -m pytest -W error",
+    "test": "pnpm run test:runtime && pnpm run test:python",
+    "package": "pnpm run build && python -m build && pnpm run package:check",
+    "package:check": "python scripts/verify_package.py"
+  }
+}

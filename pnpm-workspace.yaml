@@ -1,0 +1,8 @@
+packages:
+  - src/libre_claw/cordis_runtime
+
+# Keep bundle source paths independent of a developer's global pnpm store.
+virtualStoreType: project
+
+# The pinned esbuild platform package supplies its binary without install hooks.
+ignoreScripts: true

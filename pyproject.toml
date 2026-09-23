@@ -70,6 +70,8 @@ Homepage = "https://kroonen.ai"
 
 [tool.hatch.build]
 exclude = ["**/node_modules/**"]
+# Do not visit pnpm workspace symlinks before their actual source directories.
+skip-excluded-dirs = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/libre_claw"]
@@ -85,6 +87,9 @@ include = [
     "/ROADMAP.md",
     "/SECURITY.md",
     "/config",
+    "/package.json",
+    "/pnpm-lock.yaml",
+    "/pnpm-workspace.yaml",
     "/pyproject.toml",
     "/scripts",
     "/SOUL.md",
