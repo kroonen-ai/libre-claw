@@ -60,7 +60,7 @@ from libre_claw.core.memory import (
     redact_secrets,
 )
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
-from libre_claw.core.cordis_engine import CordisEngine, CordisEngineError
+from libre_claw.core.cordis_engine import CordisEngineError
 from libre_claw.core.cordis_engine_plugins import engine_for
 from libre_claw.core.cordis_bindings import (
     AUTOMATION_METHODS, MEMORY_METHODS, RUN_METHODS, BoundStore, provider_stream,

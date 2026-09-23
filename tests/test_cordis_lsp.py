@@ -4,9 +4,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 import shutil
+import socket
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -50,14 +49,14 @@ while True:
     elif method == 'textDocument/hover':
         if document['text'].startswith('WAIT'):
             time.sleep(120)
-        try:
-            connection = socket.socket()
-            connection.bind(('127.0.0.1', 0))
-            network = 'allowed'
-        except (PermissionError, OSError):
-            network = 'denied'
-        finally:
-            connection.close()
+        network = 'not-probed'
+        if len(sys.argv) == 3:
+            try:
+                with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=1) as connection:
+                    connection.sendall(b'confined-language-server')
+                network = 'allowed'
+            except OSError:
+                network = 'denied'
         try:
             pathlib.Path('forbidden.txt').write_text('must not write')
             writes = 'allowed'
@@ -86,7 +85,7 @@ def confined_lsp():
         pytest.skip("No supported OS-confined language-server launcher is installed")
 
 
-def lsp_setup(tmp_path):
+def lsp_setup(tmp_path, *, network_endpoint=None):
     root = tmp_path / "workspace"
     root.mkdir()
     script = root / "server.py"
@@ -95,6 +94,8 @@ def lsp_setup(tmp_path):
     configured = {"fixture": {"command": [sys.executable, "-I", "-S", str(script)],
                               "extensions": {".test": "fixture"},
                               "runtime_read_paths": [sys.base_prefix], "timeout_seconds": 10}}
+    if network_endpoint is not None:
+        configured["fixture"]["command"].extend(map(str, network_endpoint))
     allowed = [True]
     effects = []
 
@@ -150,16 +151,38 @@ def test_lsp_document_read_rejects_replaced_parent_directory(tmp_path):
 
 async def test_actual_stdio_lsp_hover_is_offline_read_only_and_has_no_inherited_credentials(tmp_path, monkeypatch, confined_lsp):
     monkeypatch.setenv("LSP_PRIVATE_TEST", "NEVER-INHERIT")
-    pool, request, _, effects = lsp_setup(tmp_path)
-    try:
-        result = await pool.dispatch("query", request)
-        assert result == {"kind": "hover", "hover": {"contents": "source=abc value;env=None;network=denied;writes=denied"}}
-        assert not (pool.workspace / "forbidden.txt").exists()
-        assert effects[0][0] == "lsp" and effects[0][2] is True
-        assert effects[0][1]["command"][0] == sys.executable
-        assert not pool._tasks
-    finally:
-        await pool.aclose()
+    with socket.socket() as receiver:
+        receiver.bind(("127.0.0.1", 0))
+        receiver.listen()
+        receiver.settimeout(1)
+        endpoint = receiver.getsockname()
+        # Prove the host endpoint accepts a connection and payload before testing
+        # confinement. A socket bind inside Linux's private namespace is harmless.
+        with socket.create_connection(endpoint, timeout=1) as control:
+            control.sendall(b"positive-control")
+        connection, _ = receiver.accept()
+        with connection:
+            control_payload = connection.recv(1024)
+        assert control_payload == b"positive-control"
+
+        pool, request, _, effects = lsp_setup(tmp_path, network_endpoint=endpoint)
+        try:
+            result = await pool.dispatch("query", request)
+            assert result == {"kind": "hover", "hover": {"contents": "source=abc value;env=None;network=denied;writes=denied"}}
+            receiver.settimeout(0.1)
+            try:
+                unexpected, _ = await asyncio.to_thread(receiver.accept)
+            except TimeoutError:
+                unexpected = None
+            if unexpected is not None:
+                unexpected.close()
+            assert unexpected is None, "The confined language server reached the host receiver"
+            assert not (pool.workspace / "forbidden.txt").exists()
+            assert effects[0][0] == "lsp" and effects[0][2] is True
+            assert effects[0][1]["command"][0] == sys.executable
+            assert not pool._tasks
+        finally:
+            await pool.aclose()
 
 
 @pytest.mark.parametrize("operation", ["goToDefinition", "findReferences", "goToImplementation"])

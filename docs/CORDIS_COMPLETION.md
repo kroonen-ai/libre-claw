@@ -47,14 +47,16 @@ is recorded in the release/task report rather than predeclared by this checklist
 
 ## Evidence
 
-Local verification on September 23, 2026: 2,037 Python tests passed on Python
-3.14 with warnings treated as errors; 60 JavaScript runtime tests passed.
+Local verification on September 23, 2026: 2,040 Python tests passed on Python
+3.14 and Node 26 with warnings treated as errors; 60 JavaScript runtime tests passed.
 Production JavaScript dependency auditing reported no known vulnerabilities.
-The wheel and source distribution verified 228 matching package files. A fresh
+The wheel and source distribution verified matching package files. A fresh
 wheel installation outside the checkout passed both CLI entrypoints and started
 all six offline core services. Browser checks exercised isolated React state and
 disposal, displayed core-extension ownership, and completed a concurrent team
 task with simulated providers; they made no live model requests.
+An isolated fresh pnpm installation also reproduced all bundled dependencies
+byte for byte. PTC contract tests passed on both Node 22 and Node 26.
 
 - `test_cordis_bindings.py`: execution gates, disabled services, engine failure,
   cancellation, and explicit recovery.

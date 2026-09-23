@@ -84,6 +84,22 @@ await build({
 });
 await build({
   ...options,
+  entryPoints: [path.join(directory, 'compat/ptc-typescript.mjs')],
+  // Use TypeScript's browser-compatible, in-memory compiler path. Its Node
+  // system host must not initialize or inspect the guest environment.
+  define: { process: 'undefined' },
+  // Full notices live alongside the bundle; preserve attribution in its
+  // banner without reproducing whitespace-only lines from the legal header.
+  legalComments: 'none',
+  outfile: path.join(directory, 'vendor/ptc-typescript.mjs'),
+  banner: { js: '// Copyright (c) Microsoft Corporation. All rights reserved.\n// Microsoft TypeScript 5.9.3 transpileModule wrapper. See THIRD_PARTY_NOTICES.md.' },
+});
+for (const [source, target] of [['LICENSE.txt', 'TYPESCRIPT-LICENSE'], ['ThirdPartyNoticeText.txt', 'TYPESCRIPT-THIRD-PARTY-NOTICES']]) {
+  const notice = await readFile(path.join(directory, 'node_modules/typescript', source), 'utf8');
+  await writeFile(path.join(directory, 'vendor', target), notice.replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').trimEnd() + '\n');
+}
+await build({
+  ...options,
   stdin: { contents: "export { default as React } from 'react'; export * as jsxRuntime from 'react/jsx-runtime'; export { default as Reconciler } from 'react-reconciler'; export * as ReconcilerConstants from 'react-reconciler/constants.js';",
     resolveDir: directory, sourcefile: 'client-react-entry.mjs' },
   define: { 'process.env.NODE_ENV': '"production"' },

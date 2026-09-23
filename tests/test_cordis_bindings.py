@@ -28,7 +28,7 @@ class ControlledProvider(LLMProvider):
         self.started = asyncio.Event()
         self.closed = asyncio.Event()
 
-    async def complete(self, **kwargs):
+    async def complete(self, messages, tools=None, system=None, stream=True, temperature=0.7, max_tokens=None):
         self.started.set()
         try:
             if self.block:
@@ -42,6 +42,25 @@ class ControlledProvider(LLMProvider):
 class GoalAgent:
     async def run(self, prompt):
         yield AgentDone()
+
+
+async def test_unmapped_storage_methods_deny_invocation_and_preserve_attribute_lookup():
+    class Store:
+        called = False
+
+        async def unbound(self):
+            self.called = True
+
+    raw = Store()
+    store = BoundStore(raw, lambda: None, {})
+    operation = store.unbound
+    assert callable(operation) and hasattr(store, "unbound")
+    assert not hasattr(store, "missing")
+    with pytest.raises(AttributeError):
+        getattr(store, "missing")
+    with pytest.raises(CordisEngineError, match="no engine binding"):
+        await operation()
+    assert raw.called is False
 
 
 async def test_storage_binding_enforces_service_state_and_follows_replacement(tmp_path):

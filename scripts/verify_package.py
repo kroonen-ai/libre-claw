@@ -41,6 +41,8 @@ REQUIRED_PACKAGE_FILES = (
     "cordis_runtime/compat/services.mjs", "cordis_runtime/compat/loader.mjs",
     "cordis_runtime/compat/host-services.mjs", "core/cordis_harness_services.py",
     "cordis_runtime/ptc-runner.mjs", "core/cordis_ptc.py", "cordis_runtime/vendor/client-react.mjs",
+    "cordis_runtime/compat/ptc-typescript.mjs", "cordis_runtime/vendor/ptc-typescript.mjs",
+    "cordis_runtime/vendor/TYPESCRIPT-LICENSE", "cordis_runtime/vendor/TYPESCRIPT-THIRD-PARTY-NOTICES",
     "core/cordis_bindings.py", "core/cordis_engine_plugins.py", "core/cordis_lsp.py", "core/cordis_process.py",
     "cordis_runtime/client.mjs", "cordis_runtime/client-schema.json",
     "core/cordis_client.py", "core/cordis_client_manifest.py", "web/assets/client-view.mjs", "web/client_plugin_api.py",

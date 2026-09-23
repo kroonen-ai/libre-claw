@@ -234,6 +234,7 @@ class CordisLspPool:
                     await channel.request("shutdown", None)
                     await channel.notify("exit", None)
             except TimeoutError:
+                # The finalizer forcibly stops and joins servers that ignore shutdown.
                 pass
             return normalized
         except BaseException:
@@ -310,6 +311,7 @@ async def _stop_process(process: asyncio.subprocess.Process) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
+        # The process group exited before graceful termination was requested.
         pass
     if process.returncode is None:
         try:
@@ -318,12 +320,14 @@ async def _stop_process(process: asyncio.subprocess.Process) -> None:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
+                # The group exited between the wait deadline and the kill request.
                 pass
             await process.wait()
     # A child can outlive a gracefully exited leader and ignore SIGTERM.
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
+        # Neither the leader nor a background indexer remains in this group.
         pass
     if process.stdin is not None:
         process.stdin.close()

@@ -2,7 +2,7 @@
 // One program per restricted process. Host functions cross a bounded JSON pipe.
 import { createInterface } from 'node:readline';
 import { format } from 'node:util';
-import * as module from 'node:module';
+import { transpilePtc } from './vendor/ptc-typescript.mjs';
 
 const MAX = 256 * 1024;
 const pending = new Map();
@@ -79,8 +79,7 @@ async function run(spec) {
   }
   try {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-    if (typeof module.stripTypeScriptTypes !== 'function') throw new Error('PTC requires Node.js 22.13 or newer with TypeScript transformation.');
-    const transformed = module.stripTypeScriptTypes('async function __dsh_main__() {\n' + spec.program + '\n}', {mode: 'transform'});
+    const transformed = transpilePtc('async function __dsh_main__() {\n' + spec.program + '\n}');
     const program = new AsyncFunction('console', ...globals, '"use strict";\n' + transformed + '\nreturn await __dsh_main__();');
     const value = await program(capturedConsole, ...values);
     try { if (value !== undefined) lossless(value); }

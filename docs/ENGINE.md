@@ -124,6 +124,10 @@ Writes use observed-version guards. Child agents retain scoped ownership and
 budgets. Job processes are terminated and joined on cancellation, revocation,
 or disposal. LSP servers are explicitly configured locally; no language server
 is automatically downloaded or launched from a model-supplied command.
+Language servers always run with read-only project access and isolation from
+the host network, even when the plugin has a network grant. Linux uses a private
+network namespace, where local socket creation and binding can still succeed;
+the regression checks inability to reach a live receiver on the host network.
 
 Imported agent drivers create fresh text assignments with explicit provider/model
 routes and bounded child lifetimes. They do not expose arbitrary saved sessions

@@ -41,6 +41,26 @@ async def test_typescript_ptc_calls_actual_binding_and_returns_typed_value(pool)
     assert not Path(job["temporary"].name).exists()
 
 
+async def test_typescript_runtime_enums_and_constructor_parameter_properties(pool):
+    run = await pool.start({"program": """
+enum Stage { Pending = 1, Ready }
+class Result {
+  constructor(public stage: Stage, private value: number) {}
+  read(): number { return this.value; }
+}
+const result = new Result(Stage.Ready, 42);
+return {stage: result.stage, name: Stage[result.stage], value: result.read()};
+""", "bindings": []})
+    assert (await finished(pool, run["id"]))["result"]["value"] == {"stage": 2, "name": "Ready", "value": 42}
+
+
+async def test_typescript_compilation_rejects_syntax_without_type_checking(pool):
+    typed = await pool.start({"program": "const value: number = 'runtime value'; return value;", "bindings": []})
+    assert (await finished(pool, typed["id"]))["result"]["value"] == "runtime value"
+    invalid = await pool.start({"program": "const value: = 1; return value;", "bindings": []})
+    assert (await finished(pool, invalid["id"]))["result"]["error"]["kind"] == "exception"
+
+
 async def test_binding_rejection_preserves_declared_error_class(pool):
     run = await pool.start({"program": "try { await tools.read({}); } catch (e) { return {typed:e instanceof ToolError,name:e.name,member:e.toolName}; }",
         "bindings": [{"global": "tools", "members": ["read"], "errorClass": {"name": "ToolError", "memberNameProperty": "toolName"}}]})

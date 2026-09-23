@@ -92,3 +92,15 @@ one shared React instance. Their MIT notices are `vendor/REACT-LICENSE` and
 `vendor/REACT-RECONCILER-LICENSE`; included scheduler 0.23.2, loose-envify 1.4.0
 and js-tokens 4.0.0 notices are in the corresponding uppercase vendor license
 files. These packages execute in the isolated client guest, not in the browser.
+
+`vendor/ptc-typescript.mjs` bundles Microsoft TypeScript 5.9.3 (Apache-2.0),
+from <https://github.com/microsoft/TypeScript/tree/v5.9.3>. Its complete notice
+is `vendor/TYPESCRIPT-LICENSE`, with its dependency notices in
+`vendor/TYPESCRIPT-THIRD-PARTY-NOTICES`. The first-party wrapper in
+`compat/ptc-typescript.mjs` exposes only the in-memory `transpileModule` string
+transform, preserving runtime TypeScript features such as enums and constructor
+parameter properties. The bundle disables TypeScript's Node system host; it
+does not read project files, type-check, launch a compiler process, or use the
+network. Compilation runs inside the existing restricted PTC guest and shares
+its memory and elapsed-time limits. PTC does not depend on Node's changing
+experimental TypeScript transformation API.

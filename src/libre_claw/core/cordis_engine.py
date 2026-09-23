@@ -253,6 +253,8 @@ class CordisEngine:
             if all(current_by_id.get(spec["plugin_id"]) == spec for spec in self._plugin_specs):
                 return
         except Exception:
+            # A loader failure invalidates the graph through the same safe error
+            # below; it must never leave previously granted extensions active.
             pass
         self._fail("Core plugin code, configuration, or grants changed. Restart the engine after review.")
         raise self._failure

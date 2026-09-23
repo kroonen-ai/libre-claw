@@ -91,7 +91,10 @@ class BoundStore:
         operation = self._methods.get(name)
         if operation is None:
             if not name.startswith("_") and inspect.iscoroutinefunction(target):
-                raise CordisEngineError(f"Storage operation {name} has no engine binding.")
+                @wraps(target)
+                async def denied(*args: Any, **kwargs: Any) -> Any:
+                    raise CordisEngineError(f"Storage operation {name} has no engine binding.")
+                return denied
             return target
 
         @wraps(target)

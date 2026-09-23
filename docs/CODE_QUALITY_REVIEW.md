@@ -1,5 +1,36 @@
 # Code quality review — September 22, 2026
 
+## Cordis completion review — September 23, 2026
+
+The scan of `071953c` produced 57 additional standard findings. Seventeen
+first-party findings were addressed in source or tests: explicit cleanup
+explanations, unused imports, a provider mock signature, side effects outside
+assertions, asynchronous test observation, and normal attribute lookup with
+deferred rejection of unmapped store operations. The original permission and
+cancellation assertions remain in place.
+
+Findings 827–842 are analyzer false positives on `await` expressions. Each await
+joins work, observes an expected exception, or preserves cleanup ordering; they
+were reviewed individually and dismissed without removing the synchronization.
+
+Findings 795–818 concern preserved generated fixtures or pinned dependency code.
+They were reviewed against the scanned commit, not changed line numbers after
+rebuilding. The rules remain enabled:
+
+| Findings | Disposition |
+| --- | --- |
+| 809–814 | JavaScript function-scoped `var` declarations are hoisted; values are assigned before consumption in React/Scheduler. |
+| 799–803 | Production bundle specialization leaves unreachable development branches. |
+| 797–798 | Preserved tsdown `module.exports` expression and a redundant strict-mode directive in an already-strict ES module. |
+| 804 | Upstream's generic disposal helper retains an unused async branch for a synchronous instantiation. |
+| 795, 805–808, 815–818 | Redundant upstream guards/assignments and extra arguments retained in production-specialized React helpers. |
+| 796 | A genuinely unreachable lane-reset branch also exists in React Reconciler 0.29.2's development source. This is accepted pinned-upstream maintenance debt, not a false positive or an application fix. Reassess with a compatible reconciler update. |
+
+Generated dependencies remain reproducible from pinned inputs with their
+licenses. They were not hand-edited to conceal analyzer findings.
+
+## Earlier review
+
 The standard findings were reviewed against the implementation and tests.
 Actionable interface, import, assignment, assertion, and error-handling findings
 were fixed. The following individual findings were dismissed after review;

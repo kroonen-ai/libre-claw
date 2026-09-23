@@ -186,6 +186,12 @@ importers:
       react-reconciler:
         specifier: 0.29.2
         version: 0.29.2(react@18.3.1)
+      scheduler:
+        specifier: 0.23.2
+        version: 0.23.2
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -402,6 +408,11 @@ packages:
   scheduler@0.23.2:
     resolution: {integrity: sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ==}
 
+  typescript@5.9.3:
+    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
@@ -549,5 +560,7 @@ snapshots:
   scheduler@0.23.2:
     dependencies:
       loose-envify: 1.4.0
+
+  typescript@5.9.3: {}
 
   zod@4.4.3: {}

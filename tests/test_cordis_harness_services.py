@@ -5,10 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import shutil
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -275,11 +273,11 @@ async def test_harness_agent_driver_uses_real_scoped_python_worker_and_approval(
     from libre_claw.tools_builtin.filesystem import ReadFileTool
     from libre_claw.tools_builtin.subagents import SubagentSpawnTool
 
-    requests = []
+    requests = asyncio.Queue()
     class Provider(LLMProvider):
         model = "test"
         async def complete(self, messages, **kwargs):
-            requests.append(messages)
+            requests.put_nowait(messages)
             yield TextDelta("Scoped worker result")
             yield Done()
 
@@ -313,12 +311,13 @@ output:{schema:{type:'string'},render:(_args,v)=>[{type:'text',text:v}]},execute
                 event = await parent.control_events.get()
                 if isinstance(event, AgentPermissionRequest):
                     assert event.call.name == "subagent_spawn" and event.call.arguments["read_only"] is True
-                    assert not requests
+                    assert requests.empty()
                     event.future.set_result("allow_once")
                     break
             result = await pending
         assert not result.is_error and "Scoped worker result" in result.content, result.error or result.content
-        assert requests and "private parent transcript" not in repr(requests)
+        provider_input = await asyncio.wait_for(requests.get(), 1)
+        assert "private parent transcript" not in repr(provider_input)
         assert all(state.status == "done" for state in parent.subagents.states.values())
     finally:
         if pending is not None and not pending.done():

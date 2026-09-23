@@ -238,7 +238,8 @@ async def test_client_api_requires_explicit_grant_and_disposes_on_request(tmp_pa
         assert changed.status == 200, await changed.text()
         assert "Count 1" in text_of((await changed.json())["snapshot"])
         assert (await client.get(path)).status == 200
-        assert (await client.delete(path)).status == 200
+        deleted = await client.delete(path)
+        assert deleted.status == 200
         assert not server.client_plugins.pool._guests
 
 

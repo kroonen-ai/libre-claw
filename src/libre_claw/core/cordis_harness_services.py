@@ -321,6 +321,7 @@ class HarnessHostServices:
                 try:
                     os.unlink(temporary, dir_fd=parent)
                 except FileNotFoundError:
+                    # Successful rename or create already consumed the staging file.
                     pass
         finally:
             os.close(parent)
@@ -417,6 +418,8 @@ class HarnessHostServices:
                         process.stdin.write(stdin)
                         await process.stdin.drain()
                     except (BrokenPipeError, ConnectionResetError):
+                        # A command may exit or close stdin before consuming input;
+                        # the process monitor still records and joins its outcome.
                         pass
                     finally:
                         process.stdin.close()
@@ -464,6 +467,7 @@ class HarnessHostServices:
             os.killpg(record["process"].pid, signal.SIGKILL)
             record["kill_requested"] = True
         except ProcessLookupError:
+            # The owned process group has already exited and needs no signal.
             pass
 
     @staticmethod
