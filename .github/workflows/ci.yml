@@ -80,6 +80,17 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
+      - name: Enable confined plugin process tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap
+          # The disposable Ubuntu runner must permit the namespaces used by
+          # bubblewrap; production still fails closed when they are unavailable.
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-all --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /lib /lib --ro-bind /lib64 /lib64 --proc /proc --dev /dev /bin/true
+
       - name: Run pytest
         run: python -m pytest -W error
 

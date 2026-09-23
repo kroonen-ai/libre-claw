@@ -86,6 +86,20 @@ Model access is separate: choose **Enable with model access**, or pass
 `--allow-model` to `cordis enable` / `/plugins enable`. The host performs model
 requests; the plugin never receives the provider key.
 
+Two additional capabilities have separate grants. **Enable core services**
+(`--allow-engine`) permits declared dispatch extensions after an explicit engine
+restart. **Enable interface** (`--allow-client`) permits the declared compiled
+client module in an offline React/Cordis guest; the browser receives only
+validated interface data. Ordinary enablement grants neither capability. See
+[core extensions](CORDIS_ENGINE_EXTENSIONS.md) and [the engine guide](ENGINE.md).
+
+Imported filesystem, shell, agent, and PTC tools use brokered host operations.
+Filesystem access still requires explicit `--read`/`--write` paths, and each
+host effect follows the task's approval and plan-mode policy. Shell, PTC, and
+configured language servers require OS confinement: macOS `sandbox-exec`, or
+Linux `bubblewrap` with user namespaces enabled. No commands, language servers,
+or runtimes are downloaded automatically.
+
 ```sh
 libre-claw cordis list
 libre-claw cordis disable local-word-count
@@ -164,7 +178,8 @@ whole-process disk quota.
 
 A package contains `libre-claw-plugin.json` and a local `.mjs`, `.js`, or `.cjs`
 entry. The manifest declares `id`, `name`, `version`, `entry`, `tools`, and optional
-`description`, `config`, and `config_schema`. Each tool declares `name`,
+`description`, `config`, `config_schema`, `engine`, and `client`. Packages declaring
+core or client services may have an empty tool list. Each tool declares `name`,
 `description`, and `input_schema`.
 Declared and registered schemas must agree; undeclared tools are not exposed.
 Installation excludes hidden files, dependency directories, and common private

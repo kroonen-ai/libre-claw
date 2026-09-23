@@ -1040,6 +1040,7 @@ async def test_telegram_model_callback_discovers_future_model(monkeypatch, tmp_p
         return ModelCatalog((ModelInfo(provider, model_id, "Future model"),), source="live")
 
     monkeypatch.setattr("libre_claw.telegram.handlers.discover_models", discover)
+    monkeypatch.setattr(daemon, "model_catalog", lambda provider, **options: discover(config, provider, **options), raising=False)
     query = ModelQuery(f"cfg:provider:{provider}")
     await query.click(handlers)
 

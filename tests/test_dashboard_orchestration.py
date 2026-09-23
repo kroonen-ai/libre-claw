@@ -20,7 +20,7 @@ Element.prototype.append = function(...children) { for (const child of children)
 Element.prototype.replaceChildren = function(...children) { this.children = []; this.append(...children); };
 Element.prototype.remove = function() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); };
 const bindings = [];
-const bindUI = (service, target, event, handler) => {
+bindUI = (service, target, event, handler) => {
   bindings.push({service,target,event}); target.addEventListener(event, handler);
   return () => { if (target.listeners[event] === handler) delete target.listeners[event]; };
 };

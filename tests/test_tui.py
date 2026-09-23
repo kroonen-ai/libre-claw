@@ -89,6 +89,9 @@ def configured_model_discovery(monkeypatch):
 
 
 class FakeDaemonClient:
+    async def model_catalog(self, provider: str, *, refresh: bool = False):
+        return ModelCatalog((), "configured")
+
     def __init__(self) -> None:
         self.cancelled: list[str] = []
         self.resolutions: list[tuple[str, str, str]] = []
@@ -1041,7 +1044,8 @@ async def test_schedule_commands_manage_recurring_runs(monkeypatch, tmp_path: Pa
     assert any("Schedules:" in entry.content for entry in app.transcript)
     assert any("Updated schedule:" in entry.content for entry in app.transcript)
     assert any("Deleted schedule" in entry.content for entry in app.transcript)
-    assert await app.automation_store.list() == []
+    # The application service graph is closed; inspect durable storage directly.
+    assert await app.automation_store.implementation.list() == []
 
 
 async def test_tui_daemon_mode_streams_daemon_events(monkeypatch, tmp_path: Path) -> None:
@@ -1077,7 +1081,8 @@ async def test_run_commands_list_inspect_resume_and_cancel(monkeypatch, tmp_path
         await app._handle_command(f"/resume {run.run_id}")
         await app._handle_command(f"/cancel {run.run_id}")
 
-    loaded = await app.run_store.load_run(run.run_id)
+    # Post-shutdown verification must not invoke the closed application engine.
+    loaded = await app.run_store.implementation.load_run(run.run_id)
 
     assert loaded is not None
     assert loaded.state == "cancelled"

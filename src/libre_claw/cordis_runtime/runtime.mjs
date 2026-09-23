@@ -420,6 +420,13 @@ export class CordisRuntime {
       case 'inspect': return this.inspect();
       case 'tools/list': return this.listTools();
       case 'tools/call': return this.callTool(params);
+      case 'harness/prompt': {
+        if (!this.#harnessDispose?.prompt) throw new PublicError('This plugin does not provide Harness prompts.');
+        const supplied = deepFreeze(copyJson(params.context ?? {}, MAX_CONTENT_BYTES, 'Plugin execution context is too large.'));
+        return this.#harnessDispose.prompt({ callId: randomUUID(), signal: new AbortController().signal,
+          ...(supplied.session_id ? { agent: { id: supplied.agent_id ?? supplied.session_id,
+            session: { id: supplied.session_id, cwd: supplied.cwd, events: supplied.session_events } } } : {}) });
+      }
       case 'unmount': return this.unmount();
       case 'shutdown': await this.unmount(); return { shutdown: true };
       default: throw new PublicError('Unknown plugin runtime method.');
@@ -453,18 +460,28 @@ export async function serve(input = process.stdin, output = process.stdout) {
     }
     await new Promise((resolve, reject) => output.write(`${frame}\n`, error => error ? reject(error) : resolve()));
   };
-  const hostCall = (method, params) => {
+  const hostCall = (method, params, options = {}) => {
     if (closed) return Promise.reject(new PublicError('The plugin host connection is closed.'));
     if (hostRequests.size >= 64) return Promise.reject(new PublicError('Too many pending plugin host requests.'));
+    if (options.signal?.aborted) return Promise.reject(options.signal.reason);
     const id = ++hostSequence;
-    const promise = new Promise((resolve, reject) => { hostRequests.set(id, { resolve, reject }); });
+    let abort;
+    const promise = new Promise((resolve, reject) => {
+      const settle = callback => value => { options.signal?.removeEventListener('abort', abort); hostRequests.delete(id); callback(value); };
+      hostRequests.set(id, { resolve: settle(resolve), reject: settle(reject) });
+      abort = () => {
+        hostRequests.get(id)?.reject(options.signal.reason);
+        void send({ host_cancel_id: id }).catch(() => {});
+      };
+      options.signal?.addEventListener('abort', abort, { once: true });
+    });
     void send({ host_call_id: id, method, params }).catch(() => {
       hostRequests.get(id)?.reject(new PublicError('Could not contact the plugin host.'));
       hostRequests.delete(id);
     });
     return promise;
   };
-  hostCall.stream = async function* (method, params) {
+  hostCall.stream = async function* (method, params, options = {}) {
     if (closed || hostRequests.size >= 64) throw new PublicError('The plugin host is unavailable.');
     const id = ++hostSequence;
     const queue = [];
@@ -473,6 +490,9 @@ export async function serve(input = process.stdin, output = process.stdout) {
     let failure;
     let received = 0;
     const notify = () => { wake?.(); wake = undefined; };
+    const abort = () => { failure = options.signal.reason; done = true; notify(); };
+    options.signal?.throwIfAborted();
+    options.signal?.addEventListener('abort', abort, { once: true });
     hostRequests.set(id, {
       chunk(value) {
         received += Buffer.byteLength(JSON.stringify(value));
@@ -498,7 +518,9 @@ export async function serve(input = process.stdin, output = process.stdout) {
       }
       if (failure) throw failure;
     } finally {
+      options.signal?.removeEventListener('abort', abort);
       hostRequests.delete(id);
+      if (!done || options.signal?.aborted) await send({ host_cancel_id: id }).catch(() => {});
     }
   };
   const runtime = new CordisRuntime({ hostCall });

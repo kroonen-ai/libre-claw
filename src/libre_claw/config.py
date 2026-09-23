@@ -245,6 +245,7 @@ class MCPConfig:
 class CordisConfig:
     enabled: bool = True
     tool_timeout: int = 30
+    lsp_servers: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1285,6 +1286,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
         cordis=CordisConfig(
             enabled=_bool(cordis, "enabled"),
             tool_timeout=max(1, min(300, _int(cordis, "tool_timeout"))),
+            lsp_servers=_lsp_servers(cordis),
         ),
         web_search=WebSearchConfig(
             enabled=_bool(web_search, "enabled"),
@@ -1314,6 +1316,14 @@ def _providers(data: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
     if not isinstance(value, Mapping):
         raise ConfigError("Missing or invalid [providers] config section")
     return {str(name): dict(config) for name, config in value.items() if isinstance(config, Mapping)}
+
+
+def _lsp_servers(cordis: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
+    from libre_claw.core.cordis_lsp import normalize_lsp_servers
+    try:
+        return normalize_lsp_servers(cordis.get("lsp_servers", {}))
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def _mcp_servers(mcp: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:

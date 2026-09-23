@@ -119,3 +119,43 @@ safety, and the unchanged native-provider protocol parser. See
 `test_cordis_engine.py`, `test_cordis_worker.py`,
 `test_cordis_harness_integration.py`, `test_cordis_ipc.py`,
 `test_cordis_services.py`, and `test_cordis_ui.py`.
+
+## Additional host and client contracts
+
+The completion work adds the pinned upstream system-prompt, job, agent, LSP,
+filesystem/shell, and PTC service contracts. Their model and workspace effects
+use the existing Python approval boundary; activation cannot obtain additional
+filesystem, model, network, core-service, or client-interface grants.
+
+Model-authored TypeScript programs execute in a separate restricted process.
+PTC uses OS confinement as well as Node permissions, has no inherited environment
+or network permission, and invokes only its supplied binding names through
+bounded JSON messages. Tests execute infinite loops, cancelled startup, actual
+network attempts against a controlled local receiver, credential reads, and
+ungranted file access. Read-only execution removes existing workspace write grants.
+
+Shell and configured LSP children have clean environments, bounded traffic,
+deadlines, and joined process cleanup. Language-server commands come from user
+configuration, never model arguments; LSP always denies networking and workspace
+writes. Filesystem operations and document reads reject symlink substitutions in
+the traversed directory chain. Cancellation propagates through nested host calls
+and releases waiting user approvals.
+
+Web client extensions require a separate client grant. They execute in an offline
+guest with the pinned React reconciler and Cordis. The guest receives public
+plugin settings with secret annotations and recognized credentials redacted,
+plus at most an explicitly selected task's ID and state. Python and the trusted
+browser renderer independently validate returned elements and event identities.
+No extension script, URL-bearing element, arbitrary HTML, or active CSS is
+inserted into the administrative page.
+
+Core extensions require their own explicit grant and share the core graph.
+They receive operation metadata, not host prompts, outputs, or credentials.
+Source/grant changes stop loaded registrations. Python independently times out
+dispatch, so a synchronous loop in an extension cannot indefinitely block a call.
+Ordinary plugin filesystem/network grants do not carry into this core process.
+
+The added vendored modules contain no telemetry endpoint or network collector.
+They are reproduced from pinned package/source inputs with retained licenses.
+These controls do not make arbitrary third-party code trustworthy; the separate
+permissions and source review remain part of extension installation.

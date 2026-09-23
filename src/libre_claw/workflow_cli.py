@@ -15,6 +15,8 @@ import click
 
 from libre_claw.config import LibreClawConfig, load_config
 from libre_claw.core.git_review import ReviewFile, ReviewHunk, ReviewSnapshot, atomic_json
+from libre_claw.core.cordis_bindings import BoundStore, RUN_METHODS
+from libre_claw.core.cordis_engine_plugins import engine_for
 from libre_claw.core.runs import RunStore
 from libre_claw.core.session import Session
 from libre_claw.core.worktrees import ManagedWorktree, TransferPreview
@@ -111,9 +113,15 @@ def _dispatch(ctx: click.Context, command: str, arguments: list[str], *, raw_tai
     async def execute() -> _CLIWorkspace:
         config = load_config(config_path=options.get("config_path"), working_directory=options.get("workflow_repository") or options.get("working_directory") or Path.cwd())
         app = _CLIWorkspace(config, options.get("workflow_runs_root"), options.get("workflow_worktrees_root"))
+        # Resolve the selected saved task before binding workspace-specific
+        # plugins. This is read-only bootstrap, not execution after failure.
         await app.load(options.get("workflow_run_id"))
-        await handle_workflow_command(app, command, argument)
-        await app.save()
+        async with engine_for(lambda: app.config) as engine:
+            app.engine = engine
+            app.run_store = BoundStore(app.run_store, lambda: engine, RUN_METHODS)
+            await handle_workflow_command(app, command, argument)
+            if not app._workflow_error:
+                await engine.call("workflows", "save", handler=app.save)
         return app
 
     try:

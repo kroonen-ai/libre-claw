@@ -44,7 +44,7 @@ MAX_PERSISTENT_WORKERS = 16
 _NAME = re.compile(r"[a-z][a-z0-9_-]{0,47}\Z")
 _DIGEST = re.compile(r"[a-f0-9]{64}\Z")
 _EXCLUDED = {"node_modules", "__pycache__"}
-_GRANT_KEYS = {"permissions", "grants", "allow_network", "allow_model", "read_paths", "write_paths"}
+_GRANT_KEYS = {"permissions", "grants", "allow_network", "allow_model", "allow_engine", "allow_client", "read_paths", "write_paths"}
 
 
 class CordisError(RuntimeError):
@@ -146,6 +146,18 @@ def _manifest(data: bytes) -> dict[str, Any]:
     harness = value.get("format") == "deepseek-harness"
     if harness:
         _validate_harness(value.get("harness"))
+    if "engine" in value:
+        from libre_claw.core.cordis_engine_plugins import validate_engine_declaration
+        try:
+            value["engine"] = validate_engine_declaration(value["engine"])
+        except ValueError as exc:
+            raise CordisError(str(exc)) from exc
+    if "client" in value:
+        from libre_claw.core.cordis_client_manifest import validate_client_declaration
+        try:
+            value["client"] = validate_client_declaration(value["client"])
+        except ValueError as exc:
+            raise CordisError(str(exc)) from exc
     plugin_id = _name(value.get("id"), "plugin id")
     if "__" in plugin_id:
         raise CordisError("Plugin ids cannot contain double underscores, which delimit tool namespaces.")
@@ -169,7 +181,7 @@ def _manifest(data: bytes) -> dict[str, Any]:
     except CordisConfigError as exc:
         raise CordisError(str(exc)) from exc
     tools = value.get("tools")
-    if not isinstance(tools, list) or not (0 if harness else 1) <= len(tools) <= 64:
+    if not isinstance(tools, list) or not (0 if harness or "engine" in value or "client" in value else 1) <= len(tools) <= 64:
         raise CordisError("Plugin manifest must declare between 1 and 64 tools.")
     seen = set()
     for tool in tools:
@@ -394,6 +406,10 @@ class CordisManager:
             validate_native_adapter(files, manifest)
         if manifest["id"] != plugin_id or manifest["entry"] not in files:
             raise CordisError("Plugin identity or entry does not match its snapshot.")
+        if "engine" in manifest and manifest["engine"]["entry"] not in files:
+            raise CordisError("Plugin engine entry is missing from its snapshot.")
+        if "client" in manifest and manifest["client"]["entry"] not in files:
+            raise CordisError("Plugin client entry is missing from its snapshot.")
         return snapshot, manifest
 
     def _source(self, source: str | Path) -> tuple[dict[str, bytes], dict[str, Any], dict[str, str], str]:
@@ -407,6 +423,10 @@ class CordisManager:
             validate_native_adapter(files, manifest)
         if manifest["entry"] not in files:
             raise CordisError("Plugin entry is missing or excluded from installation.")
+        if "engine" in manifest and manifest["engine"]["entry"] not in files:
+            raise CordisError("Plugin engine entry is missing or excluded from installation.")
+        if "client" in manifest and manifest["client"]["entry"] not in files:
+            raise CordisError("Plugin client entry is missing or excluded from installation.")
         checksums = _checksums(files)
         digest = hashlib.sha256(_json(checksums).encode()).hexdigest()
         return files, manifest, checksums, digest
@@ -511,7 +531,7 @@ class CordisManager:
         return self._describe(plugin_id, record, None)
 
     @_registry_mutation
-    def enable(self, plugin_id: str, workspace: str | Path, allow_network: bool = False, read_paths=(), write_paths=(), *, allow_model: bool = False) -> dict[str, Any]:
+    def enable(self, plugin_id: str, workspace: str | Path, allow_network: bool = False, read_paths=(), write_paths=(), *, allow_model: bool = False, allow_engine: bool = False, allow_client: bool = False) -> dict[str, Any]:
         _, key = _workspace(workspace)
         if not isinstance(allow_network, bool):
             raise CordisError("Network permission must be explicitly true or false.")
@@ -522,12 +542,18 @@ class CordisManager:
             raise CordisError("Harness plugins require asynchronous activation and tool discovery.")
         if not isinstance(allow_model, bool):
             raise CordisError("Model permission must be explicitly true or false.")
+        if type(allow_engine) is not bool or (allow_engine and "engine" not in manifest):
+            raise CordisError("Engine access requires an explicit grant and declared engine services.")
+        if type(allow_client) is not bool or (allow_client and "client" not in manifest):
+            raise CordisError("Client access requires an explicit grant and a declared client module.")
         self._effective_config(record, manifest, key)
         record["workspaces"][key] = {
             "allow_network": allow_network,
             "read_paths": _grant_paths(read_paths),
             "write_paths": _grant_paths(write_paths),
             **({"allow_model": True} if allow_model else {}),
+            **({"allow_engine": True} if allow_engine else {}),
+            **({"allow_client": True} if allow_client else {}),
         }
         _revise(record, key)
         self._write_registry(registry)
@@ -571,18 +597,25 @@ class CordisManager:
         return self._host_service_spec(plugin_id, key, record, manifest)
 
     async def enable_async(self, plugin_id: str, workspace: str | Path, allow_network: bool = False,
-                           read_paths=(), write_paths=(), *, allow_model: bool = False) -> dict[str, Any]:
+                           read_paths=(), write_paths=(), *, allow_model: bool = False, allow_engine: bool = False, allow_client: bool = False) -> dict[str, Any]:
         """Activate explicit candidate grants, then publish its validated catalog."""
         _, key = _workspace(workspace)
         previous = self._record(plugin_id)
         _, manifest = self._verify(plugin_id, previous)
         if manifest.get("format") != "deepseek-harness":
-            return self.enable(plugin_id, workspace, allow_network, read_paths, write_paths, allow_model=allow_model)
+            return self.enable(plugin_id, workspace, allow_network, read_paths, write_paths,
+                               allow_model=allow_model, allow_engine=allow_engine, allow_client=allow_client)
+        if type(allow_engine) is not bool or (allow_engine and "engine" not in manifest):
+            raise CordisError("Engine access requires an explicit grant and declared engine services.")
+        if type(allow_client) is not bool or (allow_client and "client" not in manifest):
+            raise CordisError("Client access requires an explicit grant and a declared client module.")
         if type(allow_network) is not bool or type(allow_model) is not bool:
             raise CordisError("Network and model permissions must be explicitly true or false.")
         candidate = copy.deepcopy(previous)
         candidate["workspaces"][key] = {"allow_network": allow_network, "allow_model": allow_model,
-                                         "read_paths": _grant_paths(read_paths), "write_paths": _grant_paths(write_paths)}
+                                         "read_paths": _grant_paths(read_paths), "write_paths": _grant_paths(write_paths),
+                                         **({"allow_engine": True} if allow_engine else {}),
+                                         **({"allow_client": True} if allow_client else {})}
         _revise(candidate, key)
         result = await self._invoke(plugin_id, workspace, _candidate=(previous, candidate))
         if result.get("activation_error"):
@@ -797,7 +830,7 @@ class CordisManager:
                 for key in list(self._worker_errors):
                     if key[1] == plugin_id:
                         self._worker_errors.pop(key, None)
-                await asyncio.gather(*(entry["worker"].aclose() for entry in entries), return_exceptions=True)
+                await asyncio.gather(*(self._close_worker(entry) for entry in entries), return_exceptions=True)
             await asyncio.to_thread(self._cleanup_removed, plugin_id)
             return {"id": plugin_id, "removed": True}
         cleanup = asyncio.create_task(finish())
@@ -843,6 +876,12 @@ class CordisManager:
         }
         if manifest and self._is_bundled_orchestration(plugin_id, record["digest"]):
             result["requires_model_access"] = True
+        if "engine" in manifest:
+            result["engine_services"] = manifest["engine"]["services"]
+            result["requires_engine_access"] = True
+        if "client" in manifest:
+            result["client"] = manifest["client"]
+            result["requires_client_access"] = True
         if manifest.get("harness", {}).get("adapter"):
             result.update(adapter=manifest["harness"]["adapter"], runtime_lifetime="host-service",
                           state="HOST_SERVICE" if grants is not None else "DISABLED")
@@ -896,7 +935,26 @@ class CordisManager:
     async def inspect(self, plugin_id: str, workspace: str | Path) -> dict[str, Any]:
         return await self._invoke(plugin_id, workspace)
 
-    async def _invoke(self, plugin_id: str, workspace: str | Path, tool_name: str | None = None, arguments: dict[str, Any] | None = None, *, expected_digest: str | None = None, context: ToolContext | None = None, _candidate: tuple[dict[str, Any], dict[str, Any]] | None = None) -> dict[str, Any]:
+    async def prompt_contributions(self, context: ToolContext) -> list[dict[str, Any]]:
+        """Assemble enabled plugin guidance without exposing the task transcript."""
+        if self.config is not None and not self.config.cordis.enabled:
+            return []
+        session = context.shared_state.get("agent_session")
+        if session is not None and "orchestration" in session.checkpoint:
+            return []
+        contributions = []
+        for plugin in self.list_plugins(context.working_directory):
+            if not plugin["enabled"] or plugin.get("format") != "deepseek-harness" or plugin.get("adapter"):
+                continue
+            result = await self._invoke(plugin["id"], context.working_directory, context=context, _prompt=True)
+            bounded_json(result, limit=64 * 1024, label="Plugin prompt")
+            if not isinstance(result, dict) or not isinstance(result.get("text"), str) or not isinstance(result.get("contexts"), list):
+                raise CordisError("Invalid plugin prompt contribution.")
+            contributions.append({"plugin_id": plugin["id"], **result})
+        bounded_json(contributions, limit=128 * 1024, label="Combined plugin prompts")
+        return contributions
+
+    async def _invoke(self, plugin_id: str, workspace: str | Path, tool_name: str | None = None, arguments: dict[str, Any] | None = None, *, expected_digest: str | None = None, context: ToolContext | None = None, _candidate: tuple[dict[str, Any], dict[str, Any]] | None = None, _prompt: bool = False) -> dict[str, Any]:
         from libre_claw.core.cordis_security import CordisSecurityError, prepare_cordis_process
         from libre_claw.core.cordis_host import CordisHost
 
@@ -943,6 +1001,7 @@ class CordisManager:
             orchestration_authorize = self.orchestration_profile(workspace)["authorize"]
         host = CordisHost(plugin_id, authorize, config=self.config, context=context, engine=self.engine,
                           orchestration_authorize=orchestration_authorize)
+        host.harness_effects_allowed = tool_name is not None
         host_parameters = await host.initialize() if manifest.get("format") == "deepseek-harness" else {}
         state_dir = self.root / "state" / key / plugin_id
         for path in (self.root / "state", state_dir.parent, state_dir):
@@ -961,13 +1020,14 @@ class CordisManager:
         if self.persistent and _candidate is None:
             return await self._persistent_invoke(plugin_id, workspace, key, baseline, manifest, expected_tools,
                                                  prepared, snapshot, state_dir, config, host_parameters, host,
-                                                 tool_name, arguments, started)
+                                                 tool_name, arguments, started, prompt=_prompt)
         process = None
         stderr_task = None
         request_id = 0
         response_bytes = 0
         sent_bytes = 0
         host_ids: set[str | int] = set()
+        host_tasks: dict[str | int, asyncio.Task[None]] = {}
 
         async def send(payload: dict[str, Any]) -> None:
             nonlocal sent_bytes
@@ -999,7 +1059,7 @@ class CordisManager:
                 else:
                     result = await host.dispatch(reply["method"], reply.get("params"))
                 authorize()
-            except Exception:
+            except (Exception, asyncio.CancelledError):
                 # Arbitrary provider/handler exceptions and request payloads can
                 # contain secrets. The child receives only a stable diagnosis.
                 await send({"host_call_id": identifier, "error": {"message": "Plugin host operation was denied or could not complete."}})
@@ -1018,7 +1078,14 @@ class CordisManager:
                         raise CordisError("Plugin runtime closed or exceeded the output limit.")
                     reply = _parse(line)
                     if isinstance(reply, dict) and "host_call_id" in reply:
-                        await host_request(reply)
+                        task = asyncio.create_task(host_request(reply))
+                        host_tasks[reply["host_call_id"]] = task
+                        task.add_done_callback(lambda finished: finished.exception() if not finished.cancelled() else None)
+                        continue
+                    if isinstance(reply, dict) and set(reply) == {"host_cancel_id"}:
+                        task = host_tasks.get(reply["host_cancel_id"])
+                        if task is not None and not task.done() and not task.cancelling():
+                            task.cancel()
                         continue
                     break
             except (BrokenPipeError, ConnectionError, ValueError) as exc:
@@ -1056,6 +1123,8 @@ class CordisManager:
             if _candidate is None and _json(sorted(actual, key=lambda tool: tool["name"])) != _json(sorted(expected_tools, key=lambda tool: tool["name"])):
                 raise CordisError("Plugin runtime tools differ from the installed manifest; no tool was executed.")
             authorize()
+            if _prompt:
+                return await rpc("harness/prompt", {"context": host.execution})
             if tool_name is not None:
                 result = await rpc("tools/call", {"name": tool_name, "arguments": arguments or {}, "context": host.execution})
                 authorize()
@@ -1112,6 +1181,10 @@ class CordisManager:
                 if not stderr_task.done():
                     stderr_task.cancel()
                 await asyncio.gather(stderr_task, return_exceptions=True)
+            for task in host_tasks.values():
+                if not task.done() and not task.cancelling():
+                    task.cancel()
+            await asyncio.gather(*host_tasks.values(), return_exceptions=True)
             return cleaned
 
         normal_completion = False
@@ -1137,7 +1210,7 @@ class CordisManager:
 
     async def _persistent_invoke(self, plugin_id, workspace, key, baseline, manifest, expected_tools,
                                  prepared, snapshot, state_dir, config, host_parameters, host,
-                                 tool_name, arguments, started) -> dict[str, Any]:
+                                 tool_name, arguments, started, *, prompt=False) -> dict[str, Any]:
         from libre_claw.core.cordis_host import CordisHost
         from libre_claw.core.cordis_worker import CordisWorker, CordisWorkerError
 
@@ -1147,10 +1220,11 @@ class CordisManager:
                 raise CordisError("The Cordis manager is closed.")
             entry = self._workers.get(worker_key)
             if entry and (_runtime_record(entry["baseline"], key) != _runtime_record(baseline, key) or entry["host_config"] != self.config or not entry["worker"].running):
-                await entry["worker"].aclose()
+                await self._close_worker(entry)
                 self._workers.pop(worker_key, None)
                 entry = None
             if entry is None:
+                owned_services = set()
                 if len(self._workers) >= MAX_PERSISTENT_WORKERS:
                     self._worker_errors[worker_key] = {"baseline": baseline, "host_config": self.config,
                                                        "workspace": str(workspace), "capacity": True,
@@ -1164,6 +1238,16 @@ class CordisManager:
                     return baseline["workspaces"][key]
 
                 def background(method, params, *, stream, timeout):
+                    if not stream and method == "harness.agent.notice":
+                        for service in owned_services:
+                            if isinstance(params, dict) and params.get("owner") == service.actor_token:
+                                return service.dispatch("agent.notice", params)
+                        raise PermissionError("Unknown plugin task owner.")
+                    if not stream and method in {"harness.shell.read", "harness.shell.wait", "harness.shell.kill", "harness.agents.status", "harness.agents.wait", "harness.agents.cancel"}:
+                        for service in owned_services:
+                            if isinstance(params, dict) and params.get("id") in (service.children if method.startswith("harness.agents.") else service.processes):
+                                return service.dispatch(method.removeprefix("harness."), params)
+                        raise PermissionError("Unknown plugin-owned background process.")
                     if method not in {"llm.listModels", "llm.resolveModelInfo", "llm.stream"}:
                         raise PermissionError("Background plugins cannot access a task or ask questions.")
                     broker = CordisHost(plugin_id, authorize, config=self.config, engine=self.engine)
@@ -1186,12 +1270,25 @@ class CordisManager:
                     self._worker_errors[worker_key] = {"baseline": baseline, "host_config": self.config,
                                                        "workspace": str(workspace), "message": "The plugin worker could not start."}
                     raise CordisError("The plugin worker could not start.") from exc
-                entry = {"worker": worker, "baseline": baseline, "host_config": self.config, "workspace": str(workspace)}
+                entry = {"worker": worker, "baseline": baseline, "host_config": self.config, "workspace": str(workspace),
+                         "host_services": owned_services}
                 self._workers[worker_key] = entry
                 self._worker_errors.pop(worker_key, None)
             worker = entry["worker"]
+            if host.harness_services is not None:
+                entry["host_services"].add(host.harness_services)
 
         def handler(method, params, *, stream, timeout):
+            if not stream and method == "harness.agent.notice":
+                for service in entry["host_services"]:
+                    if isinstance(params, dict) and params.get("owner") == service.actor_token:
+                        return service.dispatch("agent.notice", params)
+                raise PermissionError("Unknown plugin task owner.")
+            if not stream and method in {"harness.shell.read", "harness.shell.wait", "harness.shell.kill", "harness.agents.status", "harness.agents.wait", "harness.agents.cancel"}:
+                for service in entry["host_services"]:
+                    if isinstance(params, dict) and params.get("id") in (service.children if method.startswith("harness.agents.") else service.processes):
+                        return service.dispatch(method.removeprefix("harness."), params)
+                raise PermissionError("Unknown plugin-owned background process.")
             host.timeout = timeout
             return host.stream(method, params) if stream else host.dispatch(method, params)
 
@@ -1215,6 +1312,8 @@ class CordisManager:
             components = inspection.get("harness", {}).get("components", [])
             if any(row.get("state") not in {"ACTIVE", "DISABLED"} or row.get("missing_services") for row in components):
                 raise CordisError("Harness component requires a host service that is unavailable or not granted.")
+            if prompt:
+                return await request("harness/prompt", {"context": host.execution})
             if tool_name is None:
                 return {**self._describe(plugin_id, baseline, key), "state": "ACTIVE", "runtime_lifetime": "persistent",
                         "runtime_version": inspection.get("runtime_version"), "isolation": worker.isolation,
@@ -1251,7 +1350,7 @@ class CordisManager:
                 entries = list(self._workers.values())
                 self._workers.clear()
                 self._worker_errors.clear()
-                await asyncio.gather(*(entry["worker"].aclose() for entry in entries), return_exceptions=True)
+                await asyncio.gather(*(self._close_worker(entry) for entry in entries), return_exceptions=True)
                 for plugin_id in identifiers:
                     await asyncio.to_thread(self._cleanup_removed, plugin_id)
             return
@@ -1269,7 +1368,7 @@ class CordisManager:
                 except (CordisError, OSError):
                     keep = False
                 if not keep:
-                    await entry["worker"].aclose()
+                    await self._close_worker(entry)
                     self._workers.pop(worker_key, None)
                     await asyncio.to_thread(self._cleanup_removed, plugin_id)
         for directory in warm:
@@ -1294,11 +1393,16 @@ class CordisManager:
                 except (CordisError, OSError):
                     entry = self._workers.pop(worker_key, None)
                     if entry:
-                        await entry["worker"].aclose()
+                        await self._close_worker(entry)
                     failure = self._worker_errors.get(worker_key)
                     if failure is None or _runtime_record(failure["baseline"], key) != _runtime_record(record, key) or failure["host_config"] != self.config:
                         self._worker_errors[worker_key] = {"baseline": record, "host_config": self.config,
                                                            "workspace": directory, "message": "The plugin worker could not start."}
+
+    @staticmethod
+    async def _close_worker(entry: dict[str, Any]) -> None:
+        await asyncio.gather(*(service.aclose() for service in entry.get("host_services", ())), return_exceptions=True)
+        await entry["worker"].aclose()
 
     async def aclose(self) -> None:
         """Dispose every owned plugin fiber and stop its isolated process."""
@@ -1308,7 +1412,7 @@ class CordisManager:
             entries = list(self._workers.values())
             self._workers.clear()
             self._worker_errors.clear()
-            await asyncio.gather(*(entry["worker"].aclose() for entry in entries), return_exceptions=True)
+            await asyncio.gather(*(self._close_worker(entry) for entry in entries), return_exceptions=True)
             for plugin_id in identifiers:
                 await asyncio.to_thread(self._cleanup_removed, plugin_id)
 

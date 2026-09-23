@@ -975,7 +975,11 @@ class TelegramHandlers:
         page: int = 0,
     ) -> None:
         if catalog is None:
-            catalog = await discover_models(self.bridge.config, provider, refresh=refresh)
+            if self.bridge.daemon_client is not None:
+                catalog = await self.bridge.daemon_client.model_catalog(provider, refresh=refresh)
+            else:
+                catalog = await self.bridge.engine.call("providers", "models", handler=lambda: discover_models(
+                    self.bridge.config, provider, refresh=refresh))
         # A callback index belongs to this immutable catalog, never a newer discovery.
         token = secrets.token_hex(8)
         self._expire_model_menus(query)

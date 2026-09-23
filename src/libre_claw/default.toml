@@ -306,6 +306,7 @@ allowlist = [] # expose only server.tool names listed here; empty means use each
 permission_level = "ask" # allow | ask | deny for external MCP tools
 tool_timeout = 30
 
+
 [mcp.servers]
 # Example:
 # [mcp.servers.filesystem]
@@ -317,3 +318,11 @@ tool_timeout = 30
 # This switch disables all Cordis tools. Plugin grants live in the user registry.
 enabled = true
 tool_timeout = 30
+# Explicitly installed language servers for approved Harness LSP tools.
+# No server is downloaded or started automatically. Child processes are offline,
+# receive no inherited credentials, and cannot write workspace files.
+# [cordis.lsp_servers.python]
+# command = ["/absolute/path/to/pylsp"]
+# extensions = { ".py" = "python" }
+# runtime_read_paths = ["/absolute/path/to/server-venv"]
+# timeout_seconds = 30

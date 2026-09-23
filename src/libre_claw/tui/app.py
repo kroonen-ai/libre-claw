@@ -137,7 +137,9 @@ from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry, refresh_cordis_tools, bind_cordis_manager
-from libre_claw.core.cordis_engine import CordisEngine
+from libre_claw.core.cordis_engine import CordisEngineError
+from libre_claw.core.cordis_engine_plugins import engine_for
+from libre_claw.core.cordis_bindings import AUTOMATION_METHODS, MEMORY_METHODS, RUN_METHODS, BoundStore
 from libre_claw.core.cordis import CordisManager
 from libre_claw.core.orchestration_setup import (
     attach_orchestration, orchestration_provider_settings, orchestration_registry, prepare_orchestration,
@@ -773,6 +775,7 @@ class LibreClawApp(App[None]):
         self._slash_suggestions: list[SlashCommand] = []
         self._slash_suggestion_index = 0
         self._model_catalog_tasks: dict[str, asyncio.Task[None]] = {}
+        self._daemon_catalogs: dict[str, ModelCatalog] = {}
         self._model_catalog_requested_at: dict[str, float] = {}
         self._palette_selected_index = 0
         self._active_task: asyncio.Task[None] | None = None
@@ -808,7 +811,7 @@ class LibreClawApp(App[None]):
         self._global_model_config_path = global_config_path(self.config)
         self._global_model_config_mtime_ns = _path_mtime_ns(self._global_model_config_path)
         self._daemon_model_sync_task: asyncio.Task[None] | None = None
-        self.engine = CordisEngine()
+        self.engine = engine_for(lambda: self.config)
         self._orchestration_plugin = ""
         self._team_base_config: LibreClawConfig | None = None
         self.cordis_manager = CordisManager(config=self.config, tool_timeout=self.config.cordis.tool_timeout, persistent=True)
@@ -866,6 +869,9 @@ class LibreClawApp(App[None]):
                     yield Input(placeholder=self._input_placeholder(), id="input")
 
     async def on_mount(self) -> None:
+        self.memory_store = BoundStore(self.memory_store, lambda: self.engine, MEMORY_METHODS)
+        self.run_store = BoundStore(self.run_store, lambda: self.engine, RUN_METHODS)
+        self.automation_store = BoundStore(self.automation_store, lambda: self.engine, AUTOMATION_METHODS)
         self.add_class(self._theme.theme_id)
         if self._theme.is_light:
             self.add_class("light")
@@ -923,6 +929,8 @@ class LibreClawApp(App[None]):
     async def _reconcile_cordis(self) -> None:
         self.cordis_manager.config = self.config
         try:
+            if self.engine.running:
+                await self.engine.verify_plugins()
             await self.cordis_manager.reconcile_workers(self.config.general.working_directory)
         except (OSError, RuntimeError, ValueError) as exc:
             self._append_system(f"Plugin runtime: {exc}")
@@ -1085,7 +1093,10 @@ class LibreClawApp(App[None]):
                 self._model_catalog_tasks[provider] = asyncio.create_task(self._refresh_model_suggestions(provider))
 
     async def _refresh_model_suggestions(self, provider: str) -> None:
-        await discover_models(self.config, provider)
+        if self.daemon_client is not None:
+            self._daemon_catalogs[provider] = await self.daemon_client.model_catalog(provider)
+        else:
+            await self.engine.call("providers", "models", handler=lambda: discover_models(self.config, provider))
         if self.is_running:
             self._update_slash_suggestions(self.query_one("#input", Input).value)
 
@@ -1335,12 +1346,24 @@ class LibreClawApp(App[None]):
         if command == "/plugins":
             from libre_claw.cordis_cli import plugin_command
             try:
-                self._append_system(await plugin_command(self.config, argument))
+                self._append_system(await plugin_command(self.config, argument, manager=self.cordis_manager))
             except (ValueError, OSError, RuntimeError) as exc:
                 self._append_system(f"Cordis: {exc}")
             return
         if command == "/engine":
             try:
+                if argument.strip() == "restart":
+                    if self.daemon_client is not None:
+                        await self.daemon_client.restart_engine()
+                    else:
+                        if self._active_task is not None and not self._active_task.done():
+                            raise ValueError("Wait for the active task to finish before restarting the engine.")
+                        await self.engine.aclose(cancel_active=False)
+                        self.engine = engine_for(lambda: self.config)
+                        await self.engine.start()
+                        self._rebuild_agent()
+                elif argument.strip():
+                    raise ValueError("Use /engine or /engine restart.")
                 status = await self.daemon_client.engine_status() if self.daemon_client else await self.engine.inspect()
                 self._append_system(json.dumps(status, indent=2))
             except (ValueError, OSError, RuntimeError) as exc:
@@ -2435,6 +2458,7 @@ class LibreClawApp(App[None]):
             existing = [item.text for item in await self.memory_store.search_memory_items(prompt_text, project_root=source_root, limit=8)]
             extracted = await extract_memories_with_provider(
                 provider,
+                engine=self.engine,
                 user_message=prompt_text,
                 assistant_text=assistant_text,
                 existing_memories=existing,
@@ -2466,6 +2490,27 @@ class LibreClawApp(App[None]):
         return self.memory_enabled and self.config.memory.enabled
 
     async def _finish_active_run(self, state: str, *, summary: str = "") -> dict[str, Any] | None:
+        try:
+            return await self._finish_active_run_with_engine(state, summary=summary)
+        except CordisEngineError as exc:
+            run_id = self._active_run_id
+            if run_id is None:
+                raise
+            # Recovery persists only the interrupted task. No next queued turn,
+            # model request, memory extraction or artifact command runs here.
+            store = self.run_store.implementation if isinstance(self.run_store, BoundStore) else self.run_store
+            await store.save_session(run_id, self.session)
+            await store.append_event(run_id, "engine_unavailable", {"message": str(exc)})
+            await store.finish_turn(
+                run_id, "cancelled" if state == "cancelled" else "failed",
+                summary=summary or self._active_run_summary, drain_queue=False,
+            )
+            self._active_run_id = None
+            self._active_run_summary = ""
+            self._append_system(f"Cordis engine stopped: {exc}")
+            return None
+
+    async def _finish_active_run_with_engine(self, state: str, *, summary: str = "") -> dict[str, Any] | None:
         run_id = self._active_run_id
         if run_id is None:
             return None
@@ -2480,7 +2525,8 @@ class LibreClawApp(App[None]):
             if run is not None and run.working_directory
             else self.config.general.working_directory
         )
-        verification, diff, browser = await _collect_run_artifacts(working_directory, state, events)
+        verification, diff, browser = await self.engine.call("workflows", "review", handler=lambda: _collect_run_artifacts(
+            working_directory, state, events))
         summary_text = summary or self._active_run_summary
         await self.run_store.save_session(run_id, self.session)
         queued = await self.run_store.finish_turn(
@@ -2933,7 +2979,12 @@ class LibreClawApp(App[None]):
         if tokens and _canonical_tui_provider(tokens[0]) in SUPPORTED_PROVIDERS:
             provider = _canonical_tui_provider(tokens.pop(0))
         query = " ".join(tokens).lower()
-        catalog = await discover_models(self.config, provider, refresh=refresh)
+        catalog = (
+            await self.daemon_client.model_catalog(provider, refresh=refresh) if self.daemon_client is not None
+            else await self.engine.call("providers", "models", handler=lambda: discover_models(self.config, provider, refresh=refresh))
+        )
+        if self.daemon_client is not None:
+            self._daemon_catalogs[provider] = catalog
         self._append_system(_model_catalog_text(self.config, provider, catalog, query=query))
 
     def _set_model(self, model: str) -> None:
@@ -3035,7 +3086,8 @@ class LibreClawApp(App[None]):
         if provider != "openrouter":
             return
         try:
-            limits = await detect_openrouter_model_limits(self.config, model=self.config.general.default_model)
+            limits = await self.engine.call("providers", "models", handler=lambda: detect_openrouter_model_limits(
+                self.config, model=self.config.general.default_model))
         except Exception as exc:
             self._append_system(f"OpenRouter model metadata unavailable; using configured context window. ({exc})")
             return
@@ -4088,14 +4140,15 @@ class LibreClawApp(App[None]):
         self._update_shell_chrome()
 
     async def _cancel_run_command(self, argument: str) -> None:
-        run_id = await self._resolve_run_id(argument)
+        run_id = await self._resolve_run_id(argument, recovery=True)
         if run_id is None:
             self._append_system("Usage: /cancel [run-id]")
             return
         if self._active_run_id == run_id and self._active_task is not None and not self._active_task.done():
             self._cancel_active_generation()
             return
-        run = await self.run_store.load_run(run_id)
+        store = self.run_store.implementation if isinstance(self.run_store, BoundStore) else self.run_store
+        run = await store.load_run(run_id)
         if run is None:
             self._append_system(f"No durable run found for: {argument}")
             return
@@ -4107,8 +4160,8 @@ class LibreClawApp(App[None]):
         summary = await asyncio.to_thread(summary_path.read_text, encoding="utf-8") if summary_path.exists() else ""
         diff = await asyncio.to_thread(diff_path.read_text, encoding="utf-8") if diff_path.exists() else ""
         browser = await asyncio.to_thread(browser_path.read_text, encoding="utf-8") if browser_path.exists() else ""
-        await self.run_store.append_event(run.run_id, "cancelled", {"reason": "Cancelled by user command."})
-        await self.run_store.finish_run(
+        await store.append_event(run.run_id, "cancelled", {"reason": "Cancelled by user command."})
+        await store.finish_run(
             run.run_id,
             "cancelled",
             plan=plan,
@@ -4119,14 +4172,15 @@ class LibreClawApp(App[None]):
         )
         self._append_system(f"Run {run.run_id} marked cancelled.")
 
-    async def _resolve_run_id(self, value: str) -> str | None:
+    async def _resolve_run_id(self, value: str, *, recovery: bool = False) -> str | None:
         query = value.strip()
         if not query:
             return None
-        exact = await self.run_store.load_run(query)
+        store = self.run_store.implementation if recovery and isinstance(self.run_store, BoundStore) else self.run_store
+        exact = await store.load_run(query)
         if exact is not None:
             return exact.run_id
-        matches = [run.run_id for run in await self.run_store.list_runs(limit=100) if run.run_id.startswith(query)]
+        matches = [run.run_id for run in await store.list_runs(limit=100) if run.run_id.startswith(query)]
         return matches[0] if len(matches) == 1 else None
 
     async def _resolve_optional_run_id(self, value: str) -> str | None:
@@ -4548,8 +4602,13 @@ class LibreClawApp(App[None]):
             self.provider_error = str(error)
 
     async def _initialize_memory(self) -> None:
-        await self.memory_store.initialize()
-        await self._refresh_memory_facts()
+        try:
+            await self.memory_store.initialize()
+            await self._refresh_memory_facts()
+        except CordisEngineError as exc:
+            self._append_system(f"Cordis engine unavailable: {exc}. Use /engine restart after fixing its configuration.")
+            self._rebuild_agent()
+            return
         self._archive_session_event_later(
             "session_started",
             {
@@ -4822,7 +4881,7 @@ class LibreClawApp(App[None]):
 
         if lowered.startswith("/model "):
             query = lowered.removeprefix("/model ").strip()
-            suggestions = _model_suggestion_commands(self.config)
+            suggestions = _model_suggestion_commands(self.config, self._daemon_catalogs)
             if not query:
                 return suggestions[:6]
             return [
@@ -6533,12 +6592,13 @@ def _run_event_summary(event: RunEvent) -> str:
     return f"{event.type}: {event.data}"
 
 
-def _model_suggestion_commands(config: LibreClawConfig) -> list[SlashCommand]:
+def _model_suggestion_commands(config: LibreClawConfig, catalogs: Mapping[str, ModelCatalog] | None = None) -> list[SlashCommand]:
     current_provider = _canonical_tui_provider(config.general.default_provider)
     ordered_providers = [current_provider, *(provider for provider in SUPPORTED_PROVIDERS if provider != current_provider)]
     suggestions: list[SlashCommand] = []
     for provider in ordered_providers:
-        for item in cached_models(config, provider):
+        models = catalogs[provider].models if catalogs and provider in catalogs else cached_models(config, provider)
+        for item in models:
             model, label = item.model, item.label
             suggestions.append(
                 SlashCommand(

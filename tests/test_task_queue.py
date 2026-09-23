@@ -594,6 +594,10 @@ async def test_shutdown_does_not_wait_for_external_owner_or_claim_waiting_queue(
     await queue(server, old.run_id, "still queued after shutdown")
     await asyncio.wait_for(busy.wait(), 5)
     await asyncio.wait_for(server._on_cleanup(None), 1)
-    assert [item["message"] for item in await server.run_store.queued_messages(old.run_id)] == ["still queued after shutdown"]
+    # Re-open the persisted queue independently after its application engine
+    # has stopped; the disposed service must not dispatch another operation.
+    recovered = RunStore(server.run_store.root)
+    assert not server.engine.running
+    assert [item["message"] for item in await recovered.queued_messages(old.run_id)] == ["still queued after shutdown"]
     assert controller.calls == []
     assert server._queue_wakeups == {}

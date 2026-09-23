@@ -17,10 +17,26 @@ import click
 from libre_claw.config import LibreClawConfig, load_config
 from libre_claw.core.cordis import CordisManager
 from libre_claw.core.cordis_packages import CordisPackagePreviews, catalog
+from libre_claw.core.cordis_engine_plugins import engine_for
 
 
 def manager_for(config: LibreClawConfig, *, persistent: bool = False) -> CordisManager:
     return CordisManager(tool_timeout=config.cordis.tool_timeout, config=config, persistent=persistent)
+
+
+async def _runtime_operation(config, operation, manager=None):
+    """Executable CLI plugin operations own a core graph; metadata stays offline."""
+    if manager is not None and manager.engine is not None:
+        return await operation(manager)
+    manager = manager or manager_for(config)
+    async with engine_for(config) as engine:
+        manager.engine = engine
+        try:
+            return await operation(manager)
+        finally:
+            close = getattr(manager, "aclose", None)
+            if close is not None:
+                await close()
 
 
 def plugin_status(config: LibreClawConfig, *, manager: CordisManager | None = None) -> dict:
@@ -51,7 +67,7 @@ def format_plugins(payload: dict) -> str:
     return "\n".join(lines)
 
 
-async def plugin_command(config: LibreClawConfig, argument: str) -> str:
+async def plugin_command(config: LibreClawConfig, argument: str, *, manager: CordisManager | None = None) -> str:
     parts = shlex.split(argument)
     if not parts or parts == ["list"]:
         return format_plugins(plugin_status(config))
@@ -64,7 +80,7 @@ async def plugin_command(config: LibreClawConfig, argument: str) -> str:
     if len(parts) != 2 or parts[0] not in {"enable", "disable", "inspect", "details", "install"}:
         return "Use /plugins catalog, /plugins install <source>, or /plugins details|inspect|enable|disable <id>. Quote paths containing spaces."
     action, plugin_id = parts
-    manager = manager_for(config)
+    manager = manager or manager_for(config)
     workspace = config.general.working_directory
     if action == "install":
         plugin = await install_package(config, plugin_id)
@@ -79,9 +95,9 @@ async def plugin_command(config: LibreClawConfig, argument: str) -> str:
     if not config.cordis.enabled:
         raise ValueError("Cordis is disabled. Set [cordis].enabled = true before enabling or inspecting plugins.")
     if action == "enable":
-        await manager.enable_async(plugin_id, workspace, allow_model=allow_model)
+        await _runtime_operation(config, lambda selected: selected.enable_async(plugin_id, workspace, allow_model=allow_model), manager)
         return f"Enabled {plugin_id} for this project. Direct network access is denied. Its tools are available on your next message."
-    return json.dumps(await manager.inspect(plugin_id, workspace), indent=2)
+    return json.dumps(await _runtime_operation(config, lambda selected: selected.inspect(plugin_id, workspace), manager), indent=2)
 
 
 @click.group("cordis")
@@ -173,7 +189,9 @@ def config_command(ctx: click.Context, plugin_id: str, config_file: TextIO | Non
         if config_file is None:
             result = manager.details(plugin_id, config.general.working_directory)
         else:
-            result = asyncio.run(manager.configure_async(plugin_id, config.general.working_directory, json.load(config_file)))
+            submitted = json.load(config_file)
+            result = asyncio.run(_runtime_operation(config, lambda selected: selected.configure_async(
+                plugin_id, config.general.working_directory, submitted), manager))
         _print(result)
     except (ValueError, OSError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -183,18 +201,23 @@ def config_command(ctx: click.Context, plugin_id: str, config_file: TextIO | Non
 @click.argument("plugin_id")
 @click.option("--allow-network", is_flag=True, help="Explicitly permit network access to any host.")
 @click.option("--allow-model", is_flag=True, help="Permit model calls through Libre Claw's providers. Keys stay in Libre Claw.")
+@click.option("--allow-engine", is_flag=True, help="Permit declared core service replacements. Restart the engine after reviewing this grant.")
+@click.option("--allow-client", is_flag=True, help="Permit the declared client module in an isolated offline UI guest.")
 @click.option("--read", "read_paths", multiple=True, type=click.Path(exists=True, path_type=Path), help="Grant reads of this exact file or directory tree.")
 @click.option("--write", "write_paths", multiple=True, type=click.Path(exists=True, path_type=Path), help="Grant writes in addition to private plugin state.")
 @click.pass_context
-def enable_command(ctx: click.Context, plugin_id: str, allow_network: bool, allow_model: bool, read_paths: tuple[Path, ...], write_paths: tuple[Path, ...]) -> None:
+def enable_command(ctx: click.Context, plugin_id: str, allow_network: bool, allow_model: bool, allow_engine: bool, allow_client: bool, read_paths: tuple[Path, ...], write_paths: tuple[Path, ...]) -> None:
     """Enable a trusted plugin for this project. Offline without extra grants."""
     try:
         config = _config(ctx)
         if not config.cordis.enabled:
             raise ValueError("Cordis is disabled in configuration.")
-        _print(asyncio.run(manager_for(config).enable_async(plugin_id, config.general.working_directory,
-            allow_network=allow_network, allow_model=allow_model, read_paths=read_paths, write_paths=write_paths)))
+        _print(asyncio.run(_runtime_operation(config, lambda selected: selected.enable_async(plugin_id, config.general.working_directory,
+            allow_network=allow_network, allow_model=allow_model, read_paths=read_paths, write_paths=write_paths,
+            **({"allow_engine": True} if allow_engine else {}), **({"allow_client": True} if allow_client else {})))))
         click.echo("Enabled tools are available on your next message. Tool calls still require normal approval.", err=True)
+        if allow_engine:
+            click.echo("Core service access granted. Restart the engine to load the reviewed service replacements.", err=True)
     except (ValueError, OSError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -220,7 +243,7 @@ def inspect_command(ctx: click.Context, plugin_id: str) -> None:
         config = _config(ctx)
         if not config.cordis.enabled:
             raise ValueError("Cordis is disabled in configuration.")
-        _print(asyncio.run(manager_for(config).inspect(plugin_id, config.general.working_directory)))
+        _print(asyncio.run(_runtime_operation(config, lambda selected: selected.inspect(plugin_id, config.general.working_directory))))
     except (ValueError, OSError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
 

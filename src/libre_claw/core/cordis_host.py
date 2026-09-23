@@ -97,11 +97,17 @@ class CordisHost:
         self.plugin_id = plugin_id
         self.authorize = authorize
         self.context = context
+        self.config = config
         self.engine = engine
         self.orchestration_authorize = orchestration_authorize
         self.timeout: asyncio.Timeout | None = None
+        self._paused_calls = 0
+        self._paused_timeout: asyncio.Timeout | None = None
+        self._paused_remaining: float | None = None
         self.llm = CordisLlmBridge(config, authorize=lambda: self.authorize().get("allow_model") is True) if config else None
         self.session: Session | None = None
+        self.harness_services = None
+        self.harness_effects_allowed = True
         self.execution: dict[str, Any] = {}
         if context is not None and isinstance(context.shared_state.get("agent_session"), Session):
             self.session = context.shared_state["agent_session"]
@@ -118,14 +124,28 @@ class CordisHost:
             saved = self.session.checkpoint.get("cordis_events", {}).get(plugin_id, [])
             bounded_json(saved, limit=256 * 1024, label="Plugin session events")
             self.execution["session_events"] = json.loads(json.dumps(saved))
+            from libre_claw.core.cordis_harness_services import HarnessHostServices
+            services = context.shared_state.setdefault("harness_host_services", {})
+            existing = services.get(plugin_id)
+            if existing is None or existing.closed or existing.session is not self.session:
+                existing = services[plugin_id] = HarnessHostServices(plugin_id, context, authorize, config=config)
+            self.harness_services = existing
+            existing.actor_token = self.execution["session_id"]
 
     async def initialize(self) -> dict[str, Any]:
         grants = self.authorize()
-        result: dict[str, Any] = {"host_services": ["userQuestions", "sessionProjections"], "host_data": {}}
+        result: dict[str, Any] = {"host_services": ["userQuestions", "sessionProjections", "systemPrompt", "jobs", "agents", "lsp", "ptcRuntime"],
+                                 "host_data": {"harness": {"writable": bool(grants.get("write_paths")),
+                                     "commandTimeoutMs": (self.context.command_timeout if self.context else 120) * 1000}}}
+        if grants.get("read_paths") or grants.get("write_paths"):
+            result["host_services"].extend(["fs", "shell"])
+        if self.config is not None:
+            result["host_data"]["lspProviders"] = [{"id": identifier, "extensionToLanguage": server["extensions"]}
+                for identifier, server in self.config.cordis.lsp_servers.items()]
         if grants.get("allow_model") is True and self.llm is not None:
             result["host_services"].append("llm")
-            result["host_data"] = {"providers": await self._models(self.llm.list_providers),
-                                   "configurableProviders": await self._models(self.llm.list_configurable_providers)}
+            result["host_data"].update(providers=await self._models(self.llm.list_providers),
+                                       configurableProviders=await self._models(self.llm.list_configurable_providers))
         return result
 
     async def _models(self, handler: Callable[[], Any]) -> Any:
@@ -143,21 +163,36 @@ class CordisHost:
     @asynccontextmanager
     async def _answer_time(self) -> AsyncIterator[None]:
         timeout = self.timeout
-        remaining = None
-        if timeout is not None and timeout.when() is not None:
-            remaining = max(0, timeout.when() - asyncio.get_running_loop().time())
-            timeout.reschedule(None)
+        if self._paused_calls == 0:
+            self._paused_timeout = timeout
+            self._paused_remaining = None
+            if timeout is not None and timeout.when() is not None:
+                self._paused_remaining = max(0, timeout.when() - asyncio.get_running_loop().time())
+                timeout.reschedule(None)
+        self._paused_calls += 1
         try:
             yield
         finally:
-            if timeout is not None and remaining is not None and not timeout.expired():
-                timeout.reschedule(asyncio.get_running_loop().time() + remaining)
+            self._paused_calls -= 1
+            timeout, remaining = self._paused_timeout, self._paused_remaining
+            if self._paused_calls == 0 and timeout is not None and remaining is not None and not timeout.expired():
+                try:
+                    timeout.reschedule(asyncio.get_running_loop().time() + remaining)
+                except RuntimeError:
+                    # Transport teardown can finish the request while joining
+                    # its cancelled host operations; that timer is already closed.
+                    pass
 
     async def dispatch(self, method: str, params: Any) -> Any:
         self.authorize()
         if not isinstance(params, dict):
             raise ValueError("Plugin host request parameters must be an object.")
         bounded_json(params, limit=1024 * 1024, label="Plugin host request")
+        if method.startswith("harness."):
+            if self.harness_services is None or not self.harness_effects_allowed:
+                raise PermissionError("Harness host operations require an active task.")
+            async with self._answer_time():
+                return await self.harness_services.dispatch(method.removeprefix("harness."), params)
         if method.startswith("orchestration."):
             return await self._orchestration(method.removeprefix("orchestration."), params)
         if method == "llm.listModels" and set(params) == {"provider"}:

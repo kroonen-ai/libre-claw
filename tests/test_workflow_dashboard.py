@@ -108,6 +108,7 @@ assert.equal(workerControls({...worker, status: 'cancelled'}).canResume, true);
 
 WORKER_DOM = """
 const assert = require('node:assert/strict');
+const bindUI = (_service, target, event, handler, options) => target.addEventListener(event, handler, options);
 class Element {
   constructor(tag) { this.tag = tag; this.children = []; this.dataset = {}; this.listeners = {}; this.disabled = false; this.value = ''; this._text = ''; }
   set textContent(value) { this._text = String(value); this.children = []; }

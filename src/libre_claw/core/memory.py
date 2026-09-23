@@ -17,6 +17,8 @@ from uuid import uuid4
 import aiosqlite
 
 from libre_claw.core.session import ChatMessage, Session
+from libre_claw.core.cordis_bindings import provider_stream
+from libre_claw.core.cordis_engine import CordisEngine
 from libre_claw.core.session import text_block
 from libre_claw.core.runs import settle_finalization
 from libre_claw.providers.base import LLMProvider, ProviderError, TextDelta
@@ -563,16 +565,17 @@ async def extract_memories_with_provider(
     existing_memories: Sequence[str] = (),
     max_tokens: int = 1024,
     timeout_seconds: float = 30.0,
+    engine: CordisEngine | None = None,
 ) -> list[ExtractedMemory]:
+    async def extract() -> list[ExtractedMemory]:
+        return await _extract_memories_with_provider(
+            provider, user_message=user_message, assistant_text=assistant_text,
+            existing_memories=existing_memories, max_tokens=max_tokens, engine=engine,
+        )
+
     try:
         async with asyncio.timeout(timeout_seconds):
-            return await _extract_memories_with_provider(
-                provider,
-                user_message=user_message,
-                assistant_text=assistant_text,
-                existing_memories=existing_memories,
-                max_tokens=max_tokens,
-            )
+            return await engine.call("memory", "extract", handler=extract) if engine is not None else await extract()
     except TimeoutError:
         return []
 
@@ -584,6 +587,7 @@ async def _extract_memories_with_provider(
     assistant_text: str,
     existing_memories: Sequence[str],
     max_tokens: int,
+    engine: CordisEngine | None = None,
 ) -> list[ExtractedMemory]:
     prompt = _memory_extraction_prompt(
         user_message=redact_secrets(user_message),
@@ -591,19 +595,21 @@ async def _extract_memories_with_provider(
         existing_memories=tuple(redact_secrets(memory) for memory in existing_memories),
     )
     chunks: list[str] = []
-    async for event in provider.complete(
+    async with provider_stream(
+        provider, engine=engine,
         messages=[ChatMessage(role="user", content=[text_block(prompt)])],
         tools=[],
         system=MEMORY_EXTRACTION_SYSTEM_PROMPT,
         stream=True,
         temperature=0.0,
         max_tokens=max_tokens,
-    ):
-        if isinstance(event, TextDelta):
-            chunks.append(event.text)
-            continue
-        if isinstance(event, ProviderError):
-            return []
+    ) as stream:
+        async for event in stream:
+            if isinstance(event, TextDelta):
+                chunks.append(event.text)
+                continue
+            if isinstance(event, ProviderError):
+                return []
     return parse_extracted_memories("".join(chunks))
 
 

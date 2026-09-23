@@ -35,7 +35,7 @@ from libre_claw.core.session import (
     tool_use_block,
 )
 from libre_claw.core.skills import SKILL_AUTHORING_GUIDANCE
-from libre_claw.core.tools import ToolCall, ToolRegistry, ToolRegistryError, ToolResult
+from libre_claw.core.tools import BaseTool, ToolCall, ToolRegistry, ToolRegistryError, ToolResult
 from libre_claw.providers.base import (
     CacheableSystemPrompt,
     Done,
@@ -191,6 +191,8 @@ class Agent:
         if context is not None:
             context.shared_state["agent_session"] = session
             context.shared_state["user_question_handler"] = self.request_user_questions
+            context.shared_state["harness_tool_executor"] = self.execute_harness_tool
+            context.shared_state["harness_agent"] = self
             if "subagent_spawn" in tool_registry:
                 from libre_claw.core.subagents import SubagentManager
                 self.subagents = SubagentManager(self)
@@ -202,6 +204,8 @@ class Agent:
         self._active_skills: list[str] = []
         self._active_soul: list[str] = []
         self._active_memory: list[str] = []
+        self._harness_prompt = ""
+        self._turn_tool_calls = 0
         self._logger = structlog.get_logger(__name__)
 
     async def run(
@@ -248,6 +252,10 @@ class Agent:
             raise
         finally:
             self.accepting_control = False
+            if context is not None:
+                services = context.shared_state.pop("harness_host_services", {})
+                for service in services.values():
+                    await service.aclose()
             if self.subagents is not None:
                 await self.subagents.close(interrupted=interrupted)
             await self._checkpoint()
@@ -286,6 +294,7 @@ class Agent:
         self._active_skills = await self._load_skills(user_message)
         self._active_memory = await self._load_memory(user_message)
         total_tool_calls = 0
+        self._turn_tool_calls = 0
         turn_usage: Usage | None = None
         provider_chain = (("primary", self.provider), *self.fallback_providers)
         active_provider_index = 0
@@ -321,6 +330,19 @@ class Agent:
 
             while True:
                 try:
+                    context = self.tool_registry.context
+                    manager = context.shared_state.get("cordis_manager") if context is not None else None
+                    if manager is not None:
+                        contributions = await manager.prompt_contributions(context)
+                        parts = []
+                        for contribution in contributions:
+                            text = contribution["text"]
+                            contexts = "\n\n".join(item["text"] for item in contribution["contexts"] if isinstance(item, dict) and isinstance(item.get("text"), str))
+                            if text or contexts:
+                                parts.append(f"Plugin guidance ({contribution['plugin_id']}):\n{text}\n{contexts}")
+                        self._harness_prompt = "\n\n".join(parts)
+                        self.session.checkpoint["harness_prompts"] = contributions
+                        await self._checkpoint()
                     if id(active_provider) not in metadata_loaded:
                         await self._ensure_provider_metadata(active_provider)
                         metadata_loaded.add(id(active_provider))
@@ -442,7 +464,8 @@ class Agent:
                 yield AgentDone(turn_usage)
                 return
 
-            total_tool_calls += len(tool_calls)
+            self._turn_tool_calls += len(tool_calls)
+            total_tool_calls = self._turn_tool_calls
             if total_tool_calls > self.max_tool_calls_per_turn:
                 yield AgentError(f"Stopped after exceeding {self.max_tool_calls_per_turn} tool calls in one turn.")
                 return
@@ -618,6 +641,8 @@ class Agent:
         parts = [self.system_prompt]
         if self.system_prompt_extra:
             parts.append(self.system_prompt_extra)
+        if self._harness_prompt:
+            parts.append(self._harness_prompt)
         tool_names = [
             str(schema.get("name", ""))
             for schema in self._tool_schemas
@@ -708,6 +733,59 @@ class Agent:
         self._active_instructions = instructions
         self._known_instructions = current
         return changed
+
+    async def execute_harness_tool(self, tool: BaseTool, arguments: dict[str, Any]) -> ToolResult:
+        """Approve a scoped plugin host effect through this task's native policy."""
+        context = self.tool_registry.context
+        if (context is None or context.shared_state.get("agent_session") is not self.session
+                or not self.accepting_control or tool.context is not context):
+            return ToolResult(error="Plugin host effects require the active owning task.")
+        try:
+            native = self.tool_registry.get(tool.name)
+        except ToolRegistryError:
+            return ToolResult(error="The corresponding native tool is disabled for this task.")
+        call = ToolCall(uuid.uuid4().hex, tool.name, arguments)
+        self._turn_tool_calls += 1
+        if self._turn_tool_calls > self.max_tool_calls_per_turn:
+            return ToolResult(error="The task tool-call budget has been exhausted.")
+        if self.session.mode == "plan" and not tool.is_read_only(arguments):
+            return ToolResult(error="Plan mode permits read-only tools.")
+        if self.session.pending_steering:
+            return ToolResult(error="New user guidance is pending; reconsider the operation.")
+        if self.subagents is not None and (error := self.subagents.ownership_error(call)):
+            return ToolResult(error=error)
+        decision = self.permission_manager.check(call, native)
+        if decision == "deny":
+            return ToolResult(error="Tool permission denied")
+        if decision == "ask":
+            future = asyncio.get_running_loop().create_future()
+            self.control_events.put_nowait(AgentPermissionRequest(call, future))
+            try:
+                remaining = self._remaining_seconds()
+                resolution = await future if remaining is None else await asyncio.wait_for(future, max(0, remaining))
+                if not self.permission_manager.apply_resolution(call, resolution):
+                    return ToolResult(error="User denied this action")
+            finally:
+                if not future.done():
+                    future.cancel()
+        if self.session.pending_steering or self.session.mode == "plan" and not tool.is_read_only(arguments):
+            return ToolResult(error="Task policy changed while waiting for approval.")
+        if self.subagents is not None and (error := self.subagents.ownership_error(call)):
+            return ToolResult(error=error)
+        changed = await self._refresh_instructions(tool_paths(arguments, context.working_directory))
+        if changed and not tool.is_read_only(arguments):
+            return ToolResult(error="Project instructions changed; review them before retrying this action.")
+        # A worker's registered tool carries the authoritative ownership guard.
+        from libre_claw.core.subagents import ScopedTool
+        if isinstance(native, ScopedTool):
+            tool = ScopedTool(tool, native.state, context, native.parent)
+        await self._checkpoint()
+        self.control_events.put_nowait(AgentToolCall(call))
+        async def execute() -> ToolResult:
+            return await tool.invoke(arguments)
+        result = await execute() if self.engine is None else await self.engine.call("tools", "execute", handler=execute)
+        self.control_events.put_nowait(AgentToolResult(call, result))
+        return result
 
     async def _execute_tools(self, calls: list[ToolCall]) -> list[ToolResult]:
         if not calls:

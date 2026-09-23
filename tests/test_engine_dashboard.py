@@ -64,6 +64,10 @@ def test_engine_live_counters_dependencies_and_method_metadata_render_as_text(tm
   assert.match(text($('engineComponents')), /agent.run/);
   assert.match(text($('enginePrivacy')), /Core network blocked/);
   assert.equal($('restartEngine').disabled, false);
+  snapshot.components[0].implementations = {run:'custom-agent',inspect:'libre-claw'};
+  await refreshEngine();
+  assert.match(text($('engineComponents')), /agent.run · custom-agent/);
+  assert.doesNotMatch(text($('engineComponents')), /inspect · libre-claw/);
   snapshot.components[0].title = '<img src=x onerror=alert(1)>';
   snapshot.components[0].methods = ['<script>data</script>'];
   await refreshEngine();

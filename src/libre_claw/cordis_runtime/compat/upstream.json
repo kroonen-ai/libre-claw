@@ -57,6 +57,106 @@
       "source": "packages/util/crypto/src/index.ts",
       "file": "upstream/crypto.ts",
       "sha256": "6d314b677a163808a732c53fc509eebea1f8b8cc34b67031644dcfa4a97e28f0"
+    },
+    {
+      "source": "packages/core/scope/lib/index.js",
+      "file": "upstream/services/scope.mjs",
+      "sha256": "2829df71d76e08941457d4dd173eac60783e55354921137c8b75e8b5c0d2ecca"
+    },
+    {
+      "source": "packages/core/system-prompt/lib/index.js",
+      "file": "upstream/services/system-prompt.mjs",
+      "sha256": "12a6307a72ef90e7d1512613615cb7bffd050b0e8d704d6845c7d97a50aef5c2"
+    },
+    {
+      "source": "packages/core/agent/lib/index.js",
+      "file": "upstream/services/agent.mjs",
+      "sha256": "fa1d790de853eb855b384a18e62b9c38df7a366344bd7bd627fe7fa68dbb5bbe"
+    },
+    {
+      "source": "packages/jobs/jobs/lib/index.js",
+      "file": "upstream/services/jobs.mjs",
+      "sha256": "0f3ace9b8bce743b4347a39b1097415cd0af4ebd8766e98cc3495b9ad4adbe7d"
+    },
+    {
+      "source": "packages/jobs/jobs-local/lib/index.js",
+      "file": "upstream/services/jobs-local.mjs",
+      "sha256": "f33b7efd848cc515907d28e5e7ea10fd78aa74636bcaa3a6695f4a17cab650d9"
+    },
+    {
+      "source": "packages/fs/fs/lib/index.js",
+      "file": "upstream/services/fs.mjs",
+      "sha256": "f0a026c44d8025880dc4dc357522fff10c1194f2df28f46838204da16aec35dd"
+    },
+    {
+      "source": "packages/shell/shell/lib/index.js",
+      "file": "upstream/services/shell.mjs",
+      "sha256": "2b521409904273bef9beb8a9a6aeb46e824775f25d8649d1de335410b8cd175b"
+    },
+    {
+      "source": "packages/sandbox/sandbox/lib/index.js",
+      "file": "upstream/services/sandbox.mjs",
+      "sha256": "f1dfe4d0a31d6ba3a5d353235df1e133faa35fdeb74e8241c9821154f1a0533d"
+    },
+    {
+      "source": "packages/attachment/attachment/lib/index.js",
+      "file": "upstream/services/attachment.mjs",
+      "sha256": "9cd6c01a6cca9431f789be334afdfe4f5cf647224bb394cc0215056796520f58"
+    },
+    {
+      "source": "packages/lsp/lsp/lib/index.js",
+      "file": "upstream/services/lsp.mjs",
+      "sha256": "0f0f80159b927cb2eaf09cd11f6987a59cd2c830be7599b82de805a092097e5a"
+    },
+    {
+      "source": "packages/util/timeout/lib/index.js",
+      "file": "upstream/services/timeout.mjs",
+      "sha256": "744fdb4f79c8d513c6d4014a018949cfb2f02f4dde4621167302c5467c3994ec"
+    },
+    {
+      "source": "packages/util/output-retention/lib/index.js",
+      "file": "upstream/services/output-retention.mjs",
+      "sha256": "aa75d6431ebaf952344509be490c1d96fdfd0df1a603eab8bd5846bcfe58e443"
+    },
+    {
+      "source": "packages/subprocess/subprocess/lib/index.js",
+      "file": "upstream/services/subprocess.mjs",
+      "sha256": "0ea9e95a73639f9e69b48aa48f373f34881adffa2ee2ac2acd4702728da9592b"
+    },
+    {
+      "source": "packages/util/http-proxy/lib/index.js",
+      "file": "upstream/services/http-proxy.mjs",
+      "sha256": "5310861bc89788ea24be82a3b323e34cbd42b9e6214e2a179b2e6f92a8758cd5"
+    },
+    {
+      "source": "packages/fs/tool-fs/lib/index.js",
+      "file": "tests/fixtures/harness-fs.mjs",
+      "sha256": "ff71d503f623d57152b0d41c43beeb5531c3fe753eb1ddb59f598d918607cdc8"
+    },
+    {
+      "source": "packages/shell/tool-bash/lib/index.js",
+      "file": "tests/fixtures/harness-bash.mjs",
+      "sha256": "c100f2961cd1d8abbc2c24952725a754354c8db122dcd76196d9b4cb74a4cfd0"
+    },
+    {
+      "source": "packages/jobs/tool-jobs/lib/index.js",
+      "file": "tests/fixtures/harness-jobs.mjs",
+      "sha256": "0d5ae83a667f4b80cb7e431ad353de38fda338746ebe09ed73ac0a4e1c6ffa96"
+    },
+    {
+      "source": "packages/lsp/tool-lsp/lib/index.js",
+      "file": "tests/fixtures/harness-lsp.mjs",
+      "sha256": "4a13a37d5acfdd62dd06eab57eeb871b617335743127c2a58468739c34e1837f"
+    },
+    {
+      "source": "packages/ptc-runtime/ptc-runtime/lib/index.js",
+      "file": "upstream/services/ptc-runtime.mjs",
+      "sha256": "a4c4c2f87e2708c8b19b6e3faf5a0383968984612424a525ae36ce24ebda0cff"
+    },
+    {
+      "source": "apps/web/tests/fixtures/plugins/fixture-live-client/client.js",
+      "file": "tests/fixtures/client/live-client.mjs",
+      "sha256": "46551c11583347a5a795d74b70e7d41564f9c50577849803c727f4119120554c"
     }
   ]
 }

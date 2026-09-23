@@ -73,3 +73,22 @@ The tests retain unchanged compiled production `dsh-tool-ask-user` and
 covered by the same Harness MIT notice and source/checksum record. Test-only
 module resolution points their imports at the compatibility services and the
 real validators; the fixture source itself is not rewritten.
+
+The same pinned MIT source now supplies the unmodified filesystem, shell,
+agent, background-job, system-prompt, scope, sandbox, attachment, LSP, timeout,
+output-retention and PTC service definitions and pure registries under
+`compat/upstream/services/`. They are imported only by the isolated compatibility
+runtime. No upstream application, telemetry, credential store, or provider
+bootstrap is mounted. The subprocess definition references the upstream HTTP
+proxy utility; importing that utility does not activate proxy settings.
+Unchanged compiled filesystem, bash, jobs, LSP and client fixtures are recorded
+in `compat/upstream.json` and share its MIT license.
+
+`vendor/diff.mjs` bundles jsdiff 9.0.0 (BSD-3-Clause), used by unchanged file-tool
+renderers. Its notice is `vendor/DIFF-LICENSE`.
+
+`vendor/client-react.mjs` bundles React 18.3.1 and react-reconciler 0.29.2 with
+one shared React instance. Their MIT notices are `vendor/REACT-LICENSE` and
+`vendor/REACT-RECONCILER-LICENSE`; included scheduler 0.23.2, loose-envify 1.4.0
+and js-tokens 4.0.0 notices are in the corresponding uppercase vendor license
+files. These packages execute in the isolated client guest, not in the browser.

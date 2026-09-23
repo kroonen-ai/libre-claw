@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from libre_claw.core.agent import AgentError, AgentEvent
+from libre_claw.core.cordis_bindings import provider_stream
+from libre_claw.core.cordis_engine import CordisEngine
 from libre_claw.core.session import ChatMessage, ContentBlock, Session, text_block
 from libre_claw.providers.base import Done, LLMProvider, ProviderError, TextDelta, Usage, combine_usage
 
@@ -88,6 +91,7 @@ class GoalRunner:
         max_turns: int = 20,
         judge_temperature: float = 0.0,
         judge_max_tokens: int = 1024,
+        engine: CordisEngine | None = None,
     ) -> None:
         if max_turns < 1:
             raise ValueError("max_turns must be >= 1")
@@ -98,8 +102,18 @@ class GoalRunner:
         self.max_turns = max_turns
         self.judge_temperature = judge_temperature
         self.judge_max_tokens = judge_max_tokens
+        self.engine = engine if engine is not None else getattr(agent, "engine", None)
 
     async def run(self) -> AsyncIterator[GoalEvent]:
+        source = (
+            self.engine.stream("workflows", "run", handler=self._run_local)
+            if self.engine is not None else self._run_local()
+        )
+        async with aclosing(source):
+            async for event in source:
+                yield event
+
+    async def _run_local(self) -> AsyncIterator[GoalEvent]:
         prompt = _initial_goal_prompt(self.goal, self.max_turns)
         last_decision: JudgeDecision | None = None
 
@@ -142,29 +156,31 @@ class GoalRunner:
         prompt = _judge_prompt(self.goal, turn, self.max_turns, self.session)
         messages = [ChatMessage(role="user", content=[text_block(prompt)])]
 
-        async for event in self.judge_provider.complete(
+        async with provider_stream(
+            self.judge_provider, engine=self.engine,
             messages=messages,
             tools=None,
             system=JUDGE_SYSTEM_PROMPT,
             stream=True,
             temperature=self.judge_temperature,
             max_tokens=self.judge_max_tokens,
-        ):
-            if isinstance(event, TextDelta):
-                chunks.append(event.text)
-            elif isinstance(event, Done):
-                usage = combine_usage(usage, event.usage)
-            elif isinstance(event, ProviderError):
-                return (
-                    JudgeDecision(
-                        done=False,
-                        confidence=0.0,
-                        reason=f"Judge provider error: {event.message}",
-                        next_prompt="Inspect the current state, continue the goal, and verify your work.",
-                        raw_response=event.message,
-                    ),
-                    usage,
-                )
+        ) as stream:
+            async for event in stream:
+                if isinstance(event, TextDelta):
+                    chunks.append(event.text)
+                elif isinstance(event, Done):
+                    usage = combine_usage(usage, event.usage)
+                elif isinstance(event, ProviderError):
+                    return (
+                        JudgeDecision(
+                            done=False,
+                            confidence=0.0,
+                            reason=f"Judge provider error: {event.message}",
+                            next_prompt="Inspect the current state, continue the goal, and verify your work.",
+                            raw_response=event.message,
+                        ),
+                        usage,
+                    )
 
         raw = "".join(chunks).strip()
         return parse_judge_decision(raw), usage

@@ -7,6 +7,7 @@ import asyncio
 import json
 import shlex
 from collections.abc import Mapping, Sequence
+from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,10 @@ from libre_claw.core.memory import (
     summarize_session_for_memory,
 )
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
+from libre_claw.core.cordis import CordisManager
+from libre_claw.core.cordis_bindings import AUTOMATION_METHODS, MEMORY_METHODS, RUN_METHODS, BoundStore
+from libre_claw.core.cordis_engine import CordisEngineError
+from libre_claw.core.cordis_engine_plugins import engine_for
 from libre_claw.core.runs import RunRecord, RunStore, settle_finalization
 from libre_claw.core.session import UserAttachment, estimate_context_tokens, session_to_payload, session_from_payload
 from libre_claw.core.agent import AgentSubagentUpdate
@@ -60,7 +65,7 @@ from libre_claw.providers import (
 )
 from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
-from libre_claw.tools_builtin import create_builtin_registry
+from libre_claw.tools_builtin import bind_cordis_manager, create_builtin_registry
 
 
 @dataclass(frozen=True)
@@ -153,10 +158,22 @@ class TelegramBridge:
         self.config = config
         self.memory_store = memory_store or MemoryStore()
         self.daemon_client = daemon_client
+        self.engine = engine_for(lambda: self.config) if daemon_client is None else None
+        self.cordis_manager = (
+            CordisManager(config=config, tool_timeout=config.cordis.tool_timeout, persistent=True)
+            if daemon_client is None else None
+        )
+        self._service_task: asyncio.Task[None] | None = None
         self.skill_store = SkillStore(config.general.working_directory, skills_config=config.skills)
         self.soul_store = SoulStore(config.general.working_directory)
         self.automation_store = AutomationStore(config.automations.root)
         self.run_store = RunStore()
+        self._recovery_run_store = self.run_store
+        if self.engine is not None:
+            self.memory_store = BoundStore(self.memory_store, lambda: self.engine, MEMORY_METHODS)
+            self.automation_store = BoundStore(self.automation_store, lambda: self.engine, AUTOMATION_METHODS)
+            self.run_store = BoundStore(self.run_store, lambda: self.engine, RUN_METHODS)
+            self.cordis_manager.engine = lambda: self.engine
         self.petdex_client = PetdexClient(config.petdex)
         self._states: dict[int, TelegramChatState] = {}
         self._memory_facts: list[str] = []
@@ -165,6 +182,42 @@ class TelegramBridge:
     async def initialize(self) -> None:
         await self.memory_store.initialize()
         self._memory_facts = await self.memory_store.list_always_injected_memories()
+
+    def start_background_services(self) -> None:
+        if self.engine is not None and self._service_task is None:
+            self._service_task = asyncio.create_task(self._service_loop(), name="telegram-cordis-services")
+
+    async def _service_loop(self) -> None:
+        while True:
+            try:
+                await self.reconcile_services()
+            except (ValueError, OSError, RuntimeError):
+                # Revoked/failed services stay stopped. The next user operation
+                # reports their error instead of silently executing directly.
+                pass
+            await asyncio.sleep(5)
+
+    async def reconcile_services(self) -> None:
+        if self.engine is not None and self.engine.running:
+            await self.engine.verify_plugins()
+        if self.cordis_manager is not None:
+            await self.cordis_manager.reconcile_workers(self.config.general.working_directory)
+
+    async def aclose(self) -> None:
+        tasks = [state.task for state in self._states.values()
+                 if state.task is not None and state.task is not asyncio.current_task()]
+        if self._service_task is not None:
+            tasks.append(self._service_task)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            if self.cordis_manager is not None:
+                await self.cordis_manager.aclose()
+        finally:
+            if self.engine is not None:
+                await self.engine.aclose()
 
     async def _send_petdex_state(
         self,
@@ -207,6 +260,7 @@ class TelegramBridge:
                 yield event
             return
 
+        await self.reconcile_services()
         state = self.state_for(chat_id)
         state.runtime_config = await self._with_openrouter_model_limits(self.runtime_config_for(chat_id))
         runtime = state.runtime_config
@@ -221,7 +275,8 @@ class TelegramBridge:
         await self.run_store.append_event(state.run_id, "user_message", {"content": text})
         try:
             from libre_claw.core.git_review import create_checkpoint
-            state.session.checkpoint["last_turn_tree"] = await create_checkpoint(runtime.general.working_directory, name=state.run_id)
+            state.session.checkpoint["last_turn_tree"] = await self.engine.call("workflows", "plan", handler=lambda: create_checkpoint(
+                runtime.general.working_directory, name=state.run_id))
         except (ValueError, OSError):
             state.session.checkpoint.pop("last_turn_tree", None)
         try:
@@ -241,95 +296,96 @@ class TelegramBridge:
         agent.checkpoint_callback = lambda session: self.run_store.save_session(state.run_id, session)
         state.subagents = agent.subagents
         try:
-            async for event in agent.run(text, attachments=attachments):
-                if isinstance(event, AgentSubagentUpdate):
-                    await self.run_store.append_event(state.run_id, "subagent_update", event.snapshot)
-                    yield TelegramToolNotice(f"Subagent {event.snapshot['id']}: {event.snapshot['status']}", tool_name="subagent")
-                    continue
-                if isinstance(event, AgentTextDelta):
-                    yield TelegramText(event.text)
-                    continue
-                if isinstance(event, AgentToolCall):
-                    await self._send_petdex_state(
-                        "command" if event.call.name == "bash" else "working",
-                        message=f"Calling {event.call.name}",
-                        details=petdex_tool_details(event.call.name, event.call.arguments),
-                    )
-                    await self._archive_event(chat_id, "tool_call", {"name": event.call.name, "arguments": dict(event.call.arguments)})
-                    yield TelegramToolNotice(
-                        _tool_call_notice(event.call.name, dict(event.call.arguments)),
-                        tool_name=event.call.name,
-                    )
-                    continue
-                if isinstance(event, AgentPermissionRequest):
-                    prompt_id = f"{chat_id}:{event.call.id}"
-                    state.pending_permissions[prompt_id] = event
-                    await self._send_petdex_state(
-                        "waving",
-                        message=f"Approval needed: {event.call.name}",
-                        details=petdex_tool_details(event.call.name, event.call.arguments),
-                    )
-                    await self._archive_event(chat_id, "permission_request", {"name": event.call.name, "arguments": dict(event.call.arguments)})
-                    yield TelegramPermissionPrompt(
-                        prompt_id=prompt_id,
-                        call=event.call,
-                        text=_permission_notice(event.call.name, dict(event.call.arguments)),
-                    )
-                    continue
-                if isinstance(event, AgentToolResult):
-                    await self._send_petdex_state(
-                        "error" if event.result.is_error else "success",
-                        message=f"{event.call.name} {'failed' if event.result.is_error else 'finished'}",
-                        details={"tool": event.call.name, "is_error": event.result.is_error},
-                    )
-                    await self._archive_event(
-                        chat_id,
-                        "tool_result",
-                        {
-                            "name": event.call.name,
-                            "is_error": event.result.is_error,
-                            "content": event.result.as_text(),
-                            "metadata": dict(event.result.metadata),
-                        },
-                    )
-                    yield TelegramToolNotice(
-                        _tool_result_notice(
-                            event.call.name,
+            async with aclosing(agent.run(text, attachments=attachments)) as stream:
+                async for event in stream:
+                    if isinstance(event, AgentSubagentUpdate):
+                        await self.run_store.append_event(state.run_id, "subagent_update", event.snapshot)
+                        yield TelegramToolNotice(f"Subagent {event.snapshot['id']}: {event.snapshot['status']}", tool_name="subagent")
+                        continue
+                    if isinstance(event, AgentTextDelta):
+                        yield TelegramText(event.text)
+                        continue
+                    if isinstance(event, AgentToolCall):
+                        await self._send_petdex_state(
+                            "command" if event.call.name == "bash" else "working",
+                            message=f"Calling {event.call.name}",
+                            details=petdex_tool_details(event.call.name, event.call.arguments),
+                        )
+                        await self._archive_event(chat_id, "tool_call", {"name": event.call.name, "arguments": dict(event.call.arguments)})
+                        yield TelegramToolNotice(
+                            _tool_call_notice(event.call.name, dict(event.call.arguments)),
+                            tool_name=event.call.name,
+                        )
+                        continue
+                    if isinstance(event, AgentPermissionRequest):
+                        prompt_id = f"{chat_id}:{event.call.id}"
+                        state.pending_permissions[prompt_id] = event
+                        await self._send_petdex_state(
+                            "waving",
+                            message=f"Approval needed: {event.call.name}",
+                            details=petdex_tool_details(event.call.name, event.call.arguments),
+                        )
+                        await self._archive_event(chat_id, "permission_request", {"name": event.call.name, "arguments": dict(event.call.arguments)})
+                        yield TelegramPermissionPrompt(
+                            prompt_id=prompt_id,
+                            call=event.call,
+                            text=_permission_notice(event.call.name, dict(event.call.arguments)),
+                        )
+                        continue
+                    if isinstance(event, AgentToolResult):
+                        await self._send_petdex_state(
+                            "error" if event.result.is_error else "success",
+                            message=f"{event.call.name} {'failed' if event.result.is_error else 'finished'}",
+                            details={"tool": event.call.name, "is_error": event.result.is_error},
+                        )
+                        await self._archive_event(
+                            chat_id,
+                            "tool_result",
+                            {
+                                "name": event.call.name,
+                                "is_error": event.result.is_error,
+                                "content": event.result.as_text(),
+                                "metadata": dict(event.result.metadata),
+                            },
+                        )
+                        yield TelegramToolNotice(
+                            _tool_result_notice(
+                                event.call.name,
+                                is_error=event.result.is_error,
+                                content=event.result.as_text(),
+                                metadata=dict(event.result.metadata),
+                            ),
+                            tool_name=event.call.name,
                             is_error=event.result.is_error,
-                            content=event.result.as_text(),
-                            metadata=dict(event.result.metadata),
-                        ),
-                        tool_name=event.call.name,
-                        is_error=event.result.is_error,
-                        is_result=True,
-                    )
-                    continue
-                if isinstance(event, AgentDone):
-                    await self._send_petdex_state("success", message="Telegram run complete", details={"surface": "telegram", "chat_id": chat_id})
-                    if event.usage is not None:
-                        state.usage = combine_usage(state.usage, event.usage) or state.usage
-                        state.last_usage = event.usage
-                    assistant_text = _latest_assistant_text(state.session)
-                    if assistant_text:
-                        await self._archive_event(chat_id, "assistant_message", {"content": assistant_text})
-                        await self._extract_turn_memory(chat_id, text, assistant_text)
-                    yield TelegramDone(event.usage)
-                    continue
-                if isinstance(event, AgentError):
-                    final_state = "failed"
-                    await self._send_petdex_state("error", message=event.message, details={"surface": "telegram", "chat_id": chat_id})
-                    await self._archive_event(chat_id, "error", {"message": event.message})
-                    yield TelegramError(event.message)
-                    return
-                if isinstance(event, AgentFallback):
-                    await self._send_petdex_state(
-                        "thinking",
-                        message=f"Fallback: {event.provider_label}",
-                        details={"provider": event.provider_label, "reason": event.reason},
-                    )
-                    await self._archive_event(chat_id, "provider_fallback", {"provider": event.provider_label, "reason": event.reason})
-                    yield TelegramToolNotice(f"🔁 Provider fallback: {event.provider_label}\n{_compact_text(event.reason)}")
-                    continue
+                            is_result=True,
+                        )
+                        continue
+                    if isinstance(event, AgentDone):
+                        await self._send_petdex_state("success", message="Telegram run complete", details={"surface": "telegram", "chat_id": chat_id})
+                        if event.usage is not None:
+                            state.usage = combine_usage(state.usage, event.usage) or state.usage
+                            state.last_usage = event.usage
+                        assistant_text = _latest_assistant_text(state.session)
+                        if assistant_text:
+                            await self._archive_event(chat_id, "assistant_message", {"content": assistant_text})
+                            await self._extract_turn_memory(chat_id, text, assistant_text)
+                        yield TelegramDone(event.usage)
+                        continue
+                    if isinstance(event, AgentError):
+                        final_state = "failed"
+                        await self._send_petdex_state("error", message=event.message, details={"surface": "telegram", "chat_id": chat_id})
+                        await self._archive_event(chat_id, "error", {"message": event.message})
+                        yield TelegramError(event.message)
+                        return
+                    if isinstance(event, AgentFallback):
+                        await self._send_petdex_state(
+                            "thinking",
+                            message=f"Fallback: {event.provider_label}",
+                            details={"provider": event.provider_label, "reason": event.reason},
+                        )
+                        await self._archive_event(chat_id, "provider_fallback", {"provider": event.provider_label, "reason": event.reason})
+                        yield TelegramToolNotice(f"🔁 Provider fallback: {event.provider_label}\n{_compact_text(event.reason)}")
+                        continue
         except asyncio.CancelledError:
             final_state = "cancelled"
             raise
@@ -340,9 +396,18 @@ class TelegramBridge:
             owner = asyncio.current_task()
 
             async def finalize():
-                await self.run_store.save_session(state.run_id, state.session)
                 effective_state = "cancelled" if owner is not None and owner.cancelling() else final_state
-                return await self.run_store.finish_turn(state.run_id, effective_state, summary=_latest_assistant_text(state.session))
+                try:
+                    await self.run_store.save_session(state.run_id, state.session)
+                    return await self.run_store.finish_turn(state.run_id, effective_state, summary=_latest_assistant_text(state.session))
+                except CordisEngineError as exc:
+                    await self._recovery_run_store.save_session(state.run_id, state.session)
+                    await self._recovery_run_store.append_event(state.run_id, "engine_unavailable", {"message": str(exc)})
+                    await self._recovery_run_store.finish_turn(
+                        state.run_id, "cancelled" if effective_state == "cancelled" else "failed",
+                        summary=_latest_assistant_text(state.session), drain_queue=False,
+                    )
+                    return None
 
             queued, cancelled = await settle_finalization(asyncio.create_task(finalize()))
             if cancelled:
@@ -741,10 +806,15 @@ class TelegramBridge:
         soul_store = SoulStore(config.general.working_directory)
         provider = create_provider(config)
         fallbacks = create_fallback_providers(config)
+        registry = create_builtin_registry(config, memory_store=self.memory_store)
+        if self.cordis_manager is not None:
+            self.cordis_manager.config = config
+            bind_cordis_manager(registry, self.cordis_manager)
         return Agent(
+            engine=self.engine,
             session=state.session,
             provider=provider,
-            tool_registry=create_builtin_registry(config, memory_store=self.memory_store),
+            tool_registry=registry,
             permission_manager=PermissionManager(config.permissions),
             system_prompt=config.agent.system_prompt,
             max_tool_calls_per_turn=config.agent.max_tool_calls_per_turn,
@@ -769,7 +839,12 @@ class TelegramBridge:
         if provider != "openrouter":
             return config
         try:
-            limits = await detect_openrouter_model_limits(config, model=config.general.default_model)
+            if self.engine is None:
+                return config
+            limits = await self.engine.call("providers", "models", handler=lambda: detect_openrouter_model_limits(
+                config, model=config.general.default_model))
+        except CordisEngineError:
+            raise
         except Exception:
             return config
         return apply_openrouter_model_limits(config, limits, model=config.general.default_model)
@@ -863,7 +938,7 @@ class TelegramBridge:
             return
 
     async def _extract_turn_memory(self, chat_id: int, user_message: str, assistant_text: str) -> None:
-        if not self._memory_enabled() or not assistant_text.strip():
+        if self.daemon_client is not None or not self._memory_enabled() or not assistant_text.strip():
             return
         runtime = self.runtime_config_for(chat_id)
         source_id = f"{self.state_for(chat_id).archive_id}:turn:{uuid4().hex}"
@@ -887,6 +962,7 @@ class TelegramBridge:
             existing = [item.text for item in await self.memory_store.search_memory_items(user_message, project_root=runtime.general.working_directory, limit=8)]
             extracted = await extract_memories_with_provider(
                 provider,
+                engine=self.engine,
                 user_message=user_message,
                 assistant_text=assistant_text,
                 existing_memories=existing,

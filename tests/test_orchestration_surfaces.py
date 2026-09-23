@@ -280,7 +280,7 @@ async def test_headless_setup_errors_are_useful_and_always_close_resources(tmp_p
         raise PermissionError(f"{stage} permission unavailable")
 
     monkeypatch.setattr("libre_claw.headless.CordisManager", Manager)
-    monkeypatch.setattr("libre_claw.headless.CordisEngine", Engine)
+    monkeypatch.setattr("libre_claw.headless.engine_for", lambda config: Engine())
     monkeypatch.setattr("libre_claw.headless.bind_cordis_manager", lambda *args: None)
     monkeypatch.setattr("libre_claw.headless.prepare_orchestration", lambda config, *args, **kwargs: config)
     monkeypatch.setattr("libre_claw.headless.create_fallback_providers", lambda *args: ())

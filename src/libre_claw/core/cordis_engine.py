@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from libre_claw.core.cordis_security import CordisSecurityError, prepare_cordis_process
+from libre_claw.core.runs import settle_finalization
 
 
 T = TypeVar("T")
@@ -31,6 +32,7 @@ MAX_ENGINE_OPERATIONS = 128
 _COMPONENT_IDS = frozenset({"agent", "providers", "tools", "sessions", "memory", "workflows"})
 _RUNTIME = Path(__file__).resolve().parents[1] / "cordis_runtime" / "engine.mjs"
 _CONTROL_TIMEOUT = 15
+_DISPATCH_TIMEOUT = 15
 
 
 class CordisEngineError(RuntimeError):
@@ -49,6 +51,7 @@ class _Operation:
     sequence: int = 0
     value: Any = None
     error: BaseException | None = None
+    dispatched: asyncio.Future[None] | None = None
 
 
 class CordisEngine:
@@ -68,9 +71,13 @@ class CordisEngine:
         *,
         node_executable: str = "node",
         components: Mapping[str, bool] | None = None,
+        plugin_loader: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> None:
         self.node_executable = node_executable
         self._components = dict(components or {})
+        self._plugin_loader = plugin_loader
+        self._plugin_specs: list[dict[str, Any]] = []
+        self._component_ids = set(_COMPONENT_IDS)
         self._process: asyncio.subprocess.Process | None = None
         self._temporary: tempfile.TemporaryDirectory[str] | None = None
         self._reader_task: asyncio.Task[None] | None = None
@@ -97,7 +104,7 @@ class CordisEngine:
 
     def is_enabled(self, service: str) -> bool:
         """Return the last accepted enabled flag without starting a process."""
-        return service in _COMPONENT_IDS and self._components.get(service, True) is True
+        return service in self._component_ids and self._components.get(service, True) is True
 
     async def __aenter__(self) -> CordisEngine:
         await self.start()
@@ -114,16 +121,22 @@ class CordisEngine:
                 raise self._failure or CordisEngineError("The Cordis engine is closed.")
             self._state = "starting"
             try:
+                if self._plugin_loader is not None:
+                    self._plugin_specs = await asyncio.to_thread(self._plugin_loader)
+                    self._component_ids.update(row["id"] for spec in self._plugin_specs for row in spec["services"])
                 self._temporary = tempfile.TemporaryDirectory(prefix="libre-claw-engine-")
-                prepared = await asyncio.to_thread(
+                prepared, cancelled = await settle_finalization(asyncio.create_task(asyncio.to_thread(
                     prepare_cordis_process,
                     self.node_executable,
                     _RUNTIME,
                     _RUNTIME.parent,
                     Path(self._temporary.name),
-                )
+                    read_paths=tuple(Path(spec["root"]) for spec in self._plugin_specs),
+                )))
+                if cancelled:
+                    raise asyncio.CancelledError
                 self.isolation = prepared.isolation
-                self._process = await asyncio.create_subprocess_exec(
+                self._process, cancelled = await settle_finalization(asyncio.create_task(asyncio.create_subprocess_exec(
                     *prepared.command,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
@@ -132,14 +145,17 @@ class CordisEngine:
                     cwd=prepared.cwd,
                     limit=MAX_ENGINE_FRAME + 1,
                     close_fds=True,
-                )
+                )))
+                if cancelled:
+                    raise asyncio.CancelledError
                 self._reader_task = asyncio.create_task(self._read_frames(), name="cordis-engine-reader")
                 self._stderr_task = asyncio.create_task(self._drain_stderr(), name="cordis-engine-stderr")
-                await self._control("initialize", components=self._components)
+                await self._control("initialize", components=self._components,
+                                    **({"plugins": self._plugin_specs} if self._plugin_specs else {}))
                 self._state = "running"
             except BaseException as exc:
                 self._fail("The offline Cordis engine could not start.")
-                await self._stop_process()
+                await settle_finalization(asyncio.create_task(self._stop_process()))
                 if isinstance(exc, asyncio.CancelledError):
                     raise
                 if isinstance(exc, CordisSecurityError):
@@ -198,15 +214,26 @@ class CordisEngine:
 
     async def _invoke(self, service: str, method: str, mode: str, handler: Callable[[], Any]) -> tuple[str, _Operation]:
         await self.start()
+        await self.verify_plugins()
         if not callable(handler):
             raise TypeError("An engine operation requires an explicit handler.")
         if len(self._operations) >= MAX_ENGINE_OPERATIONS:
             raise CordisEngineError("Too many active engine operations.")
         operation_id = uuid.uuid4().hex
         operation = _Operation(service, method, mode, handler)
+        operation.dispatched = asyncio.get_running_loop().create_future()
         self._operations[operation_id] = operation
         try:
-            await self._send({"type": "invoke", "id": operation_id, "service": service, "method": method, "mode": mode})
+            try:
+                # Node's own timer cannot interrupt a synchronous extension
+                # loop. Bound both the pipe write and admission in Python,
+                # since a blocked Node process may also stop draining stdin.
+                async with asyncio.timeout(_DISPATCH_TIMEOUT):
+                    await self._send({"type": "invoke", "id": operation_id, "service": service, "method": method, "mode": mode})
+                    await asyncio.shield(operation.dispatched)
+            except TimeoutError:
+                self._fail("The Cordis engine did not dispatch the operation within its time limit.")
+                raise self._failure from None
         except BaseException:
             # Cancellation can arrive after write() but before drain(). Revoke
             # the remote operation too, even when its dispatch reply is pending.
@@ -214,9 +241,26 @@ class CordisEngine:
             raise
         return operation_id, operation
 
+    async def verify_plugins(self) -> None:
+        """Revocation or changed code/config invalidates active core extensions."""
+        if self._plugin_loader is None:
+            return
+        try:
+            current = await asyncio.to_thread(self._plugin_loader)
+            # New grants wait for an explicit restart. Only a changed/revoked
+            # implementation already loaded into this graph invalidates it.
+            current_by_id = {spec["plugin_id"]: spec for spec in current}
+            if all(current_by_id.get(spec["plugin_id"]) == spec for spec in self._plugin_specs):
+                return
+        except Exception:
+            pass
+        self._fail("Core plugin code, configuration, or grants changed. Restart the engine after review.")
+        raise self._failure
+
     async def _run_handler(self, operation_id: str, operation: _Operation) -> None:
         iterator: AsyncIterator[Any] | None = None
         try:
+            await self.verify_plugins()
             result = operation.handler()
             if inspect.isawaitable(result):
                 result = await result
@@ -225,6 +269,7 @@ class CordisEngine:
             else:
                 iterator = aiter(result)
                 async for item in iterator:
+                    await self.verify_plugins()
                     operation.value = item
                     operation.acknowledgement = asyncio.get_running_loop().create_future()
                     await self._send({"type": "host.item", "id": operation_id, "sequence": operation.sequence})
@@ -335,6 +380,8 @@ class CordisEngine:
             if operation.task is not None or (frame.get("service"), frame.get("method")) != (operation.service, operation.method):
                 raise CordisEngineError("The engine requested an unauthorized callback.")
             operation.task = asyncio.create_task(self._run_handler(operation_id, operation), name=f"cordis-{operation.service}-{operation.method}")
+            if operation.dispatched is not None and not operation.dispatched.done():
+                operation.dispatched.set_result(None)
         elif kind == "host.ack":
             acknowledgement = operation.acknowledgement
             if frame.get("sequence") != operation.sequence or acknowledgement is None or acknowledgement.done():
@@ -346,6 +393,8 @@ class CordisEngine:
         elif kind == "item":
             operation.queue.put_nowait(("item", frame.get("sequence")))
         elif kind == "done":
+            if operation.dispatched is not None and not operation.dispatched.done():
+                operation.dispatched.set_result(None)
             if frame.get("failed") and operation.error is None:
                 operation.error = CordisEngineError(frame.get("error", "The engine operation failed."))
             operation.queue.put_nowait(("done", None))
@@ -370,6 +419,8 @@ class CordisEngine:
             if not future.done():
                 future.set_exception(CordisEngineError(message))
         for operation in self._operations.values():
+            if operation.dispatched is not None and not operation.dispatched.done():
+                operation.dispatched.set_result(None)
             operation.error = CordisEngineError(message)
             if operation.task is not None:
                 operation.task.cancel()

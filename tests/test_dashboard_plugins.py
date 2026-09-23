@@ -38,6 +38,11 @@ const elements = Object.fromEntries(['refreshPlugins', 'addPlugin', 'pluginSearc
   'pluginsIncludedSection', 'pluginsInventory', 'pluginsHeader', 'pluginsScopeBlock'].map(id => [id, new Element()]));
 const $ = id => elements[id] || Object.values(elements).flatMap(root => root.querySelectorAll()).find(node => node.id === id);
 const document = {createElement: tag => new Element(tag), activeElement: null};
+let bindUI = (_service, target, event, handler) => {
+  target.addEventListener(event, handler);
+  return () => { if (target.listeners[event] === handler) delete target.listeners[event]; };
+};
+const releaseUI = root => { for (const node of [root, ...root.querySelectorAll('*')]) node.listeners = {}; };
 const text = node => [node.textContent, ...node.children.map(text)].filter(Boolean).join(' ');
 const buttons = () => $('pluginsList').querySelectorAll('button').filter(node => node.dataset.pluginAction === 'toggle');
 const pageButton = name => $('pluginPage').querySelectorAll('button').find(node => node.textContent === name);
@@ -73,10 +78,12 @@ const request = async (path, options) => {
     if (patchError) throw new Error(patchError);
     if (holdPatch) await new Promise(resolve => { completePatch = resolve; });
     const id = decodeURIComponent(path.slice('/plugins/'.length));
-    const enabled = JSON.parse(options.body).enabled;
+    const change = JSON.parse(options.body), enabled = change.enabled;
     const plugin = catalog.plugins.find(item => item.id === id);
     plugin.enabled = enabled;
     plugin.grants = {allow_network: false, read_paths: [], write_paths: []};
+    if (change.allow_engine === true) plugin.grants.allow_engine = true;
+    if (change.allow_client === true) plugin.grants.allow_client = true;
     return {plugin};
   }
   if (method === 'DELETE') { catalog.plugins = []; return {removed: true}; }
@@ -642,4 +649,45 @@ def test_enable_now_never_disables_a_plugin_enabled_since_installation(tmp_path)
   assert.equal(catalog.plugins[0].enabled, true);
   assert.equal(pluginView, 'detail');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+""")
+
+
+def test_core_service_grant_requires_a_distinct_explicit_action(tmp_path):
+    run_plugins(tmp_path, r"""
+(async()=>{
+  catalog.plugins=[sample({requires_engine_access:true,engine_services:[{id:'agent',title:'Agent'},{id:'tools'}]})];
+  await loadPlugins();await openPluginDetail('sample');
+  assert.match(text($('pluginPage')), /Core services: Agent, tools/);
+  assert.match(text($('pluginPage')), /never prompts or provider keys/);
+  assert.equal(patchCalls().length,0);
+  await togglePlugin('sample');
+  assert.deepEqual(JSON.parse(patchCalls()[0].options.body),{enabled:true});
+  assert.ok(pageButton('Enable core services'));
+  await enablePluginEngine('sample');
+  assert.deepEqual(JSON.parse(patchCalls()[1].options.body),{enabled:true,allow_engine:true});
+  assert.equal(pageButton('Enable core services'),undefined);
+  assert.match($('pluginsStatus').textContent,/restart the runtime/);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")
+
+
+def test_client_interface_grant_is_explicit_and_respects_dirty_configuration(tmp_path):
+    run_plugins(tmp_path, r"""
+(async()=>{
+  catalog.plugins=[sample({requires_client_access:true,client:{entry:'client.mjs',package_name:'@fixture/counter'}})];
+  await loadPlugins();await openPluginDetail('sample');
+  assert.match(text($('pluginPage')), /Provider keys and conversation history stay private/);
+  assert.ok(pageButton('Enable interface'));
+  assert.equal(patchCalls().length,0);
+  await togglePlugin('sample');
+  assert.deepEqual(JSON.parse(patchCalls()[0].options.body),{enabled:true});
+  assert.ok(pageButton('Enable interface'));
+  pluginConfigDirty=true;await enablePluginClient('sample');
+  assert.equal(patchCalls().length,1);
+  pluginConfigDirty=false;await enablePluginClient('sample');
+  assert.deepEqual(JSON.parse(patchCalls()[1].options.body),{enabled:true,allow_client:true});
+  assert.equal(pageButton('Enable interface'),undefined);
+  assert.ok(pageButton('Open interface'));
+  assert.equal(calls.some(call=>call.path.endsWith('/ui/open')),false);
+})().catch(error=>{console.error(error);process.exitCode=1;});
 """)

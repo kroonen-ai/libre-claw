@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "limits": {"frame_bytes": 1048576, "snapshot_bytes": 524288, "event_bytes": 32768, "nodes": 2048, "depth": 32, "views": 32},
+  "slots": ["shell.overlay", "plugins.row.config"],
+  "tags": ["div", "span", "p", "section", "article", "header", "footer", "nav", "aside", "h1", "h2", "h3", "h4", "h5", "h6", "button", "form", "label", "input", "textarea", "select", "option", "fieldset", "legend", "details", "summary", "ul", "ol", "li", "pre", "code", "strong", "em", "small", "b", "i", "br", "hr", "table", "thead", "tbody", "tr", "th", "td", "dl", "dt", "dd"],
+  "props": ["id", "name", "type", "value", "checked", "disabled", "readOnly", "required", "placeholder", "title", "role", "aria-label", "aria-description", "aria-labelledby", "aria-describedby", "aria-expanded", "aria-checked", "aria-live", "aria-atomic", "aria-required", "min", "max", "step", "minLength", "maxLength", "rows", "cols", "multiple", "selected", "open", "htmlFor", "colSpan", "rowSpan", "style"],
+  "data_attribute_pattern": "^data-[a-z0-9-]{1,48}$",
+  "input_types": ["text", "search", "email", "url", "number", "checkbox", "radio", "password", "button", "submit", "range"],
+  "styles": ["color", "backgroundColor", "fontSize", "fontWeight", "fontStyle", "textAlign", "whiteSpace", "display", "flexDirection", "alignItems", "justifyContent", "gap", "padding", "margin", "borderRadius", "borderWidth", "borderStyle", "borderColor", "width", "height", "maxWidth", "minWidth", "maxHeight", "minHeight", "overflow"],
+  "events": ["click", "input", "change", "submit"]
+}

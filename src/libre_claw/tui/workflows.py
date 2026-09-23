@@ -66,11 +66,17 @@ async def handle_workflow_command(app: Any, command: str, argument: str) -> bool
     if command == "/review" and argument.strip() in {"", "latest", "previous", "next", "close"}:
         return False
     try:
-        async with workflow_state(app).lock:
-            if command == "/worktree":
-                await _worktree(app, argument)
-            else:
-                await _review(app, argument)
+        async def execute() -> None:
+            async with workflow_state(app).lock:
+                if command == "/worktree":
+                    await _worktree(app, argument)
+                else:
+                    await _review(app, argument)
+        engine = getattr(app, "engine", None)
+        if engine is None:
+            await execute()
+        else:
+            await engine.call("workflows", "run", handler=execute)
     except (ValueError, OSError, RuntimeError, TimeoutError) as exc:
         app._append_system(f"Workflow error: {exc}")
         app._workflow_error = str(exc)

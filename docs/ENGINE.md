@@ -10,11 +10,11 @@ delegated agents bind those implementations to the shared engine.
 | Service | Application work |
 | --- | --- |
 | Agent | Turn lifecycle, streaming events, cancellation, and delegated work. |
-| Providers | Model streaming and brokered plugin/native-provider model operations. |
+| Providers | Discovery and streaming, goal judging, extraction, finalizers, and brokered plugin model operations. |
 | Tools | Execution after Libre Claw's normal permission and plan-mode checks. |
-| Sessions | Durable agent checkpoints. |
-| Memory | Context retrieval for the current turn. |
-| Workflows | Dashboard Git review and worktree operations. |
+| Sessions | Run/session storage, event history, checkpoints, and exports. |
+| Memory | Initialization, retrieval, search, writes, deletion, and extraction. |
+| Workflows | Goals, schedules, Git review, and worktree operations across dashboard and terminal. |
 
 Cordis manages service dependencies, activation, dispatch, and disposal. A
 disabled dependency prevents its dependants from activating. Each operation has
@@ -30,12 +30,39 @@ engine operations; it does not silently switch application runs to another
 engine. The Python `Agent` remains independently testable as a service
 implementation without launching an application runtime.
 
+The standalone Telegram bridge owns the same engine and extension lifecycle.
+Daemon-backed clients use the daemon's discovery and execution services. Store
+bindings reject new asynchronous methods until they have an explicit service
+mapping. Health, read-only recovery views, cancellation, plugin revocation, and
+failure-state persistence deliberately remain usable when the engine is down;
+they cannot perform model inference or execute agent tools.
+
+Reviewed extensions can register core dispatch methods or add service nodes
+with dependencies. This requires a separate `allow_engine` workspace grant.
+New registrations load only after an explicit engine restart; changed or
+revoked loaded registrations stop the graph. The extension receives service,
+method, and operation mode, and can approve dispatch or reject it. Application
+payloads and credentials still stay in Python. See
+[core service extensions](CORDIS_ENGINE_EXTENSIONS.md) for the contract.
+
 ## Dashboard and terminal
 
 The browser mounts its first-party features through a separate Cordis graph.
-Its services own API dispatch, event listeners, timers, and disposal. Installed
-third-party JavaScript is never injected into the administrative dashboard;
-plugin settings use validated configuration forms.
+Its services own API dispatch, static and dynamic event listeners, timers,
+animation frames, and disposal. Detached controls lose their effects on
+rerender, and handlers check their owner's active state before local changes.
+Installed third-party JavaScript is never injected into the administrative
+dashboard; plugin settings use validated configuration forms.
+
+Compiled Harness web-client extensions require a separate `allow_client` grant.
+They run in an offline Node guest with real React and Cordis. The browser receives
+only validated inert element trees and opaque event identifiers. Views support
+React state/effects, slots, locale, and package-local chunks. Secret-marked
+configuration and recognized credentials are omitted or redacted; provider keys
+and the parent conversation are not passed to the guest. Remote
+URLs, executable attributes, arbitrary HTML, and active CSS are rejected. Private
+Harness application modules or direct browser-DOM dependencies outside this
+portable client contract fail explicitly.
 
 **Engine** shows the live backend services, dependencies, methods, active work,
 and completed/failed/cancelled operation counts. Restart is rejected while work
@@ -83,15 +110,35 @@ extensions while leaving the first-party application engine available.
 Compiled Cordis functions and Service classes, Harness bundle patches, scoped
 groups, Schemastery configuration, and npm dependency graphs can be imported
 directly. Supported host APIs include tool definitions and hooks, user questions,
-plugin-owned session events/projections, model discovery/streaming, and private
-storage. Unchanged production Harness question and todo plugins are exercised in
-the integration tests.
+plugin-owned session events/projections, model discovery/streaming, private
+storage, system-prompt contributions, scoped filesystem operations, shell,
+jobs, agent delegation, LSP registration, and the PTC runtime. The compatibility
+layer vendors the pinned upstream registries rather than substituting empty
+service facades. Unchanged production Harness plugins exercise the host bridges
+in integration tests.
 
-Compatibility is checked, not assumed. A bundle requiring a service outside
-these APIs fails with its missing dependency. Harness's private React client
-slots, full agent/job APIs, PTC, and its filesystem/shell service contracts are
-not replaced by empty facades. Libre Claw's own filesystem, shell, agents, and
-workflows remain available through the application services and approval system.
+Compatibility is checked, not assumed. A bundle requiring an application-specific
+service outside these APIs fails with its missing dependency. Filesystem and
+shell operations require explicit plugin paths and the task's normal approvals.
+Writes use observed-version guards. Child agents retain scoped ownership and
+budgets. Job processes are terminated and joined on cancellation, revocation,
+or disposal. LSP servers are explicitly configured locally; no language server
+is automatically downloaded or launched from a model-supplied command.
+
+Imported agent drivers create fresh text assignments with explicit provider/model
+routes and bounded child lifetimes. They do not expose arbitrary saved sessions
+or parent histories. Use Libre Claw's task recovery and orchestration profiles
+for saved work and configurable worker budgets. Filesystem reads, process output,
+and directory listings have explicit host limits and return errors/truncation
+metadata rather than claiming an unbounded upstream deployment.
+
+PTC executes TypeScript in a separate process and invokes the plugin's actual
+tool bindings over bounded JSON messages. Timeouts stop even an infinite loop.
+Model-authored programs and shell commands use OS confinement: `sandbox-exec`
+on macOS or `bubblewrap` with user namespaces on Linux. Unsupported confinement
+fails before execution. PTC always denies network access and inherits no host
+environment or credentials. A read-only policy narrows existing write grants.
+
 Publish compiled packages; arbitrary installation scripts and YAML JavaScript
 expressions are not executed. The known `dshHomePath` expression is translated
 into a scoped private-state path.

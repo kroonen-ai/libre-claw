@@ -22,7 +22,8 @@ from libre_claw.core.agent import (
     AgentTextDelta,
 )
 from libre_claw.core.memory import MemoryItem, MemoryStore
-from libre_claw.core.cordis_engine import CordisEngine
+from libre_claw.core.cordis_engine_plugins import engine_for
+from libre_claw.core.cordis_bindings import BoundStore, MEMORY_METHODS
 from libre_claw.core.cordis import CordisManager
 from libre_claw.core.orchestration_setup import (
     attach_orchestration, orchestration_provider_settings, orchestration_registry, prepare_orchestration,
@@ -84,14 +85,14 @@ async def run_headless(
         config = apply_moonshot_model_limits(config)
 
     cordis = CordisManager(config=config, tool_timeout=config.cordis.tool_timeout, persistent=True)
-    engine = CordisEngine()
+    engine = engine_for(lambda: config)
     started = False
     try:
         session = RecordingSession() if trajectory_path is not None else Session()
         if orchestration_plugin:
             config = await asyncio.to_thread(prepare_orchestration, config, cordis, session, selected=orchestration_plugin)
         cordis.config = config
-        store = memory_store or MemoryStore()
+        store = BoundStore(memory_store or MemoryStore(), lambda: engine, MEMORY_METHODS)
         registry = orchestration_registry(tool_registry or create_builtin_registry(config, store), session)
         bind_cordis_manager(registry, cordis)
         permissions = PermissionManager(config.permissions)
@@ -177,16 +178,15 @@ async def run_headless(
                     raise
 
         if isinstance(session, RecordingSession):
-            session.set_checkpoint_callback(
-                lambda: checkpoint(
+            async def checkpoint_trajectory(_: Session) -> None:
+                checkpoint(
                     "Run is still in progress; this is the latest durable checkpoint.",
                     strict=False,
                 )
-            )
-            checkpoint(
-                "Run is still in progress; this is the latest durable checkpoint.",
-                strict=False,
-            )
+            # Agent checkpoints are already dispatched through sessions; keep
+            # the recording class itself free of an unawaited async callback.
+            agent.checkpoint_callback = checkpoint_trajectory
+            await engine.call("sessions", "checkpoint", handler=lambda: checkpoint_trajectory(session))
 
         started = True
         try:
@@ -219,18 +219,7 @@ async def run_headless(
         if trajectory_path is not None:
             if not isinstance(session, RecordingSession):
                 raise RuntimeError("ATIF export requires a recording session.")
-            write_atif_trajectory(
-                trajectory_path,
-                session=session,
-                system_prompt=agent.resolved_system_prompt(),
-                agent_version=trajectory_agent_version or __version__,
-                model_name=config.general.default_model,
-                tool_schemas=registry.schemas(),
-                usage=usage,
-                error=error,
-                reasoning_effort=trajectory_reasoning_effort,
-                trajectory_id=trajectory_id,
-            )
+            await engine.call("sessions", "export", handler=lambda: checkpoint(error))
 
         return HeadlessRunResult(text="".join(chunks).strip(), usage=usage, error=error)
     except (ValueError, RuntimeError, OSError) as exc:

@@ -16,7 +16,13 @@ const aliases = new Map([
   ['@deepseek-ai/dsh-session-projection', new URL('./services.mjs', import.meta.url).href],
   ['@deepseek-ai/dsh-llm', new URL('./services.mjs', import.meta.url).href],
   ['@deepseek-ai/dsh-llm/types', new URL('./services.mjs', import.meta.url).href],
+  ['@deepseek-ai/dsh-util-values', new URL('../vendor/harness-values.mjs', import.meta.url).href],
+  ['diff', new URL('../vendor/diff.mjs', import.meta.url).href],
 ]);
+for (const name of ['scope', 'system-prompt', 'agent', 'jobs', 'jobs-local', 'fs', 'shell',
+  'sandbox', 'attachment', 'lsp', 'timeout', 'output-retention', 'subprocess', 'http-proxy', 'ptc-runtime']) {
+  aliases.set(`@deepseek-ai/dsh-${name}`, new URL(`./upstream/services/${name}.mjs`, import.meta.url).href);
+}
 
 function contains(parent, candidate) {
   const relative = path.relative(parent, candidate);

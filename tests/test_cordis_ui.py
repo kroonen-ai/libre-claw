@@ -27,6 +27,18 @@ class Target extends EventTarget {
   removeEventListener(event, callback, options) { this.listeners.delete(callback); super.removeEventListener(event, callback, options); }
 }
 const response = payload => ({ok:true,statusText:'OK',json:async()=>payload});
+class NodeTarget extends Target {
+  nodeType=1; isConnected=false; children=[];
+  connect(value) { this.isConnected=value; for(const child of this.children) child.connect(value); }
+  append(child) { this.children.push(child); child.connect(this.isConnected); }
+  replaceChildren(...children) { for(const child of this.children) child.connect(false); this.children=[]; for(const child of children) this.append(child); }
+  contains(target) { return this===target || this.children.some(child=>child.contains(target)); }
+}
+class Observer {
+  static latest; constructor(callback){this.callback=callback;Observer.latest=this;}
+  observe(root){this.root=root;this.observing=true;} disconnect(){this.observing=false;}
+  flush(){if(this.observing)this.callback();}
+}
 """ + body)
     result = subprocess.run([node, str(script)], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
@@ -122,4 +134,72 @@ assert.equal(target.listeners.size,0);
 const ui=await mountDashboard({scope,fetcher:async()=>response({})});
 assert.ok(ui.inspect().components.every(component=>component.state==='ACTIVE'));
 await ui.dispose();
+""")
+
+
+def test_dynamic_dom_replacements_dispose_old_controls_without_accumulating_effects(tmp_path):
+    run_ui(tmp_path, """
+const root=new NodeTarget();root.nodeType=9;root.connect(true);
+const ui=await mountDashboard({scope:root,MutationObserver:Observer,fetcher:async()=>response({})});
+let changes=0, previous;
+for(let index=0;index<100;index++){
+  const button=new NodeTarget();ui.bind('plugins',button,'click',()=>changes++);
+  root.replaceChildren(button);
+  if(previous){previous.dispatchEvent(new Event('click'));assert.equal(previous.listeners.size,0);}
+  button.dispatchEvent(new Event('click'));
+  Observer.latest.flush();await Promise.resolve();
+  const effects=ui.inspect().components.find(component=>component.id==='plugins').effects;
+  assert.deepEqual(effects,{scopes:1,bindings:1,timers:0});previous=button;
+}
+assert.equal(changes,100);
+root.replaceChildren();Observer.latest.flush();
+assert.deepEqual(ui.inspect().components.find(component=>component.id==='plugins').effects,{scopes:0,bindings:0,timers:0});
+await ui.dispose();assert.equal(Observer.latest.observing,false);
+""")
+
+
+def test_detached_and_disabled_feature_controls_cannot_mutate_local_state(tmp_path):
+    run_ui(tmp_path, """
+const root=new NodeTarget();root.nodeType=9;root.connect(true);
+const ui=await mountDashboard({scope:root,MutationObserver:Observer,fetcher:async()=>response({})});
+let changes=0;const button=new NodeTarget();root.append(button);
+ui.bind('tasks',button,'click',()=>changes++);button.dispatchEvent(new Event('click'));assert.equal(changes,1);
+const disabling=ui.disable('models');button.dispatchEvent(new Event('click'));assert.equal(changes,1);
+await disabling;assert.equal(button.listeners.size,0);assert.equal(ui.active('tasks'),false);
+assert.throws(()=>ui.run('tasks',()=>changes++),/unavailable/);
+assert.throws(()=>ui.bind('tasks',button,'click',()=>changes++),/unavailable/);
+assert.throws(()=>ui.request('/runs'),/unavailable/);
+await ui.dispose();button.dispatchEvent(new Event('click'));assert.equal(changes,1);
+""")
+
+
+def test_node_scoped_timers_and_animation_frames_are_released_on_replacement(tmp_path):
+    run_ui(tmp_path, """
+const root=new NodeTarget();root.nodeType=9;root.connect(true);
+const scheduled=new Map();let next=0, changes=0;
+const timers={setTimeout(callback){scheduled.set(++next,callback);return next;},clearTimeout(id){scheduled.delete(id);},
+requestAnimationFrame(callback){scheduled.set(++next,callback);return next;},cancelAnimationFrame(id){scheduled.delete(id);}};
+const ui=await mountDashboard({scope:root,MutationObserver:Observer,timers,fetcher:async()=>response({})});
+const button=new NodeTarget();root.append(button);
+ui.timeout('tasks',()=>changes++,100,button);ui.frame('tasks',()=>changes++,button);
+const late=[...scheduled.values()];root.replaceChildren();Observer.latest.flush();assert.equal(scheduled.size,0);
+for(const callback of late)callback();assert.equal(changes,0);
+const active=new NodeTarget();root.append(active);
+for(let index=0;index<100;index++){ui.timeout('tasks',()=>changes++,10,active);scheduled.values().next().value();}
+assert.equal(changes,100);assert.equal(scheduled.size,0);
+assert.deepEqual(ui.inspect().components.find(component=>component.id==='tasks').effects,{scopes:0,bindings:0,timers:0});
+await ui.dispose();
+""")
+
+
+def test_explicit_scope_release_preserves_unrelated_features_and_rejects_late_response(tmp_path):
+    run_ui(tmp_path, """
+const root=new NodeTarget();root.nodeType=9;root.connect(true);
+let finish;const ui=await mountDashboard({scope:root,MutationObserver:Observer,fetcher:()=>new Promise(resolve=>{finish=resolve;})});
+const form=new NodeTarget(),input=new NodeTarget(),unrelated=new Target();root.append(form);form.append(input);
+ui.bind('plugins',input,'input',()=>{});ui.bind('appearance',unrelated,'change',()=>{});
+ui.release(form);assert.equal(input.listeners.size,0);assert.equal(unrelated.listeners.size,1);
+const pending=ui.request('/models');const rejected=assert.rejects(pending,/stopped/);
+await ui.disable('models');finish(response({models:['must-not-reach-caller']}));await rejected;
+await ui.dispose();assert.equal(unrelated.listeners.size,0);
 """)

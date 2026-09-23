@@ -364,6 +364,14 @@ DASHBOARD_CSS = r"""
     .plugin-section > h4, .plugin-remove > h4 { margin: 0 0 12px; font-size: 13px; font-weight: 600; }
     .plugin-section > .hint, .plugin-remove > .hint { font-size: 11px; line-height: 1.8; }
     .plugin-config-form { display: grid; gap: 18px; margin-top: 20px; }
+    .plugin-client-view { contain: layout paint; isolation: isolate; position: relative; max-height: 520px; overflow: auto; }
+    .client-rendered-view { padding: 18px; margin-bottom: 12px; border: 1px solid var(--line); background: var(--bg); overflow-wrap: anywhere; }
+    .client-rendered-view.summary { color: var(--muted); font-size: 11px; padding: 12px 18px; }
+    .client-rendered-view :is(form, fieldset) { display: grid; gap: 14px; min-width: 0; }
+    .client-rendered-view form { margin: 0; }
+    .client-rendered-view button { justify-self: start; font-size: 12px; }
+    .settings-body .client-rendered-view input:is([type=checkbox],[type=radio]) { width: 15px; height: 15px; flex: none; }
+    .client-rendered-view :is(h1,h2,h3,h4,h5,h6) { font-size: 15px; }
     .team-composer-summary { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
     .orchestration-form { display: grid; gap: 22px; margin-top: 18px; }
     .orchestration-lead { padding: 20px; border: 1px solid var(--line-strong); border-inline-start: 2px solid var(--accent); background: var(--bg); }

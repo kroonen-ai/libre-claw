@@ -196,6 +196,32 @@ export const inject=['tools','userQuestions'];export function apply(ctx){ctx.too
         assert result == {"content": "continue", "error": False}
 
 
+async def test_cancelled_host_binding_is_joined_without_terminating_the_plugin(tmp_path, node_executable):
+    source = """
+import {defineTool} from '@deepseek-ai/dsh-tools';
+export const inject=['tools','userQuestions'];export function apply(ctx){ctx.tools.register(defineTool({
+ name:'ask',description:'Cancel a question',parameters:{},output:{schema:{type:'string'},render:(_args,v)=>[{type:'text',text:v}]},
+ async execute(){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),40);
+ try{await ctx.userQuestions.ask({questions:[{id:'q',question:'Continue?'}],signal:controller.signal});return 'unexpected';}
+ catch{return 'cancelled';}finally{clearTimeout(timer);}}
+}));}
+"""
+    worker, _ = worker_fixture(tmp_path, node_executable, source, harness=True)
+    opened, closed = asyncio.Event(), asyncio.Event()
+    async def handler(method, params, *, stream, timeout):
+        assert method == "userQuestions.ask"
+        try:
+            opened.set()
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+    async with worker:
+        result = await worker.request("tools/call", {"name": "ask", "arguments": {}}, handler)
+        assert result == {"content": "cancelled", "error": False}
+        assert opened.is_set() and closed.is_set()
+        assert worker.running and not worker._host_tasks
+
+
 BACKGROUND = """
 export const inject=['llm','libre'];export function apply(ctx){
  ctx.libre.registerTool({name:'schedule',description:'Schedule',input_schema:{type:'object'}},async()=>{

@@ -21,6 +21,9 @@ SDK_PACKAGES = frozenset({
     "@deepseek-ai/cordis", "@deepseek-ai/cosmokit", "@deepseek-ai/schemastery", "zod",
     "@deepseek-ai/dsh-tools", "@deepseek-ai/dsh-user-questions",
     "@deepseek-ai/dsh-session-projection", "@deepseek-ai/dsh-llm",
+    *(f"@deepseek-ai/dsh-{name}" for name in (
+        "fs", "shell", "jobs", "jobs-local", "agent", "system-prompt", "sandbox", "attachment", "lsp",
+        "timeout", "output-retention", "scope", "util-values", "subprocess", "http-proxy", "ptc-runtime")),
 })
 NATIVE_PROVIDER_PACKAGE = "@libre-webui/dsh-native-provider"
 NATIVE_PROVIDER_VERSION = "0.1.1"
@@ -290,6 +293,11 @@ def adapt_harness_package(files: dict[str, bytes]) -> dict[str, bytes]:
     if MANIFEST_NAME in files:
         return files
     package = package_manifest(files)
+    from libre_claw.core.cordis_client_manifest import detect_client_declaration
+    try:
+        client = detect_client_declaration(package, files)
+    except ValueError as exc:
+        raise CordisError(str(exc)) from exc
     if HARNESS_ENTRY in files or any(name.startswith(DEPENDENCY_DIRECTORY + "/") for name in files):
         raise CordisError("Harness package uses a reserved generated file path.")
     dsh = package.get("dsh", {})
@@ -305,6 +313,8 @@ def adapt_harness_package(files: dict[str, bytes]) -> dict[str, bytes]:
             raise CordisError("Harness bundle patch is missing from the package.")
         patch_directory = PurePosixPath(patch).parent
         rows = _patch_rows(files[patch])
+    elif client and not package.get("main") and isinstance(package.get("exports"), dict) and "." not in package["exports"]:
+        rows = []
     else:
         rows = [{"id": "main", "name": "./" + package_entry(package, files)}]
     declared = set(runtime_dependencies(package)) | SDK_PACKAGES
@@ -349,6 +359,8 @@ def adapt_harness_package(files: dict[str, bytes]) -> dict[str, bytes]:
         "harness": {"package": package["name"], "components": components,
                     "packages": [{"name": package["name"], "version": package["version"], "path": ".", "dependencies": {}}]},
     }
+    if client is not None:
+        manifest["client"] = client
     if package["name"] == NATIVE_PROVIDER_PACKAGE:
         manifest["name"] = "Libre WebUI bridge"
         manifest["description"] = "Use Libre Claw models in Libre WebUI over a private local connection."

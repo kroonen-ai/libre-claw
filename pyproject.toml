@@ -58,7 +58,7 @@ browser = [
 dev = [
     "build>=1.2",
     "pytest>=8.0",
-    "pytest-asyncio>=0.23",
+    "pytest-asyncio>=1.4",
 ]
 
 [project.scripts]
@@ -101,3 +101,4 @@ include = [
 addopts = "-q"
 pythonpath = ["src"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

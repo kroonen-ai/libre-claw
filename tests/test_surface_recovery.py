@@ -12,6 +12,7 @@ import pytest
 
 from libre_claw.config import load_config
 from libre_claw.core import AgentDone, Session
+from libre_claw.core.cordis_engine import CordisEngine
 import libre_claw.core.runs as runs_module
 from libre_claw.telegram.bridge import TelegramBridge
 from libre_claw.telegram.handlers import TelegramHandlers
@@ -141,7 +142,7 @@ async def test_tui_remains_busy_until_session_and_run_finalization_finish(local_
     monkeypatch.setattr("libre_claw.tui.app.GoalRunner", EmptyGoal)
     notices = []
     app = SimpleNamespace(
-        config=local_config, session=Session(), agent=EmptyAgent(), run_store=store,
+        config=local_config, session=Session(), agent=EmptyAgent(), run_store=store, engine=CordisEngine(),
         _active_run_id=run.run_id, _resumed_run_id=run.run_id, _active_run_summary="",
         _run_background_tasks=set(), _active_task=None, _pending_permission=None, _user_questions={},
         _pending_key_setup=None, palette_open=False, _goal_max_turns=1,
@@ -156,7 +157,7 @@ async def test_tui_remains_busy_until_session_and_run_finalization_finish(local_
     app._append_system = notices.append
     app.query_one = lambda *args: SimpleNamespace(focus=lambda: None)
     app._finish_active_run = MethodType(LibreClawApp._finish_active_run, app)
-    for method in ("_finish_local_turn", "_dispatch_queued_followup", "_start_local_queue", "_wake_local_queue", "_drain_local_queue"):
+    for method in ("_finish_active_run_with_engine", "_finish_local_turn", "_dispatch_queued_followup", "_start_local_queue", "_wake_local_queue", "_drain_local_queue"):
         setattr(app, method, MethodType(getattr(LibreClawApp, method), app))
     stream = LibreClawApp._stream_agent_response(app, "task", 0) if kind == "chat" else LibreClawApp._stream_goal_response(app, "task", 0, object())
     task = asyncio.create_task(stream)
@@ -196,7 +197,7 @@ async def test_tui_claimed_followup_keeps_ownership_until_next_task_is_registere
     monkeypatch.setattr("libre_claw.tui.app._collect_run_artifacts", collect)
     monkeypatch.setattr("libre_claw.tui.app.GoalRunner", EmptyGoal)
     app = SimpleNamespace(
-        config=local_config, session=Session(), agent=EmptyAgent(), run_store=store,
+        config=local_config, session=Session(), agent=EmptyAgent(), run_store=store, engine=CordisEngine(),
         _active_run_id=run.run_id, _resumed_run_id=run.run_id, _active_run_summary="",
         _run_background_tasks=set(), _active_task=None, _pending_permission=None, _user_questions={},
         _pending_key_setup=None, _pending_attachments=[], palette_open=False,
@@ -214,7 +215,7 @@ async def test_tui_claimed_followup_keeps_ownership_until_next_task_is_registere
     app._append_assistant = lambda _: 0
     app.query_one = lambda *args: SimpleNamespace(focus=lambda: None)
     app._finish_active_run = MethodType(LibreClawApp._finish_active_run, app)
-    for method in ("_finish_local_turn", "_dispatch_queued_followup", "_start_local_queue", "_wake_local_queue", "_drain_local_queue"):
+    for method in ("_finish_active_run_with_engine", "_finish_local_turn", "_dispatch_queued_followup", "_start_local_queue", "_wake_local_queue", "_drain_local_queue"):
         setattr(app, method, MethodType(getattr(LibreClawApp, method), app))
     app.handle_user_input = MethodType(LibreClawApp.handle_user_input, app)
 

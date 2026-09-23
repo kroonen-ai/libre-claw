@@ -445,6 +445,14 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (dashboardUI) return dashboardUI.bind(service, target, event, handler, options);
       uiBindings[service].push({target, event, handler, options});
     }
+    function cancelUI(dispose) { if (typeof dispose === "function") dispose(); }
+    function timeoutUI(service, handler, milliseconds, owner) {
+      return dashboardUI?.active(service) ? dashboardUI.timeout(service, handler, milliseconds, owner) : () => {};
+    }
+    function frameUI(service, handler, owner) {
+      return dashboardUI?.active(service) ? dashboardUI.frame(service, handler, owner) : () => {};
+    }
+    function releaseUI(root) { dashboardUI?.release(root); }
     const THEME_KEY = "libre-claw-dashboard-theme";
     const RAIL_KEY = "libre-claw-dashboard-rail";
     const THEMES = new Set(__LIBRE_CLAW_THEME_IDS__);
@@ -564,6 +572,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     let noticeTimer = 0;
     function setNotice(text, error = false) {
+      if (dashboardUI && !dashboardUI.active("appearance")) return;
       const box = $("notice");
       box.textContent = text;
       box.className = `notice visible ${error ? "error" : ""}`;
@@ -573,8 +582,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
         settingsNotice.className = `settings-notice ${error ? "error" : ""}`;
         settingsNotice.hidden = false;
       }
-      window.clearTimeout(noticeTimer);
-      if (!error) noticeTimer = window.setTimeout(() => { box.className = "notice"; settingsNotice.hidden = true; }, 6000);
+      cancelUI(noticeTimer);
+      if (!error) noticeTimer = timeoutUI("appearance", () => { box.className = "notice"; settingsNotice.hidden = true; }, 6000, box);
     }
 
     async function request(path, options = {}) {
@@ -750,7 +759,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         updated.className = "run-time";
         updated.textContent = formatRelativeTime(run.updated_at);
         button.append(dot, title, updated);
-        button.addEventListener("click", () => selectRun(run.run_id));
+        bindUI("tasks", button, "click", () => selectRun(run.run_id));
         container.append(button);
       }
     }
@@ -764,7 +773,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       renderRuns();
       if (changed) {
         renderQuestions([]);
-        state.events = []; state.streaming = false; window.clearTimeout(streamTimer); resetStreamNode();
+        state.events = []; state.streaming = false; cancelUI(streamTimer); resetStreamNode();
         $("timeline").replaceChildren(empty("Loading task…"));
       }
       try {
@@ -781,7 +790,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       state.selectedRunId = "";
       state.composing = true;
       state.streaming = false;
-      window.clearTimeout(streamTimer);
+      cancelUI(streamTimer);
       resetStreamNode();
       clearSelectedRun();
       renderRuns();
@@ -849,7 +858,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     function resetStreamNode() {
-      window.cancelAnimationFrame(stream.raf);
+      cancelUI(stream.raf);
       stream.node = null;
       stream.text = "";
       stream.shown = 0;
@@ -857,14 +866,14 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     function scheduleStream(runState) {
-      window.clearTimeout(streamTimer);
+      cancelUI(streamTimer);
       state.streaming = STREAM_STATES.has(runState);
       if (!state.streaming) {
         resetStreamNode();
         renderEvents();
         return;
       }
-      streamTimer = window.setTimeout(() => { void pollRunEvents(); }, 300);
+      streamTimer = timeoutUI("tasks", () => { void pollRunEvents(); }, 300, $("timeline"));
     }
 
     function nearBottom(container) {
@@ -895,7 +904,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       paintStreamNode();
       if (stick) container.scrollTop = container.scrollHeight;
       if (stream.shown < stream.text.length) {
-        stream.raf = requestAnimationFrame(pumpStream);
+        stream.raf = frameUI("tasks", pumpStream, $("timeline"));
       }
     }
 
@@ -920,7 +929,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         stream.shown = 0;
       }
       stream.text += text;
-      if (!stream.raf) stream.raf = requestAnimationFrame(pumpStream);
+      if (!stream.raf) stream.raf = frameUI("tasks", pumpStream, $("timeline"));
       return true;
     }
 
@@ -949,7 +958,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       } catch (_error) {
         /* transient poll errors: keep streaming */
       }
-      streamTimer = window.setTimeout(() => { void pollRunEvents(); }, sawDelta ? 250 : 900);
+      streamTimer = timeoutUI("tasks", () => { void pollRunEvents(); }, sawDelta ? 250 : 900, $("timeline"));
     }
 
     function setView(view) {
@@ -1054,14 +1063,14 @@ _DASHBOARD_HTML = r"""<!doctype html>
       copy.type = "button";
       copy.className = "code-copy";
       copy.textContent = "Copy";
-      copy.addEventListener("click", async () => {
+      bindUI("tasks", copy, "click", async () => {
         try {
           await navigator.clipboard.writeText(code);
           copy.textContent = "Copied";
         } catch (_error) {
           copy.textContent = "Failed";
         }
-        window.setTimeout(() => { copy.textContent = "Copy"; }, 1600);
+        timeoutUI("tasks", () => { copy.textContent = "Copy"; }, 1600, copy);
       });
       head.append(label, copy);
       const pre = document.createElement("pre");
@@ -1445,7 +1454,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           button.textContent = label;
           if (resolution === "allow_once") button.className = "primary";
           if (resolution === "deny") button.className = "danger";
-          button.addEventListener("click", async () => {
+          bindUI("questions", button, "click", async () => {
             row.querySelectorAll("button").forEach(control => { control.disabled = true; });
             try { await resolvePermission(id, resolution); }
             catch (error) { setNotice(error.message || String(error), true); }
@@ -1500,15 +1509,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
         runNow.type = "button";
         runNow.textContent = "Run now";
         runNow.className = "primary";
-        runNow.addEventListener("click", () => { void runAutomationNow(automation.automation_id, runNow).catch(error => setNotice(error.message || String(error), true)); });
+        bindUI("workflows", runNow, "click", () => { void runAutomationNow(automation.automation_id, runNow).catch(error => setNotice(error.message || String(error), true)); });
         const edit = document.createElement("button");
         edit.type = "button";
         edit.textContent = "Edit";
-        edit.addEventListener("click", () => editAutomation(automation));
+        bindUI("workflows", edit, "click", () => editAutomation(automation));
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.textContent = automation.status === "active" ? "Pause" : "Resume";
-        toggle.addEventListener("click", async () => {
+        bindUI("workflows", toggle, "click", async () => {
           toggle.disabled = true;
           try { await toggleAutomation(automation); } catch (error) { setNotice(error.message || String(error), true); }
           finally { toggle.disabled = false; }
@@ -1517,7 +1526,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         del.type = "button";
         del.textContent = "Delete";
         del.className = "danger";
-        del.addEventListener("click", async () => {
+        bindUI("workflows", del, "click", async () => {
           del.disabled = true;
           try { await deleteAutomation(automation.automation_id); } catch (error) { setNotice(error.message || String(error), true); }
           finally { del.disabled = false; }
@@ -1621,7 +1630,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       const actions = document.createElement("div"); actions.className = "starter-grid";
       for (const [label, prompt] of [["Explore the project", "Explore this project and explain its structure and main entry points."], ["Find a bug", "Review this project for a concrete bug, explain it, and propose a focused fix."], ["Plan a change", "Help me plan a change to this project: "]]) {
         const button = document.createElement("button"); button.type = "button"; button.className = "starter-action"; button.textContent = label;
-        button.addEventListener("click", () => { $("runMessage").value = prompt; autoGrow(); $("runMessage").focus(); });
+        bindUI("tasks", button, "click", () => { $("runMessage").value = prompt; autoGrow(); $("runMessage").focus(); });
         actions.append(button);
       }
       node.append(actions); return node;
@@ -1686,6 +1695,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
             const metric = engineNode("div"); metric.append(engineNode("dt", "", label), engineNode("dd", "", engineNumber(value))); count.append(metric);
           }
           card.append(heading, engineNode("p", "engine-dependencies", dependencies.length ? `Uses ${dependencies.join(" · ")}` : "Independent service"), count);
+          const implementations = Object.entries(component.implementations || {}).filter(([, plugin]) => typeof plugin === "string" && plugin !== "libre-claw");
+          if (implementations.length) {
+            const extensions = engineNode("div", "engine-implementations");
+            for (const [method, plugin] of implementations) extensions.append(engineNode("p", "hint", `${id}.${method} · ${plugin}`));
+            card.append(extensions);
+          }
           const details = engineNode("details", "engine-methods"); details.dataset.component = id; details.open = expanded.has(id);
           details.append(engineNode("summary", "", "Service methods"));
           const methods = engineNode("div", "engine-method-list");
@@ -1723,10 +1738,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
     let pluginCatalog = null, pluginLoading = false, pluginPending = "", pluginPendingEnable = false;
     let pluginDetail = null, pluginView = "list", pluginRevision = 0, pluginInstall = null;
     let pluginConfigFields = [], pluginConfigDirty = false, pluginRuntimeStatus = null, pluginConfigDraftBase = null;
+    let pluginClient = null, pluginClientRevision = 0;
     let orchestrationEditor = null, orchestrationRevision = 0, orchestrationProviders = null;
     let orchestrationProfiles = [], orchestrationLoading = false, orchestrationLoaded = false, selectedOrchestrationPlugin = "";
     const orchestrationModelCache = new Map();
-    const orchestrationBindings = [];
     function pluginNode(tag, className = "", text) {
       const node = document.createElement(tag);
       node.className = className;
@@ -1735,17 +1750,61 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
     function pluginButton(label, action, className = "") {
       const node = pluginNode("button", className, label); node.type = "button";
-      node.addEventListener("click", action); return node;
+      bindUI("plugins", node, "click", action); return node;
+    }
+    async function closePluginClient() {
+      pluginClientRevision++;
+      const client = pluginClient; pluginClient = null;
+      if (client) { try { await client.close(); } catch { /* Server leases also reclaim disconnected guests. */ } }
+    }
+    async function enablePluginClient(id) {
+      if (pluginLoading || pluginPending || pluginConfigDirty || !pluginCatalog?.enabled || !pluginDetail?.requires_client_access
+          || pluginDetail.id !== id || pluginDetail.integrity !== "valid") return;
+      pluginPending = "client-access"; syncPluginControls();
+      try {
+        await request(`/plugins/${encodeURIComponent(id)}`, {method: "PATCH", body: JSON.stringify({enabled: true, allow_client: true})});
+        await loadPlugins("Isolated interface access enabled. Plugin code stays outside this browser page.");
+        pluginDetail = (await request(`/plugins/${encodeURIComponent(id)}`)).plugin;
+        showPluginView("detail"); renderPluginDetail();
+      } catch (error) { setPluginStatus(`Could not enable the interface: ${error.message || error}`, true); }
+      finally { pluginPending = ""; syncPluginControls(); }
+    }
+    async function openPluginClient() {
+      if (pluginLoading || pluginPending || pluginConfigDirty || !pluginDetail?.enabled || pluginDetail.grants?.allow_client !== true) return;
+      pluginPending = "client-open"; syncPluginControls();
+      await closePluginClient();
+      const revision = ++pluginClientRevision, pluginId = pluginDetail.id;
+      const container = document.getElementById("pluginClientView"), status = document.getElementById("pluginClientStatus");
+      status.textContent = "Starting the isolated interface…";
+      try {
+        const [{ClientView}, schema] = await Promise.all([import("/assets/client-view.mjs"), request("/assets/client-schema.json")]);
+        const result = await request(`/plugins/${encodeURIComponent(pluginId)}/ui/open`, {method: "POST", body: JSON.stringify(state.selectedRunId ? {run_id: state.selectedRunId} : {})});
+        if (revision !== pluginClientRevision || pluginDetail?.id !== pluginId) {
+          await request(`/plugins/${encodeURIComponent(pluginId)}/ui/${encodeURIComponent(result.ui_session_id)}`, {method: "DELETE"}); return;
+        }
+        pluginClient = new ClientView({container, schema, pluginId, sessionId: result.ui_session_id,
+          request, bind: (target, event, handler) => bindUI("plugins", target, event, handler),
+          timeout: (handler, milliseconds, owner) => timeoutUI("plugins", handler, milliseconds, owner),
+          status: (message, error = false) => { if (revision === pluginClientRevision) { status.textContent = message; status.className = error ? "hint danger" : "hint"; } },
+        });
+        pluginClient.render(result.snapshot); pluginClient.startPolling();
+        status.textContent = result.snapshot.warnings?.length ? result.snapshot.warnings.join(" ") : "Interface ready. Execution is isolated and offline.";
+      } catch (error) {
+        if (revision === pluginClientRevision) {
+          await closePluginClient();
+          status.textContent = `Could not open the interface: ${error.message || error}`;
+        }
+      }
+      finally { pluginPending = ""; syncPluginControls(); }
     }
 
     /* Model orchestration editor */
     function orchestrationBind(target, event, handler) {
-      const dispose = bindUI("plugins", target, event, handler);
-      if (typeof dispose === "function") orchestrationBindings.push(dispose);
+      return bindUI("plugins", target, event, handler);
     }
     function disposeOrchestrationEditor() {
       orchestrationRevision++;
-      for (const dispose of orchestrationBindings.splice(0)) dispose();
+      if (orchestrationEditor) releaseUI($("pluginPage"));
       orchestrationEditor = null;
     }
     function orchestrationButton(label, action, className = "") {
@@ -2039,6 +2098,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       for (const root of [$("pluginsList"), $("pluginsIncluded"), $("pluginPage")]) {
         for (const button of root.querySelectorAll("button")) {
           button.disabled = (busy && !(pluginPending === "preview" && button.dataset.cancelPreview === "true")) || button.dataset.blocked === "true";
+          if (button.dataset.requiresSavedConfig === "true" && pluginConfigDirty) button.disabled = true;
           if (button.dataset.pluginAction !== "toggle") continue;
           const plugin = pluginCatalog?.plugins.find(item => String(item.id) === button.dataset.pluginId);
           button.disabled = busy || !plugin || (!plugin.enabled && (!pluginCatalog.enabled || plugin.integrity !== "valid")) || plugin?.id === "orchestration" && pluginConfigDirty;
@@ -2072,6 +2132,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
         ["Extra reads", grants.read_paths?.length ? grants.read_paths.join(", ") : "None"],
         ["Extra writes", grants.write_paths?.length ? grants.write_paths.join(", ") : "None"],
         ["Models", grants.allow_model === true ? "Allowed through Libre Claw" : "Denied"],
+        ["Core services", grants.allow_engine === true ? "Allowed by an explicit engine grant" : "Denied"],
+        ["Interface", grants.allow_client === true ? "Allowed in an isolated offline guest" : "Denied"],
       ]) node.append(pluginNode("dt", "", label), pluginNode("dd", "", value));
       return node;
     }
@@ -2183,6 +2245,18 @@ _DASHBOARD_HTML = r"""<!doctype html>
       } catch (error) { setPluginStatus(`Could not enable model access: ${error.message || error}`, true); }
       finally { pluginPending = ""; syncPluginControls(); }
     }
+    async function enablePluginEngine(id) {
+      if (pluginLoading || pluginPending || !pluginCatalog?.enabled || !pluginDetail?.requires_engine_access
+          || pluginDetail.id !== id || pluginDetail.integrity !== "valid") return;
+      pluginPending = "engine-access"; syncPluginControls();
+      try {
+        await request(`/plugins/${encodeURIComponent(id)}`, {method: "PATCH", body: JSON.stringify({enabled: true, allow_engine: true})});
+        await loadPlugins("Core service grant saved. Open Engine and restart the runtime to activate it.");
+        pluginDetail = (await request(`/plugins/${encodeURIComponent(id)}`)).plugin;
+        showPluginView("detail"); renderPluginDetail();
+      } catch (error) { setPluginStatus(`Could not enable core services: ${error.message || error}`, true); }
+      finally { pluginPending = ""; syncPluginControls(); }
+    }
     function showPluginView(view) {
       pluginView = view; $("pluginsInventory").hidden = view !== "list"; $("pluginPage").hidden = view === "list";
       $("pluginsHeader").hidden = view !== "list"; $("pluginsScopeBlock").hidden = view !== "list";
@@ -2192,6 +2266,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       const cancelledCheck = pluginPending === "preview";
       if (cancelledCheck) pluginPending = "";
       const token = pluginInstall?.preview?.token;
+      void closePluginClient();
       disposeOrchestrationEditor();
       pluginRevision++; pluginInstall = null; pluginDetail = null; pluginConfigFields = []; pluginConfigDirty = false; pluginRuntimeStatus = null;
       $("pluginPage").replaceChildren(); showPluginView("list"); syncPluginControls();
@@ -2219,6 +2294,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       finally { pluginPending = ""; syncPluginControls(); }
     }
     function renderPluginDetail() {
+      void closePluginClient();
       disposeOrchestrationEditor();
       const plugin = pluginDetail, page = $("pluginPage"); page.replaceChildren();
       page.append(pluginBreadcrumb(plugin.name || plugin.id));
@@ -2248,6 +2324,21 @@ _DASHBOARD_HTML = r"""<!doctype html>
       runtime.textContent = plugin.enabled ? "Check that this plugin loads with its current permissions." : "Enable offline to check its runtime."; page.append(runtime);
       const config = pluginNode("section", "plugin-section"); config.append(pluginNode("h4", "", "Configuration"));
       renderPluginConfig(config, plugin); page.append(config);
+      if (plugin.requires_client_access && plugin.client) {
+        const section = pluginNode("section", "plugin-section"); section.append(pluginNode("h4", "", "Plugin interface"),
+          pluginNode("p", "hint", "This interface runs offline with its public settings. Provider keys and conversation history stay private. A selected task shares only its ID and status."));
+        const actions = pluginNode("div", "plugin-actions plugin-detail-actions");
+        const open = pluginButton(plugin.grants?.allow_client === true ? "Open interface" : "Enable interface", () => {
+          if (plugin.grants?.allow_client === true) void openPluginClient(); else void enablePluginClient(String(plugin.id));
+        }, "primary");
+        open.dataset.requiresSavedConfig = "true";
+        open.dataset.blocked = String(!pluginCatalog?.enabled || plugin.integrity !== "valid" || plugin.grants?.allow_client === true && !plugin.enabled);
+        actions.append(open, pluginButton("Close interface", () => { void closePluginClient(); }));
+        const status = pluginNode("p", "hint"); status.id = "pluginClientStatus"; status.setAttribute("role", "status");
+        status.textContent = plugin.grants?.allow_client === true ? "Open this plugin’s isolated interface." : "A separate interface grant is required.";
+        const view = pluginNode("div", "plugin-client-view"); view.id = "pluginClientView"; view.setAttribute("aria-label", "Isolated plugin interface");
+        section.append(actions, status, view); page.append(section);
+      }
       if (plugin.id === "orchestration") {
         const use = orchestrationEditor.use = orchestrationButton("Use for next task", () => { void useOrchestrationForNextTask(); }, "primary");
         const launch = pluginNode("div", "orchestration-launch");
@@ -2255,6 +2346,16 @@ _DASHBOARD_HTML = r"""<!doctype html>
       }
       const permissions = pluginNode("section", "plugin-section"); permissions.append(pluginNode("h4", "", "Permissions"), pluginPermissions(plugin),
         pluginNode("p", "hint", "Private storage belongs to this project. Additional filesystem or network access must be granted explicitly from the CLI.")); page.append(permissions);
+      if (plugin.requires_engine_access) {
+        const names = Array.isArray(plugin.engine_services) ? plugin.engine_services.map(service => typeof service === "string" ? service : service.title || service.id).filter(Boolean).join(", ") : "declared core services";
+        permissions.append(pluginNode("p", "hint", `Core services: ${names}. This extension receives operation names, never prompts or provider keys. Restart the engine after changing its grant.`));
+        if (plugin.grants?.allow_engine !== true) {
+          const engine = pluginButton("Enable core services", () => { void enablePluginEngine(String(plugin.id)); });
+          engine.dataset.blocked = String(!pluginCatalog?.enabled || plugin.integrity !== "valid"); permissions.append(engine);
+          engine.dataset.requiresSavedConfig = "true";
+        }
+        permissions.append(pluginButton("Open engine", () => openSettingsPane("engine")));
+      }
       if (plugin.grants?.allow_model !== true && (plugin.id !== "orchestration" || plugin.enabled)) {
         permissions.append(pluginNode("p", "hint", "Model access lets this plugin use your configured providers. It receives model responses, never provider keys or automatic conversation history."));
         const models = plugin.id === "orchestration"
@@ -2355,7 +2456,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           const entry = {key, path, pointer, kind, input, schema: field, clear: false, touched: false, present: current.present,
             initialValue: String(input.value), secretType: secret ? field.type : null}; pluginConfigFields.push(entry);
           const changed = () => { entry.clear = false; entry.touched = true; markDirty(); };
-          input.addEventListener("input", changed); input.addEventListener("change", changed);
+          bindUI("plugins", input, "input", changed); bindUI("plugins", input, "change", changed);
           if (secret && plugin.configured_secrets?.includes(pointer)) {
             label.append(pluginButton("Clear saved value", () => { input.value = ""; input.placeholder = "Will be cleared on save"; entry.clear = true; entry.touched = true; markDirty(); }, "plugin-clear-secret"));
           }
@@ -2366,14 +2467,14 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (!Object.keys(properties).length) {
         const label = pluginNode("label", "plugin-config-field"); label.append(pluginNode("span", "", "Configuration JSON"));
         const input = pluginNode("textarea", "plugin-json-input"); input.rows = 6; input.value = JSON.stringify(config, null, 2);
-        input.setAttribute("aria-label", "Configuration JSON"); input.addEventListener("input", markDirty); label.append(input);
+        input.setAttribute("aria-label", "Configuration JSON"); bindUI("plugins", input, "input", markDirty); label.append(input);
         form.append(label); pluginConfigFields.push({kind: "root", input});
       }
       const save = pluginButton("Save configuration", () => { void savePluginConfig(); }, "primary");
       const reset = pluginButton("Reset changes", () => { renderPluginDetail(); });
       save.dataset.blocked = "true"; reset.dataset.blocked = "true";
       const actions = pluginNode("div", "plugin-actions"); actions.append(reset, save); form.append(actions);
-      form.addEventListener("submit", event => { event.preventDefault(); void savePluginConfig(); });
+      bindUI("plugins", form, "submit", event => { event.preventDefault(); void savePluginConfig(); });
       container.append(pluginNode("p", "hint", "Changes stay here until you save. Secrets are stored locally and never returned to this page."), form);
     }
     function collectPluginConfig() {
@@ -2502,12 +2603,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
         const form = pluginNode("form", "plugin-install-form"), label = pluginNode("label"); label.append(pluginNode("span", "", "Package source"));
         const input = pluginNode("input"); input.id = "pluginSource"; input.value = pluginInstall.source;
         input.placeholder = "/path/to/plugin or npm:@scope/package@1.0.0"; input.autocomplete = "off"; input.spellcheck = false;
-        input.addEventListener("input", () => { pluginInstall.source = input.value; }); label.append(input); form.append(label);
+        bindUI("plugins", input, "input", () => { pluginInstall.source = input.value; }); label.append(input); form.append(label);
         const help = pluginNode("details", "plugin-source-help"); help.append(pluginNode("summary", "", "What can I install?"),
           pluginNode("p", "hint", "A compiled Cordis or Harness package from a local folder, .tgz archive, public GitHub repository, or npm. Packages are downloaded only when you check them. Install scripts never run.")); form.append(help);
         const actions = pluginNode("div", "plugin-actions"), cancel = pluginButton("Cancel", () => { void leavePluginPage(); }); cancel.dataset.cancelPreview = "true";
         actions.append(cancel, pluginButton("Check package", () => { void previewPlugin(); }, "primary")); form.append(actions);
-        form.addEventListener("submit", event => { event.preventDefault(); void previewPlugin(); }); page.append(form);
+        bindUI("plugins", form, "submit", event => { event.preventDefault(); void previewPlugin(); }); page.append(form);
       } else {
         const item = pluginInstall.preview, card = pluginNode("article", "plugin-card");
         card.append(pluginNode("h4", "", item.name || item.id), pluginNode("p", "tiny", `${item.id} · ${item.version}`));
@@ -2759,7 +2860,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         chip.className = "model-chip";
         chip.textContent = item.label || item.model;
         chip.title = `Use ${item.model}`;
-        chip.addEventListener("click", () => {
+        bindUI("models", chip, "click", () => {
           $("configProvider").value = "llamacpp";
           $("configProvider").dispatchEvent(new Event("change"));
           modelPickers.get("configModel")?.accept(payload, "llamacpp");
@@ -2975,8 +3076,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
         metadata.hidden = input.hidden || !model || (input.id !== "configModel" && !hasDetails);
         metadata.textContent = model ? modelCapabilitySummary(item) : "";
       };
-      input.addEventListener("input", showCapabilities);
-      input.addEventListener("change", showCapabilities);
+      bindUI("models", input, "input", showCapabilities);
+      bindUI("models", input, "change", showCapabilities);
       showCapabilities();
       const isConfig = input.id === "configModel";
       const applyCatalog = (payload) => {
@@ -3024,7 +3125,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           if (isConfig && requestId === generation) $("refreshModels").disabled = false;
         }
       };
-      select.addEventListener("change", () => {
+      bindUI("models", select, "change", () => {
         input.value = "";
         if (input.id === "configModel") {
           ++modelConfigGeneration;
@@ -3032,7 +3133,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         }
         void update();
       });
-      input.addEventListener("focus", () => { void update(); });
+      bindUI("models", input, "focus", () => { void update(); });
       modelPickers.set(input.id, {
         refresh: update,
         accept: (payload, provider) => {
@@ -3056,7 +3157,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     function workflowButton(label, action, className = "") {
       const button = document.createElement("button");
       button.type = "button"; button.textContent = label; button.className = className;
-      button.addEventListener("click", async () => {
+      bindUI("workflows", button, "click", async () => {
         button.disabled = true;
         try { await action(); } catch (error) { setNotice(error.message || String(error), true); }
         finally { button.disabled = false; }
@@ -3140,7 +3241,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       const actions = document.createElement("div"); actions.className = "workflow-row";
       const save = document.createElement("button"); save.type = "submit"; save.textContent = "Save comment";
       actions.append(save, workflowButton("Cancel", () => form.remove())); form.append(input, actions);
-      form.addEventListener("submit", async (event) => {
+      bindUI("workflows", form, "submit", async (event) => {
         event.preventDefault(); save.disabled = true;
         try {
           const payload = await request("/workspace/review/comments", { method: "POST", body: JSON.stringify({
@@ -3177,7 +3278,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
               numberCell.className = "line-number"; numberCell.textContent = number ?? "";
               if (number !== null) {
                 numberCell.type = "button"; numberCell.setAttribute("aria-label", `Comment on ${file.path} ${side} line ${number}`);
-                numberCell.addEventListener("click", () => commentEditor(block, file, number, side, snapshot, context));
+                bindUI("workflows", numberCell, "click", () => commentEditor(block, file, number, side, snapshot, context));
               }
               row.append(numberCell);
             }
@@ -3270,16 +3371,16 @@ _DASHBOARD_HTML = r"""<!doctype html>
         if (["interrupted", "failed", "cancelled"].includes(worker.status) || controls.pending) {
           const input = document.createElement("textarea"); input.rows = 2; input.placeholder = "Optional guidance before resuming"; input.setAttribute("aria-label", `Resume guidance for ${worker.id}`); input.dataset.workerGuidance = key; input.value = workflow.workerDrafts.get(key) || "";
           input.disabled = pending || controls.pending || !controls.canResume;
-          input.addEventListener("input", () => workflow.workerDrafts.set(key, input.value));
+          bindUI("workflows", input, "input", () => workflow.workerDrafts.set(key, input.value));
           const resume = document.createElement("button"); resume.type = "button"; resume.textContent = controls.pending ? "Resume queued" : pending ? "Requesting resume..." : "Resume worker"; resume.disabled = pending || !controls.canResume;
-          resume.addEventListener("click", () => sendWorkerControl(runId, worker, "agent_resume", input.value));
+          bindUI("workflows", resume, "click", () => sendWorkerControl(runId, worker, "agent_resume", input.value));
           card.append(input, resume);
           if (!controls.canResume && !controls.pending) { const reason = document.createElement("p"); reason.className = "hint"; reason.textContent = controls.tools === null || controls.seconds === null ? "Saved budget is unavailable." : "This worker has used its tool or time budget."; card.append(reason); }
           if (key === focusedKey && !input.disabled) restoreFocus = input;
         }
         if (controls.active) {
           const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "danger"; cancel.textContent = pending ? "Cancelling..." : "Cancel worker"; cancel.disabled = pending;
-          cancel.addEventListener("click", () => sendWorkerControl(runId, worker, "agent_cancel")); card.append(cancel);
+          bindUI("workflows", cancel, "click", () => sendWorkerControl(runId, worker, "agent_cancel")); card.append(cancel);
         }
         container.append(card);
       }
@@ -3305,7 +3406,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         for (const [index, step] of (session.plan_steps || []).entries()) {
           const item = document.createElement("li"); const row = document.createElement("div"); row.className = "workflow-row";
           const check = document.createElement("input"); check.type = "checkbox"; check.checked = step.status === "done"; check.setAttribute("aria-label", `Complete step ${index + 1}`);
-          check.addEventListener("change", () => sendTaskControl("plan", `${check.checked ? "done" : "pending"} ${index + 1}`));
+          bindUI("workflows", check, "change", () => sendTaskControl("plan", `${check.checked ? "done" : "pending"} ${index + 1}`));
           const input = document.createElement("input"); input.value = step.text; input.setAttribute("aria-label", `Plan step ${index + 1}`);
           row.append(check, input, workflowButton("Save", () => sendTaskControl("plan", `edit ${index + 1} ${input.value}`)));
           item.append(row); list.append(item);
@@ -3345,7 +3446,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           const submit = document.createElement("button"); submit.type = "submit"; submit.textContent = "Run setup";
           const output = document.createElement("pre"); output.className = "diff-patch"; output.hidden = true;
           form.append(commands, label, submit); setup.append(summary, form, output);
-          form.addEventListener("submit", async (event) => {
+          bindUI("workflows", form, "submit", async (event) => {
             event.preventDefault(); if (!approve.checked) return; submit.disabled = true;
             try { const result = await request(`/worktrees/${record.worktree_id}/setup`, { method:"POST", body:JSON.stringify({commands: commands.value.split("\n").filter((item) => item.trim()), approved:true}) });
               output.textContent = result.results.map((item) => item.content).join("\n"); output.hidden = false; approve.checked = false;
@@ -3585,10 +3686,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
         const {mountDashboard} = await import("/assets/cordis-ui.mjs");
         const features = Object.fromEntries(Object.entries(uiBindings).map(([id, bindings]) => [id, {bindings}]));
         features.appearance.setup = () => { initTheme(); initRail(); initMobileSidebar(); };
-        features.appearance.dispose = () => { window.clearTimeout(noticeTimer); };
+        features.appearance.dispose = () => { cancelUI(noticeTimer); };
+        features.plugins.dispose = () => { void closePluginClient(); };
         features.tasks.intervals = [{handler: refreshAll, milliseconds: 3000}];
-        features.tasks.dispose = () => { state.streaming = false; window.clearTimeout(streamTimer); resetStreamNode(); };
+        features.tasks.dispose = () => { state.streaming = false; cancelUI(streamTimer); resetStreamNode(); };
         dashboardUI = await mountDashboard({scope: document, features, onError: error => setNotice(error.message || String(error), true)});
+        for (const bindings of Object.values(uiBindings)) bindings.length = 0;
         document.documentElement.dataset.uiEngine = "cordis";
         document.documentElement.dataset.uiServices = String(dashboardUI.inspect().components.filter(component => component.state === "ACTIVE").length);
         resolveDashboard(dashboardUI);

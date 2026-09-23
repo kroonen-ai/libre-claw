@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field, replace
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Literal, cast
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 import structlog
@@ -61,6 +61,11 @@ from libre_claw.core.memory import (
 )
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.cordis_engine import CordisEngine, CordisEngineError
+from libre_claw.core.cordis_engine_plugins import engine_for
+from libre_claw.core.cordis_bindings import (
+    AUTOMATION_METHODS, MEMORY_METHODS, RUN_METHODS, BoundStore, provider_stream,
+)
+from libre_claw.web.client_plugin_api import ClientPluginAPI
 from libre_claw.core.questions import AgentUserQuestionRequest, validate_answers
 from libre_claw.core.runs import settle_finalization
 from libre_claw.core.cordis_services import CordisServicePool
@@ -91,7 +96,7 @@ from libre_claw.providers.llamacpp import (
     discover_llamacpp_models,
     normalize_llamacpp_base_url,
 )
-from libre_claw.providers.model_catalog import discover_models
+from libre_claw.providers.model_catalog import ModelCatalog, ModelInfo, discover_models
 from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.telegram.formatting import clean_final_answer_for_telegram, plain_text_chunks, telegram_html_chunks
@@ -143,6 +148,8 @@ DASHBOARD_ASSET_TYPES = {
     "lobster-icon.svg": "image/svg+xml",
     "cordis-ui.mjs": "application/javascript",
     "cordis.mjs": "application/javascript",
+    "client-view.mjs": "application/javascript",
+    "client-schema.json": "application/json",
 }
 
 
@@ -177,7 +184,7 @@ class DaemonServer:
         start_telegram_bridge: bool = True,
     ) -> None:
         self.config = config
-        self.engine = CordisEngine()
+        self.engine = engine_for(lambda: self.config)
         self.cordis_manager = cordis_manager(config, persistent=True)
         self.cordis_manager.engine = lambda: self.engine
         self.plugin_services = CordisServicePool(lambda: self.config,
@@ -201,6 +208,7 @@ class DaemonServer:
         self._provider_cooldowns: dict[str, ProviderCooldown] = {}
         self.workflows = WorkflowAPI(self)
         self.plugins = PluginAPI(self, _cordis_local_request)
+        self.client_plugins = ClientPluginAPI(self, _cordis_local_request)
         self.orchestration = OrchestrationAPI(self, _cordis_local_request)
         self._app: web.Application | None = None
         self._automation_task: asyncio.Task[None] | None = None
@@ -208,8 +216,35 @@ class DaemonServer:
         self._shutdown_event: asyncio.Event | None = None
         self._engine_lock = asyncio.Lock()
 
+    @property
+    def run_store(self) -> BoundStore:
+        return self._bound_run_store
+
+    @run_store.setter
+    def run_store(self, store: RunStore) -> None:
+        self._recovery_run_store = store
+        self._bound_run_store = BoundStore(store, lambda: self.engine, RUN_METHODS)
+
+    @property
+    def memory_store(self) -> BoundStore:
+        return self._bound_memory_store
+
+    @memory_store.setter
+    def memory_store(self, store: MemoryStore) -> None:
+        self._bootstrap_memory_store = store
+        self._bound_memory_store = BoundStore(store, lambda: self.engine, MEMORY_METHODS)
+
+    @property
+    def automation_store(self) -> BoundStore:
+        return self._bound_automation_store
+
+    @automation_store.setter
+    def automation_store(self, store: AutomationStore) -> None:
+        self._recovery_automation_store = store
+        self._bound_automation_store = BoundStore(store, lambda: self.engine, AUTOMATION_METHODS)
+
     def app(self, *, host: str | None = None) -> web.Application:
-        app = web.Application(middlewares=[control_api_middleware(host or self.config.daemon.host)])
+        app = web.Application(middlewares=[control_api_middleware(host or self.config.daemon.host), _engine_errors])
         app.add_routes(
             [
                 web.get("/", self.dashboard),
@@ -219,14 +254,14 @@ class DaemonServer:
                 web.get("/engine", self.engine_status),
                 web.post("/engine/restart", self.restart_engine),
                 web.get("/config/model", self.current_model),
-                web.patch("/config/model", self.update_model),
+                self._engine_route(web.patch("/config/model", self.update_model), method="configure"),
                 web.get("/models", self.list_models),
                 web.get("/models/llamacpp", self.list_llamacpp_models),
                 web.get("/config/llamacpp", self.current_llamacpp_config),
-                web.patch("/config/llamacpp", self.update_llamacpp_config),
+                self._engine_route(web.patch("/config/llamacpp", self.update_llamacpp_config), method="configure"),
                 web.get("/config/fallback", self.current_fallback),
-                web.patch("/config/fallback", self.update_fallback),
-                web.patch("/config/theme", self.update_theme),
+                self._engine_route(web.patch("/config/fallback", self.update_fallback), method="configure"),
+                self._engine_route(web.patch("/config/theme", self.update_theme), method="configure"),
                 web.post("/shutdown", self.shutdown),
                 web.get("/runs", self.list_runs),
                 web.post("/runs", self.start_run),
@@ -254,16 +289,17 @@ class DaemonServer:
         )
         app.add_routes([self._engine_route(route) for route in self.workflows.routes()])
         app.add_routes(self.plugins.routes())
+        app.add_routes(self.client_plugins.routes())
         app.add_routes(self.orchestration.routes())
         app.on_startup.append(self._on_startup)
         app.on_cleanup.append(self._on_cleanup)
         self._app = app
         return app
 
-    def _engine_route(self, route: web.RouteDef) -> web.RouteDef:
+    def _engine_route(self, route: web.RouteDef, *, method: str = "run") -> web.RouteDef:
         async def dispatch(request: web.Request) -> web.StreamResponse:
             try:
-                return await self.engine.call("workflows", "run", handler=lambda: route.handler(request))
+                return await self.engine.call("workflows", method, handler=lambda: route.handler(request))
             except CordisEngineError as exc:
                 return _json_error(str(exc), status=503)
         return web.route(route.method, route.path, dispatch, **route.kwargs)
@@ -286,7 +322,7 @@ class DaemonServer:
                 if self.active_runs:
                     return _json_error("Wait for active runs to finish before restarting the engine.", status=409)
                 await self.engine.aclose(cancel_active=False)
-                self.engine = CordisEngine()
+                self.engine = engine_for(lambda: self.config)
                 await self.engine.start()
             return web.json_response(await self.engine.inspect(), headers={"Cache-Control": "no-store"})
         except (ValueError, CordisEngineError) as exc:
@@ -304,7 +340,9 @@ class DaemonServer:
         content_type = DASHBOARD_ASSET_TYPES.get(name)
         if content_type is None:
             return _json_error("Asset not found.", status=404)
-        if name == "cordis.mjs":
+        if name == "client-schema.json":
+            payload = files("libre_claw").joinpath("cordis_runtime", name).read_bytes()
+        elif name == "cordis.mjs":
             payload = files("libre_claw").joinpath("cordis_runtime", "vendor", "cordis.mjs").read_bytes()
         else:
             payload = files("libre_claw.web.assets").joinpath(name).read_bytes()
@@ -336,7 +374,9 @@ class DaemonServer:
             await self.engine.start()
         except CordisEngineError as exc:
             LOGGER.warning("cordis_engine_unavailable", error=str(exc))
-        await self.memory_store.initialize()
+        # Database bootstrap and recovery controls must remain usable if Node
+        # cannot start. Application memory reads/writes use the bound store.
+        await self._bootstrap_memory_store.initialize()
         self._plugin_task = asyncio.create_task(self._plugin_service_loop(), name="cordis-services")
         await self._send_petdex_state("ready", message="Libre Claw daemon ready", details={"surface": "daemon"}, surface="daemon")
         if self.config.automations.enabled:
@@ -372,15 +412,24 @@ class DaemonServer:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._queue_wakeups.clear()
+        await self.client_plugins.close()
         await self.plugins.close()
         await self.plugin_services.aclose()
         await self.cordis_manager.aclose()
         await self.engine.aclose()
 
     async def reconcile_plugins(self) -> None:
+        if self.engine.running:
+            try:
+                await self.engine.verify_plugins()
+            except CordisEngineError as exc:
+                # The registry change succeeded and the old graph stopped.
+                # Continue revoking guests instead of reporting a failed save.
+                LOGGER.warning("cordis_engine_restart_required", error=str(exc))
         self.cordis_manager.config = self.config
         await self.cordis_manager.reconcile_workers(self.config.general.working_directory)
         await self.plugin_services.sync(self.config.general.working_directory)
+        await self.client_plugins.pool.reconcile()
 
     async def _plugin_service_loop(self) -> None:
         while True:
@@ -480,9 +529,9 @@ class DaemonServer:
         default_model = settings.get("default_model", "") if isinstance(settings, Mapping) else ""
         if provider_key == _provider_key(self.config.general.default_provider):
             default_model = self.config.general.default_model
-        catalog = await discover_models(
+        catalog = await self.engine.call("providers", "models", handler=lambda: discover_models(
             self.config, provider, refresh=request.query.get("refresh", "").lower() in {"1", "true"}
-        )
+        ))
         return web.json_response(
             {
                 "provider": provider,
@@ -506,7 +555,7 @@ class DaemonServer:
         except ValueError as exc:
             return _json_error(f"Invalid base_url: {exc}")
         try:
-            models = await discover_llamacpp_models(base_url)
+            models = await self.engine.call("providers", "models", handler=lambda: discover_llamacpp_models(base_url))
         except LlamaCppDiscoveryError as exc:
             return _json_error(str(exc), status=502)
         return web.json_response(
@@ -576,12 +625,13 @@ class DaemonServer:
 
     async def list_runs(self, request: web.Request) -> web.Response:
         limit = _positive_int(request.query.get("limit"), default=20, maximum=100)
-        runs = await self.run_store.list_runs(limit=limit)
+        # Read-only recovery/status endpoints intentionally outlive the engine.
+        runs = await self._recovery_run_store.list_runs(limit=limit)
         return web.json_response({"runs": [_run_payload(run) for run in runs]})
 
     async def get_run(self, request: web.Request) -> web.Response:
         run_id = request.match_info["run_id"]
-        run = await self.run_store.load_run(run_id)
+        run = await self._recovery_run_store.load_run(run_id)
         if run is None:
             return _json_error("Unknown run.", status=404)
         active = self.active_runs.get(run.run_id)
@@ -600,7 +650,7 @@ class DaemonServer:
         run_id = request.match_info["run_id"]
         after = _positive_int(request.query.get("after"), default=0, maximum=10_000_000)
         try:
-            events = await self.run_store.load_events(run_id)
+            events = await self._recovery_run_store.load_events(run_id)
         except ValueError:
             return _json_error("Unknown run.", status=404)
         filtered = [event for event in events if event.event_id > after]
@@ -619,25 +669,31 @@ class DaemonServer:
             return _json_error("Plugin changes require a local JSON request from this dashboard.", status=403)
         try:
             payload = await request.json()
-            if (not isinstance(payload, dict) or "enabled" not in payload or set(payload) - {"enabled", "allow_model"}
-                    or not isinstance(payload["enabled"], bool) or not isinstance(payload.get("allow_model", False), bool)):
-                raise ValueError("Send boolean enabled and optional allow_model fields. Filesystem and direct network grants require the local CLI.")
-            if not payload["enabled"] and payload.get("allow_model"):
-                raise ValueError("Model access requires enabling the plugin.")
+            if (not isinstance(payload, dict) or "enabled" not in payload
+                    or set(payload) - {"enabled", "allow_model", "allow_engine", "allow_client"}
+                    or not all(type(payload.get(field, False)) is bool for field in ("enabled", "allow_model", "allow_engine", "allow_client"))):
+                raise ValueError("Send boolean enabled and optional allow_model/allow_engine/allow_client fields. Filesystem and direct network grants require the local CLI.")
+            if not payload["enabled"] and any(payload.get(field) for field in ("allow_model", "allow_engine", "allow_client")):
+                raise ValueError("Model, core-service or client access requires enabling the plugin.")
             manager = self.cordis_manager
             plugin_id = request.match_info["plugin_id"]
             if payload["enabled"]:
                 if not self.config.cordis.enabled:
                     raise ValueError("Cordis is disabled in configuration.")
                 existing = manager.details(plugin_id, self.config.general.working_directory)
-                retained = existing["grants"] if existing["enabled"] and "allow_model" in payload else {}
+                retained = existing["grants"] if existing["enabled"] else {}
                 await manager.enable_async(plugin_id, self.config.general.working_directory,
-                    allow_model=payload.get("allow_model", False), allow_network=retained.get("allow_network", False),
+                    allow_model=payload.get("allow_model", retained.get("allow_model", False)),
+                    allow_engine=payload.get("allow_engine", retained.get("allow_engine", False)),
+                    allow_client=payload.get("allow_client", retained.get("allow_client", False)),
+                    allow_network=retained.get("allow_network", False),
                     read_paths=retained.get("read_paths", ()), write_paths=retained.get("write_paths", ()))
             else:
                 await asyncio.to_thread(manager.disable, plugin_id, self.config.general.working_directory)
             await self.reconcile_plugins()
-            return web.json_response(await self.plugin_payload(), headers={"Cache-Control": "no-store"})
+            result = await self.plugin_payload()
+            result["engine_restart_required"] = not self.engine.running or payload.get("allow_engine", False)
+            return web.json_response(result, headers={"Cache-Control": "no-store"})
         except (ValueError, OSError, RuntimeError) as exc:
             return _json_error(str(exc))
 
@@ -783,6 +839,8 @@ class DaemonServer:
                 run_config = replace(run_config, general=replace(run_config.general, working_directory=Path(worktree.path)))
             async with self._claim_managed_workspace(run_config.general.working_directory, worktree=worktree) as managed:
                 return await self._start_run_in_workspace(payload, message, kind, run_config, worktree=managed)
+        except CordisEngineError as exc:
+            return _json_error(str(exc), status=503)
         except (ValueError, OSError, RuntimeError) as exc:
             return _json_error(str(exc), status=409)
 
@@ -945,12 +1003,12 @@ class DaemonServer:
 
     async def get_session(self, request: web.Request) -> web.Response:
         run_id = request.match_info["run_id"]
-        run = await self.run_store.load_run(run_id)
+        run = await self._recovery_run_store.load_run(run_id)
         if run is None:
             return _json_error("Unknown run.", status=404)
         session = self._active_sessions.get(run_id)
         if session is None:
-            session = await self.run_store.load_session(run_id)
+            session = await self._recovery_run_store.load_session(run_id)
         active_agent = self._active_agents.get(run_id)
         manager = active_agent.subagents if active_agent is not None else None
         workers = manager.snapshots() if manager is not None else saved_subagent_snapshots(session)
@@ -960,7 +1018,7 @@ class DaemonServer:
         processing = (active is not None and not active.task.done()) or (wakeup is not None and not wakeup.done())
         for worker in workers:
             worker["resume_pending"] = worker["id"] in pending and processing
-        queued = await self.run_store.queued_messages(run_id)
+        queued = await self._recovery_run_store.queued_messages(run_id)
         if getattr(request, "query", {}).get("controls") in {"1", "true"}:
             session_payload = {"mode": session.mode, "plan_steps": session.plan_steps}
             queued = [{**item, "message": item["message"][:1000], "truncated": len(item["message"]) > 1000} for item in queued]
@@ -1135,16 +1193,16 @@ class DaemonServer:
         wakeup = self._queue_wakeups.get(run_id)
         if wakeup is not None and not wakeup.done():
             wakeup.cancel()
-        run = await self.run_store.load_run(run_id)
+        run = await self._recovery_run_store.load_run(run_id)
         if run is None:
             return _json_error("Unknown run.", status=404)
         active = self.active_runs.get(run_id)
         if active is not None and not active.task.done():
             active.task.cancel()
-            await self.run_store.append_event(run_id, "cancel_requested", {"source": "daemon_api"})
+            await self._recovery_run_store.append_event(run_id, "cancel_requested", {"source": "daemon_api"})
             return web.json_response({"run_id": run_id, "cancelled": True, "active": True})
-        await self.run_store.append_event(run_id, "cancelled", {"reason": "Cancelled through daemon API."})
-        await self.run_store.finish_run(
+        await self._recovery_run_store.append_event(run_id, "cancelled", {"reason": "Cancelled through daemon API."})
+        await self._recovery_run_store.finish_run(
             run_id,
             "cancelled",
                 plan=_read_artifact(run, "plan.md"),
@@ -1201,12 +1259,12 @@ class DaemonServer:
 
     async def list_automations(self, request: web.Request) -> web.Response:
         limit = _positive_int(request.query.get("limit"), default=50, maximum=200)
-        automations = await self.automation_store.list(limit=limit)
+        automations = await self._recovery_automation_store.list(limit=limit)
         return web.json_response({"automations": [_automation_payload(record) for record in automations]})
 
     async def get_automation(self, request: web.Request) -> web.Response:
         automation_id = request.match_info["automation_id"]
-        automation = await self.automation_store.load(automation_id)
+        automation = await self._recovery_automation_store.load(automation_id)
         if automation is None:
             return _json_error("Unknown automation.", status=404)
         return web.json_response({"automation": _automation_payload(automation)})
@@ -1277,7 +1335,7 @@ class DaemonServer:
         return web.json_response({"automation": _automation_payload(automation)})
 
     async def pause_automation(self, request: web.Request) -> web.Response:
-        automation = await self.automation_store.update_status(request.match_info["automation_id"], "paused")
+        automation = await self._recovery_automation_store.update_status(request.match_info["automation_id"], "paused")
         if automation is None:
             return _json_error("Unknown automation.", status=404)
         return web.json_response({"automation": _automation_payload(automation)})
@@ -1387,6 +1445,7 @@ class DaemonServer:
         primary_rate_limited = False
         queued: dict[str, Any] | None = None
         message_recorded = False
+        run_store = self.run_store
         try:
             if run.orchestration_plugin:
                 if "orchestration" not in session.checkpoint:
@@ -1394,17 +1453,18 @@ class DaemonServer:
                 config = await asyncio.to_thread(prepare_orchestration, config, self.cordis_manager, session)
             try:
                 from libre_claw.core.git_review import create_checkpoint
-                session.checkpoint["last_turn_tree"] = await create_checkpoint(config.general.working_directory, name=run.run_id)
+                session.checkpoint["last_turn_tree"] = await self.engine.call("workflows", "plan", handler=lambda: create_checkpoint(
+                    config.general.working_directory, name=run.run_id))
             except (ValueError, OSError):
                 session.checkpoint.pop("last_turn_tree", None)
-            await self.run_store.update_state(run.run_id, "running")
+            await run_store.update_state(run.run_id, "running")
             await self._send_petdex_state(
                 "running",
                 message=petdex_message_preview(message),
                 details={"surface": surface, "run_id": run.run_id, "provider": run.provider, "model": run.model},
                 surface=surface,
             )
-            await self.run_store.append_event(
+            await run_store.append_event(
                 run.run_id,
                 "run_continued" if continuation else "run_started",
                 {
@@ -1416,7 +1476,7 @@ class DaemonServer:
                     "telegram_chat_id": telegram_chat_id,
                 },
             )
-            await self.run_store.append_event(
+            await run_store.append_event(
                 run.run_id,
                 "user_message",
                 {
@@ -1433,23 +1493,23 @@ class DaemonServer:
                 deadline_monotonic=deadline_monotonic,
                 deadline_reserve_seconds=deadline_reserve_seconds,
             )
-            agent.checkpoint_callback = lambda current: self.run_store.save_session(run.run_id, current)
+            agent.checkpoint_callback = lambda current: run_store.save_session(run.run_id, current)
             self._active_agents[run.run_id] = agent
             async for event in agent.run(message, attachments=attachments):
                 if isinstance(event, AgentUserQuestionRequest):
                     active = self.active_runs.get(run.run_id)
                     if active is not None:
                         active.pending_questions[event.request_id] = event
-                    await self.run_store.append_event(run.run_id, "user_question",
+                    await run_store.append_event(run.run_id, "user_question",
                         {"request_id": event.request_id, "questions": event.questions})
-                    await self.run_store.update_state(run.run_id, "blocked")
+                    await run_store.update_state(run.run_id, "blocked")
                     continue
                 if isinstance(event, AgentSubagentUpdate):
-                    await self.run_store.append_event(run.run_id, "subagent_update", event.snapshot)
+                    await run_store.append_event(run.run_id, "subagent_update", event.snapshot)
                     continue
                 if isinstance(event, AgentTextDelta):
                     assistant_chunks.append(event.text)
-                    await self.run_store.append_event(run.run_id, "assistant_delta", {"text": event.text})
+                    await run_store.append_event(run.run_id, "assistant_delta", {"text": event.text})
                     continue
                 if isinstance(event, AgentToolCall):
                     await self._send_petdex_state(
@@ -1458,7 +1518,7 @@ class DaemonServer:
                         details={"run_id": run.run_id, **petdex_tool_details(event.call.name, event.call.arguments)},
                         surface=surface,
                     )
-                    await self.run_store.append_event(
+                    await run_store.append_event(
                         run.run_id,
                         "tool_call",
                         {"id": event.call.id, "name": event.call.name, "arguments": dict(event.call.arguments)},
@@ -1474,7 +1534,7 @@ class DaemonServer:
                         details={"run_id": run.run_id, **petdex_tool_details(event.call.name, event.call.arguments)},
                         surface=surface,
                     )
-                    await self.run_store.append_event(
+                    await run_store.append_event(
                         run.run_id,
                         "permission_request",
                         {
@@ -1483,7 +1543,7 @@ class DaemonServer:
                             "arguments": dict(event.call.arguments),
                         },
                     )
-                    await self.run_store.update_state(run.run_id, "blocked")
+                    await run_store.update_state(run.run_id, "blocked")
                     continue
                 if isinstance(event, AgentToolResult):
                     await self._send_petdex_state(
@@ -1492,7 +1552,7 @@ class DaemonServer:
                         details={"run_id": run.run_id, "tool": event.call.name, "is_error": event.result.is_error},
                         surface=surface,
                     )
-                    await self.run_store.append_event(
+                    await run_store.append_event(
                         run.run_id,
                         "tool_result",
                         {
@@ -1507,7 +1567,7 @@ class DaemonServer:
                     continue
                 if isinstance(event, AgentDone):
                     if event.usage is not None:
-                        await self.run_store.append_event(
+                        await run_store.append_event(
                             run.run_id,
                             "usage",
                             _usage_payload(event.usage, provider=run.provider, model=run.model, surface=surface),
@@ -1519,7 +1579,7 @@ class DaemonServer:
                         surface.startswith("automation:")
                         and event.message.startswith("Run deadline reached")
                     ):
-                        await self.run_store.append_event(
+                        await run_store.append_event(
                             run.run_id,
                             "automation_timeout",
                             {
@@ -1544,7 +1604,7 @@ class DaemonServer:
                             failed_provider,
                             event.message,
                         )
-                        await self.run_store.append_event(
+                        await run_store.append_event(
                             run.run_id,
                             "provider_cooldown_started",
                             {
@@ -1562,7 +1622,7 @@ class DaemonServer:
                         details={"surface": surface, "run_id": run.run_id},
                         surface=surface,
                     )
-                    await self.run_store.append_event(run.run_id, "error", {"message": event.message})
+                    await run_store.append_event(run.run_id, "error", {"message": event.message})
                     break
                 if isinstance(event, AgentFallback):
                     if _is_provider_quota_error(event.reason):
@@ -1579,7 +1639,7 @@ class DaemonServer:
                             failed_provider,
                             event.reason,
                         )
-                        await self.run_store.append_event(
+                        await run_store.append_event(
                             run.run_id,
                             "provider_cooldown_started",
                             {
@@ -1597,13 +1657,14 @@ class DaemonServer:
                         details={"run_id": run.run_id, "provider": event.provider_label, "reason": event.reason},
                         surface=surface,
                     )
-                    await self.run_store.append_event(
+                    await run_store.append_event(
                         run.run_id,
                         "provider_fallback",
                         {"provider": event.provider_label, "reason": event.reason},
                     )
                     continue
         except asyncio.CancelledError:
+            run_store = self._recovery_run_store
             state = "cancelled"
             await self._send_petdex_state(
                 "failed",
@@ -1611,9 +1672,11 @@ class DaemonServer:
                 details={"surface": surface, "run_id": run.run_id},
                 surface=surface,
             )
-            await self.run_store.append_event(run.run_id, "cancelled", {"reason": "Daemon task cancelled."})
+            await run_store.append_event(run.run_id, "cancelled", {"reason": "Daemon task cancelled."})
             raise
         except Exception as exc:
+            if isinstance(exc, CordisEngineError):
+                run_store = self._recovery_run_store
             state = "failed"
             await self._send_petdex_state(
                 "error",
@@ -1621,19 +1684,19 @@ class DaemonServer:
                 details={"surface": surface, "run_id": run.run_id},
                 surface=surface,
             )
-            await self.run_store.append_event(run.run_id, "error", {"message": str(exc)})
+            await run_store.append_event(run.run_id, "error", {"message": str(exc)})
         finally:
             if run.orchestration_plugin and queued_claim is not None and not message_recorded:
-                await settle_finalization(asyncio.create_task(self.run_store.release_queued_message(
+                await settle_finalization(asyncio.create_task(run_store.release_queued_message(
                     run.run_id, queued_claim, cancelled=state == "cancelled")))
             self._active_agents.pop(run.run_id, None)
             owner = asyncio.current_task()
             memory_extraction: asyncio.Task[None] | None = None
 
-            async def finalize() -> dict[str, Any] | None:
+            async def finalize_work() -> dict[str, Any] | None:
                 nonlocal memory_extraction
                 try:
-                    await self.run_store.save_session(run.run_id, session)
+                    await run_store.save_session(run.run_id, session)
                 except OSError:
                     LOGGER.warning("session_snapshot_failed", run_id=run.run_id)
                 if state == "done" and (owner is None or not owner.cancelling()):
@@ -1647,24 +1710,40 @@ class DaemonServer:
                     _petdex_final_state(effective_state), message=f"Run {effective_state}",
                     details={"surface": surface, "run_id": run.run_id}, surface=surface,
                 )
-                events = await self.run_store.load_events(run.run_id)
-                return await self.run_store.finish_turn(
+                events = await run_store.load_events(run.run_id)
+                return await run_store.finish_turn(
                     run.run_id, effective_state, plan=run_plan_text(events), summary="".join(assistant_chunks),
                     verification=f"Daemon run finished with state: {effective_state}\n", browser=browser_artifact_text(events),
                     hold_final_state=hold_final_state,
                 )
 
+            async def finalize() -> dict[str, Any] | None:
+                nonlocal state, run_store
+                try:
+                    return await finalize_work()
+                except CordisEngineError as exc:
+                    # A failed engine must not strand a running durable record.
+                    # This path only saves failure state; it never resumes work,
+                    # extracts memory, or dequeues another model request.
+                    run_store = self._recovery_run_store
+                    state = "cancelled" if owner is not None and owner.cancelling() else "failed"
+                    await run_store.save_session(run.run_id, session)
+                    await run_store.append_event(run.run_id, "engine_unavailable", {"message": str(exc)})
+                    await run_store.finish_turn(run.run_id, state, summary="".join(assistant_chunks), drain_queue=False)
+                    return None
+
             finishing = asyncio.create_task(finalize())
             try:
                 queued = await asyncio.shield(finishing)
             except asyncio.CancelledError:
+                run_store = self._recovery_run_store
                 state = "cancelled"
                 if memory_extraction is not None:
                     memory_extraction.cancel()
                 await finishing
-                record = await self.run_store.load_run(run.run_id)
+                record = await run_store.load_run(run.run_id)
                 if record is not None and record.state != "cancelled" and not hold_final_state:
-                    await self.run_store.finish_turn(run.run_id, "cancelled", summary="".join(assistant_chunks), drain_queue=False)
+                    await run_store.finish_turn(run.run_id, "cancelled", summary="".join(assistant_chunks), drain_queue=False)
                 raise
         return state, queued
 
@@ -1869,7 +1948,7 @@ class DaemonServer:
         return await self._with_openrouter_model_limits(config)
 
     async def _record_automation_error(self, automation: AutomationRecord, exc: Exception) -> None:
-        run = await self.run_store.create_run(
+        run = await self._recovery_run_store.create_run(
             f"Scheduled failed: {automation.name}",
             kind="chat",
             provider=automation.provider or self.config.general.default_provider,
@@ -1882,12 +1961,12 @@ class DaemonServer:
             state="failed",
         )
         message = str(exc)
-        await self.run_store.append_event(
+        await self._recovery_run_store.append_event(
             run.run_id,
             "automation_error",
             {"automation_id": automation.automation_id, "name": automation.name, "message": message},
         )
-        await self.run_store.finish_run(
+        await self._recovery_run_store.finish_run(
             run.run_id,
             "failed",
             plan="",
@@ -1945,7 +2024,7 @@ class DaemonServer:
             engine = self.engine
         provider = self.provider_factory(orchestration_provider_settings(config, session))
         fallbacks = create_fallback_providers(config)
-        memory_facts = await self.memory_store.list_always_injected_memories()
+        memory_facts = await self.memory_store.list_always_injected_memories() if config.memory.enabled else []
         skill_store = SkillStore(config.general.working_directory, skills_config=config.skills)
         soul_store = SoulStore(config.general.working_directory)
         permission_manager = PermissionManager(config.permissions)
@@ -1977,7 +2056,7 @@ class DaemonServer:
                 else None
             ),
             soul_provider=soul_store.soul_texts,
-            memory_provider=lambda user_message: self._relevant_memory_texts(config, user_message),
+            memory_provider=(lambda user_message: self._relevant_memory_texts(config, user_message)) if config.memory.enabled else None,
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
             fallback_recheck_after_attempts=config.fallback.recheck_after_attempts,
             deadline_monotonic=deadline_monotonic,
@@ -1996,7 +2075,10 @@ class DaemonServer:
         if provider != "openrouter":
             return config
         try:
-            limits = await detect_openrouter_model_limits(config, model=config.general.default_model)
+            limits = await self.engine.call("providers", "models", handler=lambda: detect_openrouter_model_limits(
+                config, model=config.general.default_model))
+        except CordisEngineError:
+            raise
         except Exception as exc:
             LOGGER.warning(
                 "openrouter_metadata_detection_failed",
@@ -2054,6 +2136,7 @@ class DaemonServer:
             ]
             extracted = await extract_memories_with_provider(
                 provider,
+                engine=self.engine,
                 user_message=user_message,
                 assistant_text=assistant_text,
                 existing_memories=existing,
@@ -2088,25 +2171,27 @@ class DaemonServer:
             )
             provider = self.provider_factory(config)
             chunks: list[str] = []
-            async for event in provider.complete(
+            async with provider_stream(
+                provider, engine=self.engine,
                 messages=[ChatMessage(role="user", content=[text_block(prompt)])],
                 tools=[],
                 system=AUTOMATION_FINALIZER_SYSTEM,
                 temperature=0.0,
                 max_tokens=max(1, config.automations.finalizer_max_tokens),
-            ):
-                if isinstance(event, TextDelta):
-                    chunks.append(event.text)
-                    continue
-                if isinstance(event, ProviderError):
-                    await self.run_store.append_event(
-                        run.run_id,
-                        "automation_finalizer_error",
-                        {"message": event.message},
-                    )
-                    return False
-                if isinstance(event, Done):
-                    continue
+            ) as stream:
+                async for event in stream:
+                    if isinstance(event, TextDelta):
+                        chunks.append(event.text)
+                        continue
+                    if isinstance(event, ProviderError):
+                        await self.run_store.append_event(
+                            run.run_id,
+                            "automation_finalizer_error",
+                            {"message": event.message},
+                        )
+                        return False
+                    if isinstance(event, Done):
+                        continue
             summary = "".join(chunks).strip()
             if not summary:
                 await self.run_store.append_event(
@@ -2136,7 +2221,7 @@ class DaemonServer:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            await self.run_store.append_event(
+            await self._recovery_run_store.append_event(
                 run.run_id,
                 "automation_finalizer_error",
                 {"message": str(exc)},
@@ -2163,6 +2248,20 @@ class DaemonClient:
 
     async def engine_status(self) -> dict[str, Any]:
         return await self._request("GET", "/engine")
+
+    async def restart_engine(self) -> dict[str, Any]:
+        return await self._request("POST", "/engine/restart", json={})
+
+    async def model_catalog(self, provider: str, *, refresh: bool = False) -> ModelCatalog:
+        query = urlencode({"provider": provider, "refresh": "true" if refresh else "false"})
+        payload = await self._request("GET", f"/models?{query}")
+        rows = []
+        for row in payload.get("models", []):
+            values = {key: value for key, value in row.items() if key in ModelInfo.__dataclass_fields__}
+            if isinstance(values.get("supported_reasoning_efforts"), list):
+                values["supported_reasoning_efforts"] = tuple(values["supported_reasoning_efforts"])
+            rows.append(ModelInfo(**values))
+        return ModelCatalog(tuple(rows), str(payload.get("source", "daemon")), str(payload.get("error", "")))
 
     async def answer_question(self, run_id: str, request_id: str, answers: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", f"/runs/{run_id}/questions/{request_id}", json=answers)
@@ -2590,6 +2689,14 @@ def _reject_working_directory_override(config: LibreClawConfig, payload: Mapping
         "Daemon run payload cannot override working_directory. "
         "Start the daemon with --working-directory or update config instead."
     )
+
+
+@web.middleware
+async def _engine_errors(request: web.Request, handler: Callable) -> web.StreamResponse:
+    try:
+        return await handler(request)
+    except CordisEngineError as exc:
+        return _json_error(str(exc), status=503)
 
 
 def _json_error(message: str, *, status: int = 400) -> web.Response:

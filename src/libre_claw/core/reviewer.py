@@ -12,7 +12,7 @@ from pathlib import Path
 
 from libre_claw.config import LibreClawConfig
 from libre_claw.core.agent import Agent, AgentDone, AgentError, AgentPermissionRequest, AgentTextDelta
-from libre_claw.core.cordis_engine import CordisEngine
+from libre_claw.core.cordis_engine_plugins import engine_for
 from libre_claw.core.cordis import CordisManager
 from libre_claw.core.questions import AgentUserQuestionRequest
 from libre_claw.core.git_review import ReviewSnapshot, git_bytes
@@ -89,7 +89,7 @@ async def run_review(
     bind_cordis_manager(registry, cordis)
     registry.register(ReviewSnapshotFileTool(ToolContext(working_directory=Path(snapshot.repository)), snapshot))
     system_prompt += "\nReview the immutable base/target snapshots, not unrelated checkout edits. Use review_snapshot_file to read exact versions and omitted patches. Native CLI tools may use git show <base-or-target>:<path> and git diff <base> <target> -- <path>. Report verification limits for any uninspected or truncated content."
-    engine = CordisEngine()
+    engine = engine_for(config)
     cordis.engine = engine
     agent = Agent(
         engine=engine,

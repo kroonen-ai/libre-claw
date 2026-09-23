@@ -103,7 +103,7 @@ async def test_reviewer_error_closes_stream_before_workers_and_engine(monkeypatc
                 await asyncio.sleep(0)
                 order.append("agent")
 
-    monkeypatch.setattr("libre_claw.core.reviewer.CordisEngine", Engine)
+    monkeypatch.setattr("libre_claw.core.reviewer.engine_for", lambda config: Engine())
     monkeypatch.setattr("libre_claw.core.reviewer.CordisManager", Manager)
     monkeypatch.setattr("libre_claw.core.reviewer.bind_cordis_manager", lambda *args: None)
     monkeypatch.setattr("libre_claw.core.reviewer.create_builtin_registry", lambda *args: ToolRegistry())

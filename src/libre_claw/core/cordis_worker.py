@@ -220,6 +220,16 @@ class CordisWorker:
                     raise _ProtocolError("The plugin runtime returned invalid JSON.") from None
                 if not isinstance(frame, dict):
                     raise _ProtocolError("The plugin runtime returned an invalid frame.")
+                if "host_cancel_id" in frame:
+                    identifier = frame["host_cancel_id"]
+                    if set(frame) != {"host_cancel_id"} or type(identifier) not in {str, int}:
+                        raise _ProtocolError("Invalid host cancellation frame.")
+                    if self._active is not None:
+                        self._active.budget.charge(len(line))
+                    for task in self._host_tasks:
+                        if getattr(task, "_cordis_host_id", None) == identifier and not task.done() and not task.cancelling():
+                            task.cancel()
+                    continue
                 if "host_call_id" in frame:
                     self._accept_host(frame, len(line))
                     continue
@@ -258,6 +268,7 @@ class CordisWorker:
             raise _ProtocolError("The plugin exceeded its host request limit.")
         budget.identifiers.add(identifier)
         task = asyncio.create_task(self._host_request(frame, handler, operation, budget), name="cordis-extension-host")
+        task._cordis_host_id = identifier
         self._host_tasks[task] = operation
         self._active_host_ids.add(identifier)
         task.add_done_callback(lambda finished: self._host_done(finished, identifier))

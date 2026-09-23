@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import threading
 from pathlib import Path
 
 import pytest
@@ -347,3 +348,76 @@ async def test_cancelled_dispatch_does_not_leave_remote_operation(engine, monkey
         await task
     assert not engine.busy
     assert (await engine.inspect())["active_operations"] == 0
+
+
+async def test_dispatch_deadline_includes_a_blocked_pipe_write(engine, monkeypatch):
+    async def blocked_send(frame):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(engine, "_send", blocked_send)
+    monkeypatch.setattr(cordis_engine, "_DISPATCH_TIMEOUT", 0.05)
+    with pytest.raises(CordisEngineError, match="did not dispatch"):
+        async with asyncio.timeout(2):
+            await engine.call("tools", "execute", handler=lambda: pytest.fail("An unwritten request ran"))
+    assert not engine.running
+    assert not engine.busy
+
+
+async def test_cancelled_start_joins_preparation_before_removing_private_files(runtime_supported, monkeypatch):
+    prepare = cordis_engine.prepare_cordis_process
+    entered, release = threading.Event(), threading.Event()
+    directories = []
+
+    def delayed(*args, **kwargs):
+        directories.append(args[3])
+        entered.set()
+        assert release.wait(5)
+        return prepare(*args, **kwargs)
+
+    monkeypatch.setattr(cordis_engine, "prepare_cordis_process", delayed)
+    engine = CordisEngine(node_executable=runtime_supported)
+    task = asyncio.create_task(engine.start())
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+        assert directories and all(not path.exists() for path in directories)
+        assert not engine.running
+    finally:
+        release.set()
+        await engine.aclose()
+
+
+async def test_cancelled_start_joins_a_process_created_during_cancellation(runtime_supported, monkeypatch):
+    spawn = asyncio.create_subprocess_exec
+    entered, release = asyncio.Event(), asyncio.Event()
+    processes = []
+
+    async def delayed(*args, **kwargs):
+        process = await spawn(*args, **kwargs)
+        processes.append(process)
+        entered.set()
+        await release.wait()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed)
+    engine = CordisEngine(node_executable=runtime_supported)
+    task = asyncio.create_task(engine.start())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+        assert processes and all(process.returncode is not None for process in processes)
+        assert engine._temporary is None
+        assert not engine.running
+    finally:
+        release.set()
+        await engine.aclose()

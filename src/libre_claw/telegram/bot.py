@@ -40,6 +40,14 @@ class TelegramBot:
         self.auth = TelegramAuth.from_config(config.telegram)
 
     async def run(self) -> None:
+        try:
+            await self._run()
+        finally:
+            close = getattr(self.bridge, "aclose", None)
+            if close is not None:
+                await close()
+
+    async def _run(self) -> None:
         token = self._bot_token()
         if not token:
             msg = (
@@ -51,6 +59,9 @@ class TelegramBot:
             raise RuntimeError("The python-telegram-bot package is not installed.")
 
         await self.bridge.initialize()
+        start_services = getattr(self.bridge, "start_background_services", None)
+        if start_services is not None:
+            start_services()
         handlers = TelegramHandlers(self.bridge, self.auth)
         application = Application.builder().token(token).build()
         application.add_handler(CommandHandler("start", handlers.start))

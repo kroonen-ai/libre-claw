@@ -4,12 +4,15 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { Service } from '../vendor/cordis.mjs';
+import { registerHostServices, runBoundPtc } from './host-services.mjs';
 import {
   HarnessError, assertObjectJsonSchema, assertSupportedJsonSchema,
   validateJsonSchemaValue, snapshotJsonValue, deepFreeze,
 } from '../vendor/harness-tools.mjs';
 
 export * from '../vendor/harness-tools.mjs';
+export const TOOL_ABORTED = 'ABORTED';
+export const TOOL_ABORTED_BEFORE_DISPATCH = 'ABORTED_BEFORE_DISPATCH';
 
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const MAX_BYTES = 512 * 1024;
@@ -96,7 +99,9 @@ export async function registerHarnessServices(root, {
   const active = new AsyncLocalStorage();
   const lifetime = new AbortController();
   const fibers = [];
+  let presentationMode = 'native';
   let toolsService;
+  let hostServicesAdapter;
   const enabledServices = new Set(typeof hostCall === 'function' ? hostServices : []);
 
   function scopeAllowed(scope) {
@@ -113,7 +118,7 @@ export async function registerHarnessServices(root, {
 
   function syncExposedTools() {
     for (const [name, registration] of registrations) {
-      if (visible(name)) {
+      if (visible(name) && (presentationMode !== 'ptc' || name === 'run_code')) {
         if (!registration.unregister) {
           registration.unregister = registerTool(registration.schema, registration.handler);
           if (typeof registration.unregister !== 'function') throw new TypeError('registerTool must return its disposer.');
@@ -132,16 +137,18 @@ export async function registerHarnessServices(root, {
     return call;
   }
 
-  async function invokeHost(method, params) {
+  async function invokeHost(method, params, signal) {
     const call = requireCall();
+    const combined = signal ? AbortSignal.any([call.exec.signal, signal]) : call.exec.signal;
+    combined.throwIfAborted();
     if (typeof hostCall !== 'function') throw new HarnessError('The requested host service is unavailable.', 'UNSUPPORTED_SERVICE');
     // The host derives project/run authority from the outer invocation. These
     // identifiers correlate events; they must never grant access on their own.
     const result = await hostCall(method, json(params), {
-      signal: call.exec.signal, callId: call.exec.callId,
+      signal: combined, callId: call.exec.callId,
       agentId: call.exec.agent?.id, sessionId: call.exec.agent?.session.id,
     });
-    call.exec.signal.throwIfAborted();
+    combined.throwIfAborted();
     return result;
   }
 
@@ -193,13 +200,15 @@ export async function registerHarnessServices(root, {
     if (record && (record.invalid || rewritten || (lastIncoming !== undefined && lastIncoming < record.seq))) {
       if (record.active) throw new HarnessError('Cannot replace a session during an active call.', 'INVALID_SESSION');
       sessionCache.delete(source.id);
+      hostServicesAdapter?.releaseAgent(record.agent);
       record = undefined;
     }
     if (!record) {
       if (sessionCache.size >= 32) {
-        const oldest = [...sessionCache.values()].find(item => item.active === 0);
+        const oldest = [...sessionCache.values()].find(item => item.active === 0 && !hostServicesAdapter?.hasActiveJobs(item.agent));
         if (!oldest) throw new HarnessError('All plugin session slots are active.', 'INVALID_SESSION');
         sessionCache.delete(oldest.session.id);
+        hostServicesAdapter?.releaseAgent(oldest.agent);
       }
       record = { events: [], seq: 0, active: 0, invalid: false, session: undefined, agent: undefined };
       const session = {
@@ -229,7 +238,8 @@ export async function registerHarnessServices(root, {
         },
       };
       record.session = Object.freeze(session);
-      record.agent = Object.freeze({ id: agentId, session: record.session, ctx: root });
+      record.agent = hostServicesAdapter?.createAgent(agentId, record.session)
+        ?? Object.freeze({ id: agentId, session: record.session, ctx: root });
       sessions.add(session);
       sessionRecords.set(session, record);
     }
@@ -312,7 +322,7 @@ export async function registerHarnessServices(root, {
           outcome = await root.waterfall(toolsService, 'tools/execute', exec, async () => {
             exec.signal = AbortSignal.any([callerSignal, exec.signal]);
             exec.signal.throwIfAborted();
-            return canonical(await definition.execute(args, exec));
+            return canonical(await (hostServicesAdapter?.withAgent(exec.agent, () => definition.execute(args, exec)) ?? definition.execute(args, exec)));
           });
           await call.pending;
           if (outcome?.isError === false) {
@@ -370,7 +380,7 @@ export async function registerHarnessServices(root, {
     constructor(ctx) { super(ctx, 'tools'); toolsService = this; }
 
     register(definition) {
-      if (!definition || !NAME.test(definition.name ?? '') || definition.name === 'run_code'
+      if (!definition || !NAME.test(definition.name ?? '')
         || typeof definition.description !== 'string' || typeof definition.execute !== 'function'
         || !definition.output || typeof definition.output.render !== 'function') {
         throw new TypeError('A Harness tool requires a name, description, parameters, execute, and output schema/render.');
@@ -448,8 +458,38 @@ export async function registerHarnessServices(root, {
       });
     }
     presentAs(mode) {
-      if (mode !== 'native') throw new HarnessError('Programmatic tool calling requires a compatible PTC runtime.', 'UNSUPPORTED_SERVICE');
-      return this.ctx.effect(() => () => {});
+      if (!['native', 'ptc', 'both'].includes(mode)) throw new TypeError('Unknown tool presentation mode.');
+      if (mode === 'native') return this.ctx.effect(() => () => {});
+      const runtime = this.ctx.get('ptcRuntime');
+      if (!runtime) throw new HarnessError('Programmatic tool calling requires a compatible PTC runtime.', 'UNSUPPORTED_SERVICE');
+      const previous = presentationMode;
+      const unregister = this.register({ name: 'run_code',
+        description: 'Run a bounded TypeScript program. Call tools.<name>(arguments) to invoke the registered tools; each host effect retains its permissions. Top-level await and return are supported.',
+        parameters: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'], additionalProperties: false },
+        output: { schema: { type: 'object' }, render: (_args, result) => [{ type: 'text', text: JSON.stringify(result) }] },
+        execute: async (args, exec) => {
+          const bindingsLifetime = new AbortController();
+          const bindingSignal = AbortSignal.any([exec.signal, bindingsLifetime.signal]);
+          const functions = Object.create(null);
+          for (const name of registrations.keys()) if (name !== 'run_code' && visible(name, exec.agent)) {
+            functions[name] = async arguments_ => {
+              const result = await this.execute({ name, arguments: arguments_, signal: bindingSignal });
+              if (result.isError) throw new Error(result.error?.message ?? 'Tool execution failed.');
+              if (result.additionalContexts) requireCall().additionalContexts.push(...result.additionalContexts);
+              return result.value;
+            };
+          }
+          return runBoundPtc(runtime, runtime.resolve({ program: args.code, signal: exec.signal,
+            bindings: [{ global: 'tools', functions, errorClass: { name: 'ToolError', memberNameProperty: 'toolName' } }] }), bindingsLifetime);
+        },
+      });
+      const prompt = this.ctx.get('systemPrompt');
+      const removeGuidance = prompt?.section({ name: 'tools:ptc', order: prompt.getSectionOrder('TOOL_READ') - 1,
+        text: ({ scope }) => `Programmatic tool API (each call returns the tool's structured value):\n${JSON.stringify(this.schemas(scope).filter(tool => tool.name !== 'run_code'))}` });
+      return this.ctx.effect(() => {
+        presentationMode = mode; syncExposedTools();
+        return () => { unregister(); removeGuidance?.(); presentationMode = previous; syncExposedTools(); };
+      });
     }
   }
 
@@ -459,7 +499,7 @@ export async function registerHarnessServices(root, {
       const call = requireCall();
       if (request.agent && request.agent !== call.exec.agent) throw new HarnessError('Cannot select a different question recipient.', 'INVALID_SESSION');
       request.signal?.throwIfAborted();
-      const result = await invokeHost('userQuestions.ask', { questions: request.questions });
+      const result = await invokeHost('userQuestions.ask', { questions: request.questions }, request.signal);
       request.signal?.throwIfAborted();
       return json(result, 'Question answers');
     }
@@ -533,13 +573,26 @@ export async function registerHarnessServices(root, {
     if (enabledServices.has('userQuestions')) fibers.push(await root.plugin(UserQuestions));
     if (enabledServices.has('sessionProjections')) fibers.push(await root.plugin(SessionProjections));
     if (enabledServices.has('llm')) fibers.push(await root.plugin(Llm));
+    hostServicesAdapter = await registerHostServices(root, {
+      enabled: enabledServices, hostData, requireCall, invokeHost, hostCall, executionContext: () => active.getStore(),
+    });
   } catch (error) {
     for (const fiber of fibers.reverse()) await fiber.dispose();
     throw error;
   }
-  const dispose = async () => { lifetime.abort(); for (const fiber of [...fibers].reverse()) await fiber.dispose(); sessionCache.clear(); };
+  const dispose = async () => { lifetime.abort(); await hostServicesAdapter?.dispose(); for (const fiber of [...fibers].reverse()) await fiber.dispose(); sessionCache.clear(); };
+  dispose.prompt = async provided => {
+    const call = makeCall('__prompt__', {}, provided);
+    try {
+      return await active.run(call, async () => {
+        const result = await hostServicesAdapter.prompt({ scope: call.exec.agent, agent: call.exec.agent, signal: call.exec.signal });
+        await call.pending;
+        return result;
+      });
+    } finally { call.closed = true; if (call.sessionRecord) call.sessionRecord.active--; }
+  };
   dispose.inspect = () => ({
-    services: ['tools', ...['userQuestions', 'sessionProjections', 'llm'].filter(name => enabledServices.has(name))],
+    services: ['tools', ...enabledServices],
     tools: [...registrations.keys()].sort(), projections: [...projections.keys()].sort(), sessions: sessionCache.size,
   });
   return dispose;

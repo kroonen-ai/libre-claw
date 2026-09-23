@@ -235,7 +235,7 @@ async def test_headless_consumer_error_closes_agent_before_plugin_and_engine_res
     def fail_consumer(text):
         raise RuntimeError("consumer stopped")
 
-    monkeypatch.setattr("libre_claw.headless.CordisEngine", Engine)
+    monkeypatch.setattr("libre_claw.headless.engine_for", lambda _config: Engine())
     monkeypatch.setattr("libre_claw.headless.CordisManager", Manager)
     monkeypatch.setattr("libre_claw.headless.bind_cordis_manager", lambda *args: None)
     monkeypatch.setattr("libre_claw.headless.Agent", StreamAgent)

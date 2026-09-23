@@ -1,7 +1,8 @@
 // Copyright 2026 Kroonen AI. SPDX-License-Identifier: Apache-2.0
 // Rebuild only the audited schema/value code, never Harness's provider stack.
 import { build } from 'esbuild';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, realpath } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -57,6 +58,7 @@ await build({
   banner: { js: `// Generated from Harness ${record.revision}; see compat/upstream.json and compat/upstream/LICENSE.` },
 });
 for (const [packageName, filename, exports] of [
+  ['diff', 'diff', "export * from 'diff';"],
   ['@deepseek-ai/cosmokit', 'cosmokit', "export * from '@deepseek-ai/cosmokit';"],
   ['@deepseek-ai/schemastery', 'schemastery', "export { default } from '@deepseek-ai/schemastery'; export * from '@deepseek-ai/schemastery';"],
   ['zod', 'zod', "export * from 'zod'; export { default } from 'zod';"],
@@ -75,3 +77,28 @@ for (const [packageName, filename, exports] of [
     await readFile(path.join(directory, 'node_modules', packageName, 'LICENSE')),
   );
 }
+await build({
+  ...options, entryPoints: [path.join(upstream, 'values.ts')],
+  outfile: path.join(directory, 'vendor/harness-values.mjs'),
+  banner: { js: `// Generated from Harness ${record.revision}; see compat/upstream.json and compat/upstream/LICENSE.` },
+});
+await build({
+  ...options,
+  stdin: { contents: "export { default as React } from 'react'; export * as jsxRuntime from 'react/jsx-runtime'; export { default as Reconciler } from 'react-reconciler'; export * as ReconcilerConstants from 'react-reconciler/constants.js';",
+    resolveDir: directory, sourcefile: 'client-react-entry.mjs' },
+  define: { 'process.env.NODE_ENV': '"production"' },
+  outfile: path.join(directory, 'vendor/client-react.mjs'),
+  banner: { js: '// React 18.3.1 and react-reconciler 0.29.2. See THIRD_PARTY_NOTICES.md.' },
+});
+const licensed = new Set();
+async function clientLicense(name, locate = createRequire(import.meta.url)) {
+  if (licensed.has(name)) return;
+  licensed.add(name);
+  const manifest = await realpath(locate.resolve(`${name}/package.json`));
+  await writeFile(path.join(directory, `vendor/${name.toUpperCase()}-LICENSE`), await readFile(path.join(path.dirname(manifest), 'LICENSE')));
+  for (const dependency of Object.keys(JSON.parse(await readFile(manifest, 'utf8')).dependencies ?? {})) {
+    await clientLicense(dependency, createRequire(manifest));
+  }
+}
+await clientLicense('react');
+await clientLicense('react-reconciler');
