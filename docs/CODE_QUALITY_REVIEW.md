@@ -99,6 +99,14 @@ coverage. The targeted tests pass with deprecations treated as errors on both
 Click 8.4 and 8.5. CI now treats all Python warnings as errors so new warnings
 cannot pass unnoticed.
 
+That stricter check exposed a SQLite acquisition race on Python 3.13 and 3.14.
+If a task was cancelled while aiosqlite's worker opened the database, its future
+could discard the newly created connection before the context manager took
+ownership. Every MemoryStore connection now joins acquisition and closure despite
+repeated cancellation, then propagates cancellation or the existing operation
+error. Delayed SQLite operations exercise these races without relying on garbage
+collection timing.
+
 The AI findings page still displays the eleven June suggestions reviewed above.
 Their applicable changes were committed in `8a55fa3`. GitHub currently offers
 no dismissal action there and reports that organization AI usage is blocked

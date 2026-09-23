@@ -6,7 +6,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ import aiosqlite
 
 from libre_claw.core.session import ChatMessage, Session
 from libre_claw.core.session import text_block
+from libre_claw.core.runs import settle_finalization
 from libre_claw.providers.base import LLMProvider, ProviderError, TextDelta
 
 
@@ -76,6 +78,31 @@ class ExtractedMemory:
     text: str
 
 
+@asynccontextmanager
+async def _memory_connection(path: Path) -> AsyncIterator[aiosqlite.Connection]:
+    """Retain ownership of threaded SQLite acquisition and close during cancellation."""
+    async def connect() -> aiosqlite.Connection:
+        return await aiosqlite.connect(path)
+
+    db: aiosqlite.Connection | None = None
+    completed = False
+    try:
+        # Cancelling aiosqlite's acquisition future can discard a connection
+        # created later by its worker. Join acquisition so it can be closed.
+        db, cancelled = await settle_finalization(asyncio.create_task(connect()))
+        if cancelled:
+            raise asyncio.CancelledError
+        yield db
+        completed = True
+    finally:
+        if db is not None:
+            _, cancelled = await settle_finalization(asyncio.create_task(db.close()))
+            # Keep an existing body/acquisition exception; cancellation during
+            # otherwise successful cleanup must still reach the caller.
+            if cancelled and completed:
+                raise asyncio.CancelledError
+
+
 class MemoryStore:
     """SQLite-backed persistent memory for facts, sessions, and file edits."""
 
@@ -86,7 +113,7 @@ class MemoryStore:
 
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             await db.execute("PRAGMA journal_mode=WAL")
             await db.execute(
                 """
@@ -146,7 +173,7 @@ class MemoryStore:
         await self.initialize()
         created_at = _now_seconds()
         redacted = redact_secrets(fact)
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             cursor = await db.execute(
                 "INSERT INTO facts (fact, created_at) VALUES (?, ?)",
                 (redacted, created_at),
@@ -166,7 +193,7 @@ class MemoryStore:
 
     async def list_facts(self) -> list[MemoryFact]:
         await self.initialize()
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             cursor = await db.execute("SELECT id, fact, created_at FROM facts ORDER BY id")
             rows = await cursor.fetchall()
         return [MemoryFact(id=row[0], fact=row[1], created_at=row[2]) for row in rows]
@@ -174,7 +201,7 @@ class MemoryStore:
     async def forget_fact(self, fact_id: int) -> bool:
         await self.initialize()
         now = _now_seconds()
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             cursor = await db.execute("DELETE FROM facts WHERE id = ?", (fact_id,))
             await db.execute(
                 """
@@ -204,7 +231,7 @@ class MemoryStore:
             raise ValueError("Memory text cannot be empty.")
         source = source_id or f"manual:{uuid4().hex}"
         root = _project_root_text(project_root)
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             item_id = await _upsert_memory_item(
                 db,
                 kind=_clean_label(kind, default="fact"),
@@ -223,7 +250,7 @@ class MemoryStore:
     async def list_memory_items(self, *, include_disabled: bool = False, limit: int = 50) -> list[MemoryItem]:
         await self.initialize()
         where = "" if include_disabled else "WHERE disabled_at IS NULL"
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             cursor = await db.execute(
                 f"""
                 SELECT id, kind, scope, text, source_type, source_id, project_root, created_at, updated_at, disabled_at
@@ -239,7 +266,7 @@ class MemoryStore:
 
     async def list_always_injected_memories(self, *, limit: int = 100) -> list[str]:
         await self.initialize()
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             cursor = await db.execute(
                 """
                 SELECT text
@@ -256,7 +283,7 @@ class MemoryStore:
 
     async def get_memory_item(self, item_id: int) -> MemoryItem | None:
         await self.initialize()
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             cursor = await db.execute(
                 """
                 SELECT id, kind, scope, text, source_type, source_id, project_root, created_at, updated_at, disabled_at
@@ -281,7 +308,7 @@ class MemoryStore:
         root = _project_root_text(project_root)
         if not cleaned:
             return await self.list_memory_items(include_disabled=include_disabled, limit=limit)
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             rows = await _search_memory_fts(
                 db,
                 cleaned,
@@ -302,7 +329,7 @@ class MemoryStore:
     async def forget_memory_item(self, item_id: int) -> bool:
         await self.initialize()
         now = _now_seconds()
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             cursor = await db.execute(
                 """
                 UPDATE memory_items
@@ -317,7 +344,7 @@ class MemoryStore:
 
     async def memory_status(self) -> dict[str, int]:
         await self.initialize()
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             active = await db.execute_fetchall("SELECT COUNT(*) FROM memory_items WHERE disabled_at IS NULL")
             disabled = await db.execute_fetchall("SELECT COUNT(*) FROM memory_items WHERE disabled_at IS NOT NULL")
             sessions = await asyncio.to_thread(_count_session_archives, self.session_root)
@@ -389,7 +416,7 @@ class MemoryStore:
         now = _now_seconds()
         summary_text = summary or session.summary or ""
         messages_json = json.dumps([message.as_provider_dict() for message in session.messages])
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             await db.execute(
                 """
                 INSERT INTO sessions (name, summary, messages_json, created_at, updated_at)
@@ -410,7 +437,7 @@ class MemoryStore:
 
     async def load_session(self, name: str) -> StoredSession | None:
         await self.initialize()
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             cursor = await db.execute(
                 "SELECT id, name, summary, messages_json, created_at, updated_at FROM sessions WHERE name = ?",
                 (name,),
@@ -430,7 +457,7 @@ class MemoryStore:
 
     async def list_sessions(self) -> list[StoredSession]:
         await self.initialize()
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             cursor = await db.execute(
                 "SELECT id, name, summary, messages_json, created_at, updated_at FROM sessions ORDER BY updated_at DESC"
             )
@@ -450,7 +477,7 @@ class MemoryStore:
     async def log_file_edit(self, path: str, tool_name: str, before: str, after: str) -> FileEditLog:
         await self.initialize()
         created_at = _now_seconds()
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             cursor = await db.execute(
                 """
                 INSERT INTO file_edits (path, tool_name, before, after, created_at)
@@ -470,7 +497,7 @@ class MemoryStore:
 
     async def list_file_edits(self) -> list[FileEditLog]:
         await self.initialize()
-        async with aiosqlite.connect(self.path) as db:
+        async with _memory_connection(self.path) as db:
             cursor = await db.execute(
                 "SELECT id, path, tool_name, before, after, created_at FROM file_edits ORDER BY id"
             )
