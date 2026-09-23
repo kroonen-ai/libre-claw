@@ -226,6 +226,22 @@ class Agent:
         except CordisEngineError as exc:
             yield AgentError(message=str(exc))
 
+    async def step(self) -> AsyncIterator[AgentEvent]:
+        """Plan one response over an externally owned, complete transcript.
+
+        Embedders such as Libre WebUI keep their durable transcript and tool
+        approvals authoritative. This runs the same agent and provider service
+        graph, but yields ownership back before executing any requested tools.
+        No synthetic user message is appended and no tool capability is needed.
+        """
+        def stream() -> AsyncIterator[AgentEvent]:
+            return self._run_turn("", (), append_user=False, single_step=True)
+
+        source = stream() if self.engine is None else self.engine.stream("agent", "run", handler=stream)
+        async with aclosing(source) as events:
+            async for event in events:
+                yield event
+
     async def _run_local(
         self, user_message: str, attachments: Sequence[UserAttachment],
     ) -> AsyncIterator[AgentEvent]:
@@ -285,9 +301,11 @@ class Agent:
 
     async def _run_turn(
         self, user_message: str, attachments: Sequence[UserAttachment],
+        *, append_user: bool = True, single_step: bool = False,
     ) -> AsyncIterator[AgentEvent]:
         self.session.recover_interrupted_tools()
-        self.session.add_user_message(user_message, attachments=attachments)
+        if append_user:
+            self.session.add_user_message(user_message, attachments=attachments)
         await self._checkpoint()
         await self._refresh_instructions()
         self._active_soul = await self._load_soul()
@@ -456,7 +474,7 @@ class Agent:
             if not tool_calls:
                 self._save_assistant_text(assistant_chunks, reasoning_chunks)
                 await self._checkpoint()
-                if self.session.pending_steering or self.session.pending_subagent_resumes:
+                if not single_step and (self.session.pending_steering or self.session.pending_subagent_resumes):
                     continue
                 if self.subagents is not None:
                     turn_usage = combine_usage(turn_usage, self.subagents.total_usage())
@@ -472,6 +490,10 @@ class Agent:
 
             self._save_assistant_tool_request(assistant_chunks, reasoning_chunks, tool_calls)
             await self._checkpoint()
+
+            if single_step:
+                yield AgentDone(turn_usage)
+                return
 
             immediate_results: dict[str, ToolResult] = {}
             executable_calls: list[ToolCall] = []

@@ -149,6 +149,14 @@ def main(
     _run_tui(ctx)
 
 
+@main.command("bridge")
+def bridge_command() -> None:
+    """Serve the private Libre WebUI embedding protocol over stdio."""
+    from libre_claw.bridge import main as bridge_main
+
+    bridge_main()
+
+
 @main.command("tui")
 @click.option(
     "--mouse/--no-mouse",

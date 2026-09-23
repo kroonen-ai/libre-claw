@@ -1173,3 +1173,47 @@ def test_prompt_cache_boundary_preserves_complete_prompt_text() -> None:
     ])
     # Native/plain-string providers and trajectory JSON still get all context.
     assert json.loads(json.dumps({"system": prompt}))["system"] == str(prompt)
+
+
+async def test_external_step_preserves_complete_history_without_host_io(monkeypatch):
+    from libre_claw.core.instructions import InstructionLoader
+
+    session = Session(messages=[
+        ChatMessage(role="user", content=[text_block("Read the approved sandbox file.")]),
+        ChatMessage(role="assistant", content=[provider_reasoning_block("Keep signed reasoning", "fixture"),
+                                               tool_use_block("prior-call", "read_file", {"path": "notes.txt"})]),
+        ChatMessage(role="user", content=[tool_result_block("prior-call", "Canonical sandbox result")]),
+    ])
+    original = json.loads(json.dumps([m.as_provider_dict() for m in session.messages]))
+    provider = ScriptedProvider([[ToolCallReady("next-call", "write_file", {"path": "out.txt", "content": "planned"}), Done(stop_reason="tool_calls")]])
+    agent = Agent(session, provider, ToolRegistry(), PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=False)), "Canonical system prompt")
+    def unexpected_read(*args, **kwargs):
+        raise AssertionError("An external step must not read host instructions or files")
+    monkeypatch.setattr(InstructionLoader, "load", unexpected_read)
+    monkeypatch.setattr(Path, "read_text", unexpected_read)
+    events = [event async for event in agent.step()]
+    assert [m.as_provider_dict() for m in provider.received_messages[0]] == original
+    assert [m.as_provider_dict() for m in session.messages[:-1]] == original
+    assert len(provider.received_messages) == 1
+    assert provider.received_tools == [[]]
+    assert any(isinstance(event, AgentToolCall) and event.call.id == "next-call" for event in events)
+    assert not any(isinstance(event, (AgentPermissionRequest, AgentToolResult)) for event in events)
+    assert isinstance(events[-1], AgentDone)
+
+
+async def test_external_step_does_not_consume_new_steering_in_another_provider_call():
+    session = Session()
+    session.add_user_message("Canonical first message")
+    class SteeringProvider(ScriptedProvider):
+        async def complete(self, *args, **kwargs):
+            async for event in super().complete(*args, **kwargs):
+                if isinstance(event, Done):
+                    session.pending_steering.append("New guidance belongs to the next external step")
+                yield event
+    provider = SteeringProvider([[TextDelta("One complete response"), Done(stop_reason="stop")]])
+    agent = Agent(session, provider, ToolRegistry(), PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=False)), "")
+    events = [event async for event in agent.step()]
+    assert len(provider.received_messages) == 1
+    assert isinstance(events[-1], AgentDone)
+    assert session.pending_steering == ["New guidance belongs to the next external step"]
+    assert len(session.messages) == 2
