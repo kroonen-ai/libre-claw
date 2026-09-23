@@ -213,7 +213,7 @@ async def wait_json(path):
         if path.is_file():
             return json.loads(path.read_text())
         await asyncio.sleep(0.01)
-    pytest.fail("Background fixture did not complete")
+    raise AssertionError("Background fixture did not complete")
 
 
 async def test_request_host_handler_is_revoked_before_late_background_calls(tmp_path, node_executable):

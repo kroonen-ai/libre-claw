@@ -1,6 +1,7 @@
 # Cordis network and privacy review
 
-Reviewed on September 23, 2026 against the Cordis integration at `d871ee5`.
+Reviewed on September 23, 2026 against the original Cordis integration at
+`d871ee5`, then extended for the engine and Harness adaptation at `75360d4`.
 This review covers the bundled framework, its local runtime, and Libre Claw's
 Python bridge. It is not a guarantee about arbitrary third-party plugins or
 other programs on the machine.
