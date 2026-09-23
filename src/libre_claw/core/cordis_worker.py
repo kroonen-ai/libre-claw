@@ -279,7 +279,9 @@ class CordisWorker:
         task.add_done_callback(lambda finished: self._host_done(finished, identifier))
 
     def _host_done(self, task: asyncio.Task[None], identifier: str | int) -> None:
-        self._host_tasks.pop(task, None)
+        if task not in self._host_tasks:
+            return  # A joined task's deferred callback may arrive later.
+        self._host_tasks.pop(task)
         self._active_host_ids.discard(identifier)
         if not task.cancelled():
             with contextlib.suppress(Exception):
@@ -360,6 +362,10 @@ class CordisWorker:
                 task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+            # gather may return before a completed task's scheduled callbacks.
+            # Ownership is released only once both work and accounting are gone.
+            for task in tasks:
+                self._host_done(task, getattr(task, "_cordis_host_id"))
 
     async def _stop(self) -> None:
         self._closed = True

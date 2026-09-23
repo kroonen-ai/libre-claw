@@ -401,3 +401,21 @@ async def test_cancelled_worker_start_joins_created_process_and_pipes(tmp_path, 
     finally:
         release.set()
         await worker.aclose()
+
+
+async def test_joined_host_tasks_retire_before_deferred_done_callbacks(tmp_path, node_executable):
+    worker, _ = worker_fixture(tmp_path, node_executable, COUNTER)
+    async def completed():
+        return None
+    task = asyncio.create_task(completed())
+    await task
+    task._cordis_host_id = "reused-after-join"
+    worker._host_tasks[task] = None
+    worker._active_host_ids.add(task._cordis_host_id)
+    await worker._join_host_tasks(all_tasks=True)
+    assert not worker._host_tasks
+    assert not worker._active_host_ids
+    # A late callback cannot revoke an identifier claimed by a later operation.
+    worker._active_host_ids.add(task._cordis_host_id)
+    worker._host_done(task, task._cordis_host_id)
+    assert worker._active_host_ids == {task._cordis_host_id}
