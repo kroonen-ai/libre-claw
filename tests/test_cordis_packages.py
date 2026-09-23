@@ -13,7 +13,6 @@ import shutil
 import tarfile
 import threading
 from dataclasses import replace
-from pathlib import Path
 
 import httpx
 import pytest

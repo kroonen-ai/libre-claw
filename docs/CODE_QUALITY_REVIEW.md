@@ -16,6 +16,15 @@ This disposition applies to the reviewed occurrences, not every future finding
 from these rules. In particular, new task-wait findings must be checked for
 their lifecycle and cancellation effects before dismissal.
 
+The September 23 plugin-manager scan added task-wait findings in
+`web/plugins_api.py` and `tests/test_cordis_packages.py`, and reissued the
+existing daemon and Cordis cleanup waits after line changes. These eight
+occurrences were reviewed individually. The API wait retains the transaction
+lock until a cancelled write finishes; the tests await errors, staging cleanup,
+and a scheduled worker release. The existing waits complete runtime disposal,
+memory extraction, and final run persistence. All eight remain necessary. The
+same scan's unused import and mutation inside an assertion were corrected.
+
 ## Saved AI suggestions
 
 The eleven saved suggestions for CLI, daemon, Petdex, and tool tests were also

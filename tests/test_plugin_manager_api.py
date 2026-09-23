@@ -84,9 +84,12 @@ async def test_preview_can_be_cancelled_and_is_required_before_install(plugin_cl
     preview = await (await client.post("/plugins/preview", json={"source": "builtin:text-utilities"})).json()
     assert len(preview["digest"]) == 64
     assert CordisManager().list_plugins(server.config.general.working_directory) == []
-    assert (await client.delete(f"/plugins/preview/{preview['token']}")).status == 200
-    assert (await client.post("/plugins/install", json={"token": preview["token"]})).status == 400
-    assert (await client.post("/plugins/install", json={"source": "builtin:text-utilities"})).status == 400
+    discarded = await client.delete(f"/plugins/preview/{preview['token']}")
+    assert discarded.status == 200
+    expired = await client.post("/plugins/install", json={"token": preview["token"]})
+    assert expired.status == 400
+    unchecked = await client.post("/plugins/install", json={"source": "builtin:text-utilities"})
+    assert unchecked.status == 400
     assert CordisManager().list_plugins(server.config.general.working_directory) == []
 
 
@@ -109,14 +112,17 @@ async def test_plugin_management_rejects_foreign_origins(plugin_client, method, 
 async def test_management_rejects_extra_grants_and_malformed_payloads(plugin_client):
     client, _ = plugin_client
     for payload in ([], {"source": "builtin:text-utilities", "allow_network": True}, {"source": 123}):
-        assert (await client.post("/plugins/preview", json=payload)).status == 400
+        rejected = await client.post("/plugins/preview", json=payload)
+        assert rejected.status == 400
     bad_json = await client.post("/plugins/preview", data="{", headers={"Content-Type": "application/json"})
     assert bad_json.status == 400
-    assert (await client.post("/plugins/preview", data='{"source":"builtin:text-utilities"}')).status == 415
+    wrong_type = await client.post("/plugins/preview", data='{"source":"builtin:text-utilities"}')
+    assert wrong_type.status == 415
     await install_example(client)
     extra = await client.put("/plugins/text-utilities/config", json={"config": {}, "allow_network": True})
     assert extra.status == 400
-    assert (await client.post("/plugins/text-utilities/inspect", json={})).status == 400
+    inactive = await client.post("/plugins/text-utilities/inspect", json={})
+    assert inactive.status == 400
 
 
 def test_plugin_changes_refresh_between_turns_and_preserve_other_tools(tmp_path, monkeypatch):
@@ -145,10 +151,14 @@ async def test_cli_and_tui_offer_install_catalog_and_configuration(tmp_path, mon
     monkeypatch.setenv("HOME", str(tmp_path))
     config = load_config(working_directory=tmp_path)
     runner = CliRunner()
-    assert "Text utilities" in await plugin_command(config, "catalog")
-    assert "disabled" in await plugin_command(config, "install builtin:text-utilities")
-    assert "next message" in await plugin_command(config, "enable text-utilities")
-    assert "remains enabled" in await plugin_command(config, "install builtin:text-utilities")
+    catalog = await plugin_command(config, "catalog")
+    assert "Text utilities" in catalog
+    installed = await plugin_command(config, "install builtin:text-utilities")
+    assert "disabled" in installed
+    enabled = await plugin_command(config, "enable text-utilities")
+    assert "next message" in enabled
+    reinstalled = await plugin_command(config, "install builtin:text-utilities")
+    assert "remains enabled" in reinstalled
     details = json.loads(await plugin_command(config, "details text-utilities"))
     assert details["config"] == {"include_characters": True}
     result = runner.invoke(main, ["--working-directory", str(tmp_path), "cordis", "config", "text-utilities", "--file", "-"],
