@@ -11,6 +11,7 @@ import binascii
 import inspect
 import io
 import json
+import math
 import secrets
 import time
 from collections.abc import AsyncIterator, Callable
@@ -24,6 +25,21 @@ from libre_claw.core.questions import validate_answers, validate_questions
 from libre_claw.core.session import Session
 from libre_claw.core.session import UserAttachment
 from libre_claw.core.tools import ToolContext, current_tool_call
+
+
+def active_orchestration_controller(plugin_id: str, context: ToolContext | None) -> Any:
+    """Resolve only the controller explicitly attached to this exact task."""
+    if plugin_id != "orchestration" or context is None:
+        raise PermissionError("Orchestration requires an explicitly selected task profile.")
+    session = context.shared_state.get("agent_session")
+    controller = context.shared_state.get("orchestration_controller")
+    if (not isinstance(session, Session) or controller is None
+            or getattr(controller, "plugin_id", None) != plugin_id
+            or getattr(controller, "session", None) is not session
+            or not callable(getattr(controller, "authorize", None))
+            or controller.authorize() is not True):
+        raise PermissionError("Orchestration is not authorized for this task.")
+    return controller
 
 
 def tool_attachments(result: dict[str, Any]) -> tuple[UserAttachment, ...]:
@@ -76,11 +92,13 @@ class CordisHost:
     """Authorize every host operation without giving the plugin the host object."""
 
     def __init__(self, plugin_id: str, authorize: Callable[[], dict[str, Any]], *,
-                 config: LibreClawConfig | None = None, context: ToolContext | None = None, engine: Any = None) -> None:
+                 config: LibreClawConfig | None = None, context: ToolContext | None = None, engine: Any = None,
+                 orchestration_authorize: Callable[[], bool] | None = None) -> None:
         self.plugin_id = plugin_id
         self.authorize = authorize
         self.context = context
         self.engine = engine
+        self.orchestration_authorize = orchestration_authorize
         self.timeout: asyncio.Timeout | None = None
         self.llm = CordisLlmBridge(config, authorize=lambda: self.authorize().get("allow_model") is True) if config else None
         self.session: Session | None = None
@@ -140,6 +158,8 @@ class CordisHost:
         if not isinstance(params, dict):
             raise ValueError("Plugin host request parameters must be an object.")
         bounded_json(params, limit=1024 * 1024, label="Plugin host request")
+        if method.startswith("orchestration."):
+            return await self._orchestration(method.removeprefix("orchestration."), params)
         if method == "llm.listModels" and set(params) == {"provider"}:
             if self.llm is None:
                 raise PermissionError("Plugin model access is unavailable.")
@@ -162,6 +182,47 @@ class CordisHost:
         if method == "session.append" and set(params) == {"session_id", "type", "data"}:
             return await self._append(params)
         raise PermissionError("The requested plugin host operation is unavailable.")
+
+    async def _orchestration(self, method: str, params: dict[str, Any]) -> Any:
+        if (self.authorize().get("allow_model") is not True or self.orchestration_authorize is None
+                or self.orchestration_authorize() is not True):
+            raise PermissionError("Orchestration requires the included plugin and explicit model access.")
+        controller = active_orchestration_controller(self.plugin_id, self.context)
+        if controller.session is not self.session:
+            raise PermissionError("The calling orchestration task changed.")
+        if method == "dispatch" and set(params) == {"tasks"}:
+            if self.session is not None and self.session.mode == "plan" and not controller.tasks_read_only(params["tasks"]):
+                raise PermissionError("Plan mode permits only read-only worker assignments.")
+            result = controller.dispatch(params["tasks"])
+        elif method in {"wait", "cancel"} and not set(params) - ({"ids", "timeout"} if method == "wait" else {"ids"}):
+            ids = params.get("ids")
+            if ids is not None and (not isinstance(ids, list) or len(ids) > 32
+                                    or any(not isinstance(value, str) or not 1 <= len(value) <= 160 for value in ids)):
+                raise ValueError("Orchestration worker IDs must be a bounded list of strings.")
+            if method == "wait":
+                timeout = params.get("timeout", 0)
+                if type(timeout) not in {int, float} or not math.isfinite(timeout) or not 0 <= timeout <= 60:
+                    raise ValueError("Orchestration wait timeout must be between 0 and 60 seconds.")
+                # The requested wait is explicit and bounded. Retain the normal
+                # tool execution budget before and after this waiting period.
+                async with self._answer_time(), asyncio.timeout(timeout + 1):
+                    result = await controller.wait(ids, timeout)
+            else:
+                result = controller.cancel(ids)
+        elif method == "status" and not params:
+            result = controller.status()
+        else:
+            raise PermissionError("The requested orchestration operation is unavailable.")
+        if inspect.isawaitable(result):
+            result = await result
+        self.authorize()
+        if self.orchestration_authorize() is not True:
+            raise PermissionError("Orchestration access was revoked.")
+        if (active_orchestration_controller(self.plugin_id, self.context) is not controller
+                or controller.session is not self.session):
+            raise PermissionError("The calling orchestration controller changed.")
+        bounded_json(result, limit=256 * 1024, label="Orchestration report")
+        return result
 
     async def stream(self, method: str, params: Any) -> AsyncIterator[dict[str, Any]]:
         self.authorize()

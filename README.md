@@ -24,6 +24,7 @@ Current release: Version `0.1.0`.
 | Memory and skills | Local persistent memory, `SOUL.md` persona files, user/project `SKILL.md` workflows, and optional Vercel Skills discovery. |
 | Cordis engine | Persistent services coordinate agents, providers, tools, sessions, memory, and workflows. The dashboard has its own Cordis UI graph. [Architecture](docs/ENGINE.md). |
 | Cordis plugins | Import compiled Harness/Cordis packages, configure components, and run isolated tools or services with explicit project grants. [Guide](docs/CORDIS.md). |
+| Model orchestration | Choose an orchestrator and worker models across providers; run scoped scouts, builders, and reviewers concurrently. [Setup](docs/ORCHESTRATION.md). |
 | Real tools | File edits, shell, code search, web search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
 | Provider routing | DeepSeek, Kimi Code/Moonshot, OpenRouter, Ollama/Ollama Cloud, llama.cpp/llama-swap, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
 | Reproducible evals | A Harbor adapter runs the real Libre Claw loop against Terminal-Bench 2.1. |

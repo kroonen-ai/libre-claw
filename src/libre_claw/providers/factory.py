@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -37,6 +38,40 @@ from libre_claw.providers.openrouter import OpenRouterProvider
 class ProviderFallback:
     label: str
     provider: LLMProvider
+
+
+def orchestration_provider_config(
+    config: LibreClawConfig, provider: str, model: str, options: Mapping[str, Any],
+    *, working_directory: Path | None = None,
+) -> LibreClawConfig:
+    """Apply one explicitly selected team route without changing saved settings."""
+    name = _canonical_provider_name(provider)
+    if name == "codex":
+        raise ProviderConfigurationError("Codex runs its own tools and cannot enforce scoped team delegation. Choose a client-tool provider.")
+    settings = config.providers.get(name)
+    if not isinstance(settings, Mapping) or not model.strip():
+        raise ProviderConfigurationError("The orchestration route requires a configured provider and an explicit model.")
+    settings = dict(settings)
+    for option in ("context_window_tokens", "max_output_tokens"):
+        value = options.get(option)
+        if type(value) is not int or value <= 0:
+            raise ProviderConfigurationError(f"The orchestration route requires a positive {option}.")
+    effort = options.get("reasoning_effort", "")
+    if not isinstance(effort, str):
+        raise ProviderConfigurationError("The orchestration reasoning effort must be a string.")
+    settings.update(default_model=model, max_tokens=options["max_output_tokens"], auto_context_window=False)
+    if effort:
+        settings["reasoning_effort"] = effort
+        if name == "ollama":
+            settings["think"] = False if effort == "none" else effort
+    return replace(
+        config,
+        general=replace(config.general, default_provider=name, default_model=model,
+                        working_directory=working_directory or config.general.working_directory),
+        agent=replace(config.agent, context_window_tokens=options["context_window_tokens"], provider_retry_attempts=0),
+        providers={**config.providers, name: settings},
+        fallback=replace(config.fallback, enabled=False),
+    )
 
 
 def create_provider(

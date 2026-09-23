@@ -140,6 +140,7 @@ let submit;
 const elements = Object.fromEntries(['runForm', 'runMessage', 'sendMessage', 'messageAction', 'runProvider', 'runModel', 'runMode', 'runWorktree'].map(id => [id, {value: '', addEventListener: (name, listener) => { if (id === 'runForm') submit = listener; }}]));
 const $ = id => elements[id];
 const state = {sending: false};
+let selectedOrchestrationPlugin = ''; const selectedTeamProfile = () => null;
 let currentMode = 'new';
 const composerMode = () => currentMode;
 const sendTaskControl = async () => {};
@@ -166,6 +167,7 @@ const request = (path, options) => { requests++; latestBody = JSON.parse(options
   currentMode = 'reply';
   const next = submit({preventDefault() {}});
   assert.equal('provider' in latestBody, false); assert.equal('model' in latestBody, false);
+  assert.equal('orchestration_plugin' in latestBody, false);
   complete({run: {run_id: 'next'}}); await next;
   assert.equal(elements.runMessage.value, ''); assert.equal(requests, 2);
 })().catch(error => { console.error(error); process.exitCode = 1; });
@@ -177,16 +179,18 @@ def test_saved_task_shows_its_model_and_hides_new_task_overrides(tmp_path) -> No
     source = html[html.index("    function composerMode("):html.index('    bindUI("tasks", $("runForm"), "submit"')]
     run_script(tmp_path, r"""
 const assert = require('node:assert/strict');
-const elements = Object.fromEntries(['runProvider', 'runModel', 'runModelCapabilities', 'sessionModel', 'messageAction', 'runMode', 'runWorktree', 'runMessage', 'sendMessage'].map(id => [id, {id, textContent: '', value: 'message', options: [{}, {}, {}], setAttribute(name, value) { this[name] = value; }, dispatchEvent() {}}]));
+const elements = Object.fromEntries(['runTeam', 'runTeamSummary', 'runProvider', 'runModel', 'runModelCapabilities', 'sessionModel', 'messageAction', 'runMode', 'runWorktree', 'runMessage', 'sendMessage'].map(id => [id, {id, textContent: '', value: 'message', options: [{}, {}, {}], setAttribute(name, value) { this[name] = value; }, dispatchEvent() {}}]));
 const $ = id => elements[id];
 const document = {getElementById: $};
 const state = {selectedRunId: 'saved', selectedRunState: 'done', selectedProvider: 'openrouter', selectedModel: 'saved-model'};
 const STREAM_STATES = new Set(['queued', 'running', 'blocked']);
+let selectedOrchestrationPlugin = ''; const selectedTeamProfile = () => null;
 """ + source + r"""
 syncComposerMode();
 assert.equal(elements.runProvider.hidden, true); assert.equal(elements.runProvider.disabled, true);
 assert.equal(elements.runModel.hidden, true); assert.equal(elements.sessionModel.hidden, false);
 assert.equal(elements.sessionModel.textContent, 'openrouter / saved-model');
+state.selectedTeam = 'orchestration'; syncComposerMode(); assert.match(elements.runTeamSummary.textContent, /saved team configuration/);
 assert.equal(elements.sendMessage['aria-label'], 'Send reply');
 state.selectedRunState = 'running'; syncComposerMode();
 assert.equal(elements.messageAction.value, 'queue'); assert.equal(elements.sendMessage['aria-label'], 'Queue follow-up');

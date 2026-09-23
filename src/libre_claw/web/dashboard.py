@@ -199,6 +199,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         <form id="runForm" class="composer">
           <textarea id="runMessage" aria-label="Message Libre Claw" required rows="1" placeholder="Describe what you want Libre Claw to do"></textarea>
           <div class="composer-controls">
+            <select id="runTeam" aria-label="Team for new task" aria-describedby="runTeamSummary"><option value="">No team</option></select>
             <select id="runProvider" aria-label="Provider">
               <option value="">default provider</option>
               <option value="anthropic">Anthropic</option>
@@ -222,6 +223,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
             </button>
           </div>
+          <p id="runTeamSummary" class="team-composer-summary" role="status" hidden></p>
         </form>
         <div class="status-strip" id="statusStrip">
           <button id="engineStrip" class="engine-strip" type="button" title="Open engine status">Cordis · checking</button>
@@ -814,6 +816,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("selectedState").className = `pill ${run.state}`;
       state.selectedRunState = run.state;
       state.selectedProvider = run.provider || ""; state.selectedModel = run.model || "";
+      state.selectedTeam = run.orchestration?.name || run.orchestration?.plugin_id || run.orchestration_plugin || "";
       $("cancelRun").disabled = !["queued", "running", "blocked"].includes(run.state);
       syncComposerMode();
       $("stripMeta").textContent = `${run.run_id} | ${run.provider}:${run.model}`;
@@ -1720,6 +1723,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
     let pluginCatalog = null, pluginLoading = false, pluginPending = "", pluginPendingEnable = false;
     let pluginDetail = null, pluginView = "list", pluginRevision = 0, pluginInstall = null;
     let pluginConfigFields = [], pluginConfigDirty = false, pluginRuntimeStatus = null, pluginConfigDraftBase = null;
+    let orchestrationEditor = null, orchestrationRevision = 0, orchestrationProviders = null;
+    let orchestrationProfiles = [], orchestrationLoading = false, orchestrationLoaded = false, selectedOrchestrationPlugin = "";
+    const orchestrationModelCache = new Map();
+    const orchestrationBindings = [];
     function pluginNode(tag, className = "", text) {
       const node = document.createElement(tag);
       node.className = className;
@@ -1729,6 +1736,294 @@ _DASHBOARD_HTML = r"""<!doctype html>
     function pluginButton(label, action, className = "") {
       const node = pluginNode("button", className, label); node.type = "button";
       node.addEventListener("click", action); return node;
+    }
+
+    /* Model orchestration editor */
+    function orchestrationBind(target, event, handler) {
+      const dispose = bindUI("plugins", target, event, handler);
+      if (typeof dispose === "function") orchestrationBindings.push(dispose);
+    }
+    function disposeOrchestrationEditor() {
+      orchestrationRevision++;
+      for (const dispose of orchestrationBindings.splice(0)) dispose();
+      orchestrationEditor = null;
+    }
+    function orchestrationButton(label, action, className = "") {
+      const button = pluginNode("button", className, label); button.type = "button";
+      orchestrationBind(button, "click", action); return button;
+    }
+    function orchestrationField(label, value, options = {}) {
+      const wrap = pluginNode("label", "orchestration-field"), input = pluginNode(options.multiline ? "textarea" : "input");
+      wrap.append(pluginNode("span", "", label)); input.setAttribute("aria-label", options.name || label);
+      if (options.multiline) { input.rows = 3; input.maxLength = 16000; }
+      else { input.type = options.number ? "number" : "text"; if (options.number) { input.min = String(options.min ?? 1); input.step = "1"; if (options.max) input.max = String(options.max); } }
+      input.value = String(value ?? ""); wrap.append(input); return {wrap, input};
+    }
+    function orchestrationSelect(label, choices, value) {
+      const wrap = pluginNode("label", "orchestration-field"), input = pluginNode("select");
+      input.setAttribute("aria-label", label); wrap.append(pluginNode("span", "", label));
+      for (const [id, title] of choices) { const option = pluginNode("option", "", title); option.value = id; input.append(option); }
+      input.value = value; wrap.append(input); return {wrap, input};
+    }
+    function orchestrationDirty() {
+      pluginConfigDirty = true;
+      if (orchestrationEditor) {
+        orchestrationEditor.save.dataset.blocked = "false"; orchestrationEditor.reset.dataset.blocked = "false";
+        orchestrationEditor.check.dataset.blocked = "true";
+        orchestrationEditor.routeResults.replaceChildren();
+        orchestrationEditor.status.textContent = "Unsaved changes. Save before checking routes or starting a team task.";
+      }
+      syncPluginControls();
+    }
+    async function discoverOrchestrationProviders() {
+      if (!orchestrationProviders) {
+        orchestrationProviders = request("/providers").then(payload => {
+          if (!Array.isArray(payload.providers)) throw new Error("Invalid provider directory.");
+          return payload;
+        }).catch(error => { orchestrationProviders = null; throw error; });
+      }
+      return orchestrationProviders;
+    }
+    function orchestrationProvider(row) {
+      return row.provider.value || (row.worker ? orchestrationEditor?.orchestrator.provider.value : "") || defaultModelConfig.provider || "";
+    }
+    function orchestrationEfforts(row) {
+      const inherited = row.worker ? orchestrationEditor?.orchestrator.model.value : "";
+      const model = row.model.value || inherited || defaultModelConfig.model;
+      const metadata = row.models.find(item => item.model === model);
+      row.efforts.replaceChildren();
+      for (const effort of metadata?.supported_reasoning_efforts || []) {
+        const option = pluginNode("option"); option.value = String(effort); row.efforts.append(option);
+      }
+    }
+    async function discoverOrchestrationModels(row, force = false) {
+      const editor = orchestrationEditor, revision = ++row.discovery, provider = orchestrationProvider(row);
+      if (!editor || !provider) { row.status.textContent = "Choose a provider or keep the inherited route."; return; }
+      const inheritedProvider = row.worker ? orchestrationProvider(editor.orchestrator) : defaultModelConfig.provider;
+      row.model.placeholder = provider === inheritedProvider ? row.worker ? "Inherit orchestrator model" : "App default model" : "Choose or enter a model for this provider";
+      row.status.textContent = "Loading model suggestions…";
+      try {
+        if (force || !orchestrationModelCache.has(provider)) {
+          const pending = request(`/models?${new URLSearchParams({provider, ...(force ? {refresh: "1"} : {})})}`).then(payload => {
+            if (!Array.isArray(payload.models)) throw new Error("Invalid model catalog."); return payload.models;
+          }).catch(error => { orchestrationModelCache.delete(provider); throw error; });
+          orchestrationModelCache.set(provider, pending);
+        }
+        const models = await orchestrationModelCache.get(provider);
+        if (editor !== orchestrationEditor || revision !== row.discovery) return;
+        row.models = models; row.modelOptions.replaceChildren();
+        for (const model of models) { const option = pluginNode("option", "", model.label || model.model); option.value = String(model.model); row.modelOptions.append(option); }
+        orchestrationEfforts(row);
+        row.status.textContent = `${models.length} models from ${provider}. A custom model ID is also accepted.`;
+      } catch (error) {
+        if (editor === orchestrationEditor && revision === row.discovery) row.status.textContent = `Model suggestions unavailable: ${error.message || error}. You can still enter a model ID.`;
+      }
+    }
+    function orchestrationRoute(container, source, name, worker = false) {
+      const inheritLabel = worker ? "Inherit orchestrator" : "App default";
+      const choices = [["", inheritLabel], ...(source.provider ? [[source.provider, `${source.provider} · saved route`]] : [])];
+      const route = pluginNode("div", "orchestration-route"), providerField = orchestrationSelect(`${name} provider`, choices, source.provider || "");
+      const modelField = orchestrationField(`${name} model`, source.model || ""); modelField.input.placeholder = worker ? "Inherit orchestrator model" : "App default model";
+      const effortField = orchestrationField(`${name} reasoning effort`, source.reasoning_effort || ""); effortField.input.placeholder = "Provider default";
+      const modelOptions = pluginNode("datalist"), efforts = pluginNode("datalist");
+      const identity = `${orchestrationRevision}-${orchestrationEditor.routeCount++}`;
+      modelOptions.id = `team-models-${identity}`; efforts.id = `team-efforts-${identity}`;
+      modelField.input.setAttribute("list", modelOptions.id); effortField.input.setAttribute("list", efforts.id);
+      modelField.input.autocomplete = "off"; effortField.input.autocomplete = "off";
+      const status = pluginNode("p", "hint orchestration-route-status"); status.setAttribute("role", "status");
+      const refresh = orchestrationButton("Refresh models", () => { void discoverOrchestrationModels(row, true); }, "orchestration-refresh");
+      route.append(providerField.wrap, modelField.wrap); container.append(route, modelOptions, efforts, status);
+      const row = {provider: providerField.input, model: modelField.input, effort: effortField.input, effortField: effortField.wrap, refresh, modelOptions, efforts, status, models: [], worker, discovery: 0};
+      const editor = orchestrationEditor;
+      void discoverOrchestrationProviders().then(payload => {
+        if (orchestrationEditor !== editor) return;
+        if (editor.limitations) {
+          const notes = Array.isArray(payload.limitations) ? payload.limitations : payload.limitations ? [payload.limitations] : [];
+          editor.limitations.textContent = notes.map(note => typeof note === "string" ? note : note.message || "").filter(Boolean).join(" ");
+          editor.limitations.hidden = !editor.limitations.textContent;
+        }
+        const saved = row.provider.value;
+        row.provider.replaceChildren(); const inherited = pluginNode("option", "", inheritLabel); inherited.value = ""; row.provider.append(inherited);
+        for (const provider of payload.providers) {
+          const option = pluginNode("option", "", provider.label || provider.name || provider.id); option.value = String(provider.id); row.provider.append(option);
+        }
+        if (saved && !payload.providers.some(provider => provider.id === saved)) {
+          const option = pluginNode("option", "", `${saved} · saved route`); option.value = saved; row.provider.append(option);
+        }
+        row.provider.value = saved;
+        void discoverOrchestrationModels(row);
+      }).catch(error => { if (orchestrationEditor === editor) row.status.textContent = `Could not load providers: ${error.message || error}`; });
+      orchestrationBind(row.provider, "change", () => {
+        orchestrationDirty(); void discoverOrchestrationModels(row);
+        if (!worker) for (const child of editor.workers) if (!child.provider.value) void discoverOrchestrationModels(child);
+      });
+      orchestrationBind(row.model, "input", () => { orchestrationDirty(); orchestrationEfforts(row); });
+      orchestrationBind(row.effort, "input", orchestrationDirty);
+      return row;
+    }
+    function orchestrationBudgets(container, row, source, name, worker) {
+      const advanced = pluginNode("details", "orchestration-advanced"); advanced.append(pluginNode("summary", "", "Limits & instructions"));
+      const grid = pluginNode("div", "orchestration-budget-grid"); row.numbers = {};
+      const fields = worker ? [["max_concurrent", "Concurrent workers", 1], ["max_tool_calls", "Tool calls", 20], ["max_seconds", "Time (seconds)", 180], ["context_window_tokens", "Context tokens", 32768], ["max_output_tokens", "Output tokens", 4096]]
+        : [["context_window_tokens", "Context tokens", 98304], ["max_output_tokens", "Output tokens", 16384]];
+      for (const [key, label, fallback] of fields) {
+        const bounds = {max_concurrent: [1, 8], max_tool_calls: [1, 100], max_seconds: [1, 900], context_window_tokens: [1024, 16777216], max_output_tokens: [1, 1048576]}[key];
+        const field = orchestrationField(label, source[key] ?? fallback, {number: true, min: bounds[0], max: bounds[1], name: `${name} ${label.toLowerCase()}`});
+        row.numbers[key] = field.input; grid.append(field.wrap); orchestrationBind(field.input, "input", orchestrationDirty);
+      }
+      const prompt = orchestrationField(`${name} instructions`, source.prompt || "", {multiline: true}); row.prompt = prompt.input;
+      prompt.input.placeholder = "Optional instructions for this role"; orchestrationBind(prompt.input, "input", orchestrationDirty);
+      advanced.append(grid, row.effortField, prompt.wrap, row.refresh); container.append(advanced);
+    }
+    function syncOrchestrationDefaultWorker() {
+      const editor = orchestrationEditor; if (!editor) return;
+      const saved = editor.defaultWorker.value || editor.savedDefault;
+      editor.defaultWorker.replaceChildren();
+      for (const worker of editor.workers) {
+        const id = worker.id.value.trim(), option = pluginNode("option", "", worker.name.value.trim() || id || "Unnamed worker"); option.value = id; editor.defaultWorker.append(option);
+        worker.remove.dataset.blocked = String(editor.workers.length <= 1);
+      }
+      editor.defaultWorker.value = editor.workers.some(worker => worker.id.value.trim() === saved) ? saved : editor.workers[0]?.id.value.trim() || "";
+      editor.add.dataset.blocked = String(editor.workers.length >= 16);
+      syncPluginControls();
+    }
+    function addOrchestrationWorker(source = {}, dirty = true) {
+      const editor = orchestrationEditor; let number = editor.workers.length + 1;
+      while (editor.workers.some(worker => worker.id.value === `worker-${number}`)) number++;
+      if (editor.workers.length >= 16) { editor.status.textContent = "A team supports up to 16 worker roles."; return; }
+      const card = pluginNode("article", "orchestration-worker"), head = pluginNode("div", "orchestration-worker-heading");
+      const heading = pluginNode("h5", "", source.name || `Worker ${number}`); head.append(heading); card.append(head);
+      const identity = pluginNode("div", "orchestration-identity");
+      const id = orchestrationField("Worker ID", source.id || `worker-${number}`), name = orchestrationField("Worker name", source.name || `Worker ${number}`);
+      identity.append(id.wrap, name.wrap); card.append(identity);
+      const row = orchestrationRoute(card, source, source.name || `Worker ${number}`, true);
+      row.id = id.input; row.name = name.input; row.card = card;
+      row.id.maxLength = 48; row.name.maxLength = 160;
+      const policy = pluginNode("div", "orchestration-policy"), role = orchestrationSelect("Worker role", [["scout", "Scout"], ["worker", "Builder"], ["reviewer", "Reviewer"]], source.role || "worker");
+      row.role = role.input;
+      const readLabel = pluginNode("label", "orchestration-readonly"), readOnly = pluginNode("input"); readOnly.type = "checkbox"; readOnly.checked = source.read_only !== false;
+      readOnly.dataset.lockedByRole = String(row.role.value !== "worker");
+      readLabel.append(readOnly, pluginNode("span", "", "Read only")); row.readOnly = readOnly; policy.append(role.wrap, readLabel); card.append(policy);
+      orchestrationBudgets(card, row, source, source.name || `Worker ${number}`, true);
+      row.remove = orchestrationButton("Remove", () => {
+        if (editor !== orchestrationEditor || editor.workers.length <= 1) return;
+        editor.workers = editor.workers.filter(worker => worker !== row); card.remove(); orchestrationDirty(); syncOrchestrationDefaultWorker();
+      }, "danger orchestration-remove"); head.append(row.remove);
+      let previousId = row.id.value;
+      orchestrationBind(row.id, "input", () => {
+        if (editor.defaultWorker.value === previousId) { editor.savedDefault = row.id.value.trim(); editor.defaultWorker.value = ""; }
+        previousId = row.id.value; orchestrationDirty(); syncOrchestrationDefaultWorker();
+      });
+      orchestrationBind(row.name, "input", () => { heading.textContent = row.name.value.trim() || "Unnamed worker"; orchestrationDirty(); syncOrchestrationDefaultWorker(); });
+      orchestrationBind(row.role, "change", () => { row.readOnly.dataset.lockedByRole = String(row.role.value !== "worker"); if (row.role.value !== "worker") row.readOnly.checked = true; orchestrationDirty(); });
+      orchestrationBind(row.readOnly, "change", () => {
+        if (row.role.value !== "worker") { row.readOnly.checked = true; editor.status.textContent = "Scouts and reviewers stay read only."; }
+        orchestrationDirty();
+      });
+      editor.workers.push(row); editor.workerList.append(card);
+      if (dirty) { orchestrationDirty(); syncOrchestrationDefaultWorker(); }
+    }
+    function collectOrchestrationConfig() {
+      const editor = orchestrationEditor;
+      const positive = input => {
+        const value = Number(input.value), min = Number(input.min || 1), max = Number(input.max || Number.MAX_SAFE_INTEGER);
+        if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error(`${input.getAttribute("aria-label") || "Team limit"} must be a whole number between ${min} and ${max}.`); return value;
+      };
+      const route = row => {
+        const result = {provider: row.provider.value.trim(), model: row.model.value.trim(), reasoning_effort: row.effort.value.trim(),
+          ...Object.fromEntries(Object.entries(row.numbers).map(([key, input]) => [key, positive(input)])), prompt: row.prompt.value};
+        if (result.max_output_tokens >= result.context_window_tokens) throw new Error("Output tokens must be smaller than the working context.");
+        return result;
+      };
+      const seen = new Set(), workers = editor.workers.map(row => {
+        const id = row.id.value.trim(), name = row.name.value.trim();
+        if (!/^[a-z][a-z0-9_-]{0,47}$/.test(id) || !name || seen.has(id)) throw new Error("Every worker needs a name and a unique lowercase ID."); seen.add(id);
+        return {id, name, role: row.role.value, read_only: row.readOnly.checked, ...route(row)};
+      });
+      if (!workers.length || !seen.has(editor.defaultWorker.value)) throw new Error("Choose a default worker from this team.");
+      return {orchestrator: route(editor.orchestrator), workers, default_worker: editor.defaultWorker.value,
+        max_concurrent: positive(editor.maxConcurrent), max_total_workers: positive(editor.maxTotal)};
+    }
+    function renderOrchestrationConfig(container, plugin) {
+      pluginConfigFields = []; pluginConfigDirty = false; pluginConfigDraftBase = null;
+      const config = plugin.config || {}, form = pluginNode("form", "orchestration-form");
+      const editor = orchestrationEditor = {workers: [], routeCount: 0, savedDefault: config.default_worker || ""};
+      const introduction = pluginNode("p", "hint", "Choose a lead model and the workers it can delegate to. Empty routes inherit the lead model or app default. A different provider needs its own model ID.");
+      editor.limitations = pluginNode("p", "hint orchestration-limitations"); editor.limitations.hidden = true;
+      const lead = pluginNode("section", "orchestration-lead"); lead.append(pluginNode("h4", "", "Orchestrator"));
+      editor.orchestrator = orchestrationRoute(lead, config.orchestrator || {}, "Orchestrator");
+      orchestrationBudgets(lead, editor.orchestrator, config.orchestrator || {}, "Orchestrator", false); form.append(lead);
+      const workerHeading = pluginNode("div", "orchestration-worker-heading"); editor.add = orchestrationButton("+ Add worker", () => addOrchestrationWorker()); workerHeading.append(pluginNode("h4", "", "Worker team"), editor.add);
+      editor.workerList = pluginNode("div", "orchestration-workers"); form.append(workerHeading, editor.workerList);
+      const limits = pluginNode("div", "orchestration-budget-grid"), concurrent = orchestrationField("Team concurrency", config.max_concurrent ?? 3, {number: true, max: 8}), total = orchestrationField("Total worker budget", config.max_total_workers ?? 12, {number: true, max: 32});
+      editor.maxConcurrent = concurrent.input; editor.maxTotal = total.input;
+      const defaultWorker = orchestrationSelect("Default worker", [], ""); editor.defaultWorker = defaultWorker.input;
+      limits.append(concurrent.wrap, total.wrap, defaultWorker.wrap); form.append(limits);
+      for (const input of [editor.maxConcurrent, editor.maxTotal, editor.defaultWorker]) {
+        orchestrationBind(input, "change", orchestrationDirty); orchestrationBind(input, "input", orchestrationDirty);
+      }
+      editor.status = pluginNode("p", "hint orchestration-check-status"); editor.status.setAttribute("role", "status");
+      editor.routeResults = pluginNode("div", "orchestration-route-results"); editor.routeResults.setAttribute("aria-label", "Checked model routes");
+      editor.save = orchestrationButton("Save team", () => { void savePluginConfig(); }, "primary");
+      editor.reset = orchestrationButton("Reset changes", renderPluginDetail); editor.check = orchestrationButton("Check routes", () => { void checkOrchestrationRoutes(); });
+      editor.save.dataset.blocked = "true"; editor.reset.dataset.blocked = "true";
+      const actions = pluginNode("div", "plugin-actions"); actions.append(editor.reset, editor.check, editor.save); form.append(editor.status, editor.routeResults, actions);
+      orchestrationBind(form, "submit", event => { event.preventDefault(); void savePluginConfig(); });
+      for (const worker of config.workers || []) addOrchestrationWorker(worker, false);
+      if (!editor.workers.length) addOrchestrationWorker({id: "worker", name: "Worker", role: "worker"}, false);
+      syncOrchestrationDefaultWorker();
+      container.append(introduction, editor.limitations, form);
+    }
+    async function checkOrchestrationRoutes() {
+      if (pluginPending || pluginConfigDirty || !orchestrationEditor) return;
+      const editor = orchestrationEditor; pluginPending = "routes"; syncPluginControls(); editor.routeResults.replaceChildren(); editor.status.textContent = "Checking saved routes without running a model…";
+      try {
+        const result = await request("/orchestration/check", {method: "POST", body: JSON.stringify({plugin_id: "orchestration"})});
+        if (editor !== orchestrationEditor) return;
+        const warnings = Array.isArray(result.warnings) ? result.warnings.map(item => typeof item === "string" ? item : item.message || "Route needs attention") : [];
+        editor.status.textContent = result.ready === false || result.error ? `Routes need attention: ${result.error || warnings.join(" · ") || "Review your provider configuration."}`
+          : warnings.length ? warnings.join(" · ") : "Routes checked. No model inference was performed.";
+        for (const route of Array.isArray(result.routes) ? result.routes : []) {
+          const row = pluginNode("div", route.ready ? "orchestration-route-result" : "orchestration-route-result danger");
+          row.append(pluginNode("strong", "", route.worker_id || "Model route"), pluginNode("span", "", `${route.provider || ""} / ${route.model || ""}`),
+            pluginNode("small", "", route.error || (route.ready ? "Ready" : "Needs attention"))); editor.routeResults.append(row);
+        }
+      } catch (error) { if (editor === orchestrationEditor) editor.status.textContent = `Could not check routes: ${error.message || error}`; }
+      finally { pluginPending = ""; syncPluginControls(); }
+    }
+    function selectedTeamProfile() { return orchestrationProfiles.find(profile => profile.plugin_id === selectedOrchestrationPlugin); }
+    async function refreshOrchestrationProfiles() {
+      if (orchestrationLoading) return;
+      orchestrationLoading = true;
+      try {
+        const payload = await request("/orchestration");
+        if (!Array.isArray(payload.profiles)) throw new Error("Invalid team directory.");
+        orchestrationProfiles = payload.profiles;
+        if (!orchestrationLoaded && payload.default_plugin) selectedOrchestrationPlugin = payload.default_plugin;
+        orchestrationLoaded = true;
+      } catch { orchestrationProfiles = []; }
+      finally {
+        orchestrationLoading = false;
+        const picker = $("runTeam");
+        if (picker) {
+          picker.replaceChildren(); const none = pluginNode("option", "", "No team"); none.value = ""; picker.append(none);
+          for (const profile of orchestrationProfiles.filter(item => item.enabled)) {
+            const option = pluginNode("option", "", `${profile.name || profile.plugin_id}${profile.ready ? "" : " · needs setup"}`); option.value = profile.plugin_id; picker.append(option);
+          }
+          if (selectedOrchestrationPlugin && !orchestrationProfiles.some(item => item.enabled && item.plugin_id === selectedOrchestrationPlugin)) {
+            const missing = pluginNode("option", "", "Selected team unavailable"); missing.value = selectedOrchestrationPlugin; picker.append(missing);
+          }
+          picker.value = selectedOrchestrationPlugin; syncComposerMode();
+        }
+      }
+    }
+    async function useOrchestrationForNextTask() {
+      if (pluginConfigDirty) { setPluginStatus("Save your team before using it for a task.", true); return; }
+      await refreshOrchestrationProfiles();
+      const profile = orchestrationProfiles.find(item => item.plugin_id === "orchestration");
+      if (!profile?.enabled || !profile.ready) { setPluginStatus(profile?.error || "Enable this team with model access before using it.", true); return; }
+      selectedOrchestrationPlugin = "orchestration"; $("runTeam").value = selectedOrchestrationPlugin;
+      closeSettingsPanel(); newSession(); syncComposerMode();
     }
     function setPluginStatus(message, error = false) {
       $("pluginsStatus").textContent = message;
@@ -1746,18 +2041,21 @@ _DASHBOARD_HTML = r"""<!doctype html>
           button.disabled = (busy && !(pluginPending === "preview" && button.dataset.cancelPreview === "true")) || button.dataset.blocked === "true";
           if (button.dataset.pluginAction !== "toggle") continue;
           const plugin = pluginCatalog?.plugins.find(item => String(item.id) === button.dataset.pluginId);
-          button.disabled = busy || !plugin || (!plugin.enabled && (!pluginCatalog.enabled || plugin.integrity !== "valid"));
+          button.disabled = busy || !plugin || (!plugin.enabled && (!pluginCatalog.enabled || plugin.integrity !== "valid")) || plugin?.id === "orchestration" && pluginConfigDirty;
           button.textContent = pluginPending === button.dataset.pluginId
-            ? (pluginPendingEnable ? "Enabling…" : "Disabling…") : (plugin?.enabled ? "Disable" : "Enable offline");
+            ? (pluginPendingEnable ? "Enabling…" : "Disabling…") : (plugin?.enabled ? "Disable" : plugin?.id === "orchestration" ? "Enable team" : "Enable offline");
         }
       }
-      for (const field of $("pluginPage").querySelectorAll("input, select, textarea")) field.disabled = busy;
+      for (const field of $("pluginPage").querySelectorAll("input, select, textarea")) field.disabled = busy || field.dataset.lockedByRole === "true";
+      if (orchestrationEditor?.use) orchestrationEditor.use.disabled = busy || pluginConfigDirty || !pluginDetail?.enabled || pluginDetail.grants?.allow_model !== true;
+      if (orchestrationEditor?.grant) orchestrationEditor.grant.disabled = busy || pluginConfigDirty || !pluginCatalog?.enabled;
     }
     function pluginToggle(plugin) {
       const name = String(plugin.name || plugin.id);
-      const button = pluginButton(plugin.enabled ? "Disable" : "Enable offline", () => { void togglePlugin(String(plugin.id)); }, plugin.enabled ? "" : "primary");
+      const action = plugin.enabled ? "Disable" : plugin.id === "orchestration" ? "Enable team" : "Enable offline";
+      const button = pluginButton(action, () => { void togglePlugin(String(plugin.id)); }, plugin.enabled ? "" : "primary");
       button.dataset.pluginId = String(plugin.id); button.dataset.pluginAction = "toggle";
-      button.setAttribute("aria-label", `${plugin.enabled ? "Disable" : "Enable offline"}: ${name} for this project`);
+      button.setAttribute("aria-label", `${action}: ${name} for this project`);
       button.setAttribute("aria-describedby", "pluginsStatus"); return button;
     }
     function pluginState(plugin) {
@@ -1840,11 +2138,13 @@ _DASHBOARD_HTML = r"""<!doctype html>
       const plugin = pluginCatalog.plugins.find(item => String(item.id) === id);
       if (!plugin || (!plugin.enabled && (!pluginCatalog.enabled || plugin.integrity !== "valid"))) return;
       const enabled = !plugin.enabled, name = String(plugin.name || id);
+      if (id === "orchestration" && pluginConfigDirty) { setPluginStatus("Save your team before changing its enabled state.", true); return; }
       const restoreFocus = document.activeElement?.dataset.pluginId === id;
       pluginPending = id; pluginPendingEnable = enabled; syncPluginControls();
       try {
-        await request(`/plugins/${encodeURIComponent(id)}`, {method: "PATCH", body: JSON.stringify({enabled})});
-        await loadPlugins(enabled ? `${name} enabled offline. Its tools are available on your next message.` : `${name} disabled. Its access has been revoked.`);
+        await request(`/plugins/${encodeURIComponent(id)}`, {method: "PATCH", body: JSON.stringify({enabled, ...(enabled && id === "orchestration" ? {allow_model: true} : {})})});
+        await loadPlugins(enabled ? id === "orchestration" ? `${name} enabled. Select this team for a new task to authorize delegation.` : `${name} enabled offline. Its tools are available on your next message.` : `${name} disabled. Its access has been revoked.`);
+        if (id === "orchestration") await refreshOrchestrationProfiles();
         if (pluginDetail?.id === id && pluginView === "detail") {
           pluginDetail = (await request(`/plugins/${encodeURIComponent(id)}`)).plugin; renderPluginDetail();
         }
@@ -1879,6 +2179,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         await loadPlugins("Plugin enabled with access to configured models. Provider keys stay in Libre Claw.");
         pluginDetail = (await request(`/plugins/${encodeURIComponent(id)}`)).plugin;
         showPluginView("detail"); renderPluginDetail();
+        if (id === "orchestration") await refreshOrchestrationProfiles();
       } catch (error) { setPluginStatus(`Could not enable model access: ${error.message || error}`, true); }
       finally { pluginPending = ""; syncPluginControls(); }
     }
@@ -1891,6 +2192,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       const cancelledCheck = pluginPending === "preview";
       if (cancelledCheck) pluginPending = "";
       const token = pluginInstall?.preview?.token;
+      disposeOrchestrationEditor();
       pluginRevision++; pluginInstall = null; pluginDetail = null; pluginConfigFields = []; pluginConfigDirty = false; pluginRuntimeStatus = null;
       $("pluginPage").replaceChildren(); showPluginView("list"); syncPluginControls();
       if (cancelledCheck) setPluginStatus("Package check closed. Nothing was installed.");
@@ -1906,15 +2208,18 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
     async function openPluginDetail(id) {
       if (pluginLoading || pluginPending) return;
+      const entering = pluginView !== "detail" || pluginDetail?.id !== id;
       pluginPending = "detail"; const revision = ++pluginRevision; syncPluginControls(); setPluginStatus("Loading plugin details…");
       try {
         const payload = await request(`/plugins/${encodeURIComponent(id)}`);
         if (revision !== pluginRevision) return;
         pluginDetail = payload.plugin; showPluginView("detail"); renderPluginDetail(); setPluginStatus("");
+        if (entering) $("panePlugins").scrollTop = 0;
       } catch (error) { setPluginStatus(`Could not load plugin: ${error.message || error}`, true); }
       finally { pluginPending = ""; syncPluginControls(); }
     }
     function renderPluginDetail() {
+      disposeOrchestrationEditor();
       const plugin = pluginDetail, page = $("pluginPage"); page.replaceChildren();
       page.append(pluginBreadcrumb(plugin.name || plugin.id));
       const head = pluginNode("div", "plugin-detail-head"), identity = pluginNode("div", "plugin-identity");
@@ -1943,11 +2248,18 @@ _DASHBOARD_HTML = r"""<!doctype html>
       runtime.textContent = plugin.enabled ? "Check that this plugin loads with its current permissions." : "Enable offline to check its runtime."; page.append(runtime);
       const config = pluginNode("section", "plugin-section"); config.append(pluginNode("h4", "", "Configuration"));
       renderPluginConfig(config, plugin); page.append(config);
+      if (plugin.id === "orchestration") {
+        const use = orchestrationEditor.use = orchestrationButton("Use for next task", () => { void useOrchestrationForNextTask(); }, "primary");
+        const launch = pluginNode("div", "orchestration-launch");
+        launch.append(pluginNode("p", "hint", "Enabling this team allows model access. Selecting it for a task authorizes delegation within the saved worker limits."), use); page.append(launch);
+      }
       const permissions = pluginNode("section", "plugin-section"); permissions.append(pluginNode("h4", "", "Permissions"), pluginPermissions(plugin),
         pluginNode("p", "hint", "Private storage belongs to this project. Additional filesystem or network access must be granted explicitly from the CLI.")); page.append(permissions);
-      if (plugin.grants?.allow_model !== true) {
+      if (plugin.grants?.allow_model !== true && (plugin.id !== "orchestration" || plugin.enabled)) {
         permissions.append(pluginNode("p", "hint", "Model access lets this plugin use your configured providers. It receives model responses, never provider keys or automatic conversation history."));
-        const models = pluginButton("Enable with model access", () => { void enablePluginModels(String(plugin.id)); });
+        const models = plugin.id === "orchestration"
+          ? orchestrationEditor.grant = orchestrationButton("Enable team model access", () => { if (!pluginConfigDirty) void enablePluginModels(String(plugin.id)); })
+          : pluginButton("Enable with model access", () => { void enablePluginModels(String(plugin.id)); });
         models.dataset.blocked = String(!pluginCatalog?.enabled || plugin.integrity !== "valid"); permissions.append(models);
       }
       const tools = pluginNode("section", "plugin-section"); tools.append(pluginNode("h4", "", "Tools"));
@@ -1987,6 +2299,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       else Object.defineProperty(parent, key, {value, enumerable: true, writable: true, configurable: true});
     }
     function renderPluginConfig(container, plugin) {
+      if (plugin.id === "orchestration") { renderOrchestrationConfig(container, plugin); return; }
       const schema = plugin.config_schema || {}, properties = schema.properties || {}, config = plugin.config || {};
       pluginConfigFields = []; pluginConfigDirty = false; pluginConfigDraftBase = null;
       const form = pluginNode("form", "plugin-config-form"); form.autocomplete = "off";
@@ -2064,6 +2377,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       container.append(pluginNode("p", "hint", "Changes stay here until you save. Secrets are stored locally and never returned to this page."), form);
     }
     function collectPluginConfig() {
+      if (pluginDetail?.id === "orchestration" && orchestrationEditor) return collectOrchestrationConfig();
       const config = JSON.parse(JSON.stringify(pluginConfigDraftBase || pluginDetail.config || {}));
       for (const field of pluginConfigFields) {
         const raw = String(field.input.value);
@@ -2143,6 +2457,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       try {
         pluginDetail = (await request(`/plugins/${encodeURIComponent(pluginDetail.id)}/config`, {method: "PUT", body: JSON.stringify({config})})).plugin;
         renderPluginDetail(); setPluginStatus("Configuration saved for this project. New tool calls use these settings.");
+        if (pluginDetail.id === "orchestration") await refreshOrchestrationProfiles();
       } catch (error) { setPluginStatus(`Could not save configuration: ${error.message || error}`, true); }
       finally { pluginPending = ""; syncPluginControls(); }
     }
@@ -2167,8 +2482,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
       pluginPending = "remove"; syncPluginControls(); const {id, name} = pluginDetail;
       try {
         await request(`/plugins/${encodeURIComponent(id)}`, {method: "DELETE"});
+        disposeOrchestrationEditor();
         pluginDetail = null; $("pluginPage").replaceChildren(); showPluginView("list");
         await loadPlugins(`${name || id} removed from all projects.`);
+        if (id === "orchestration") await refreshOrchestrationProfiles();
       } catch (error) { setPluginStatus(`Could not remove plugin: ${error.message || error}`, true); }
       finally { pluginPending = ""; syncPluginControls(); }
     }
@@ -2943,7 +3260,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
         const status = document.createElement("span"); status.className = "pill"; status.textContent = controls.pending ? "resume pending" : worker.status || "unknown";
         head.append(title, status); card.append(head);
         const meta = document.createElement("dl"); meta.className = "worker-meta";
-        const details = [["Worker", worker.id], ["Provider / model", `${worker.provider || "Unknown"} / ${worker.model || "Unknown"}`], ["Scope", worker.scope || "Unknown"], ["Access", worker.read_only ? "Read only" : "Writes within declared paths"], ["Tools remaining", controls.tools === null ? "Unknown" : String(Math.floor(controls.tools))], ["Time remaining", controls.seconds === null ? "Unknown" : `${Math.ceil(controls.seconds)} seconds`]];
+        const details = [["Worker", worker.worker_name || worker.name || worker.id], ["Role", worker.role || "worker"], ["Provider / model", `${worker.provider || "Unknown"} / ${worker.model || "Unknown"}`], ["Scope", worker.scope || "Unknown"], ["Access", worker.read_only ? "Read only" : "Writes within declared paths"], ["Tools remaining", controls.tools === null ? "Unknown" : String(Math.floor(controls.tools))], ["Time remaining", controls.seconds === null ? "Unknown" : `${Math.ceil(controls.seconds)} seconds`]];
+        if (worker.usage) details.push(["Tokens used", String(worker.usage.total_tokens ?? (Number(worker.usage.input_tokens || 0) + Number(worker.usage.output_tokens || 0)))]);
         if (worker.write_paths?.length) details.push(["Write paths", worker.write_paths.join(", ")]);
         for (const [label, value] of details) { const term = document.createElement("dt"), detail = document.createElement("dd"); term.textContent = label; detail.textContent = value; meta.append(term, detail); }
         card.append(meta);
@@ -3092,8 +3410,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function syncComposerMode() {
       const mode = composerMode();
-      $("runProvider").hidden = mode !== "new"; $("runProvider").disabled = mode !== "new";
-      $("runModel").hidden = mode !== "new"; $("runModel").disabled = mode !== "new";
+      const team = mode === "new" && selectedOrchestrationPlugin, profile = selectedTeamProfile();
+      $("runTeam").hidden = mode !== "new"; $("runTeam").disabled = mode !== "new" || state.sending;
+      $("runProvider").hidden = mode !== "new" || Boolean(team); $("runProvider").disabled = mode !== "new" || Boolean(team);
+      $("runModel").hidden = mode !== "new" || Boolean(team); $("runModel").disabled = mode !== "new" || Boolean(team);
       $("runModel").dispatchEvent(new Event("input"));
       $("sessionModel").hidden = mode === "new";
       $("sessionModel").textContent = [state.selectedProvider, state.selectedModel].filter(Boolean).join(" / ");
@@ -3110,6 +3430,13 @@ _DASHBOARD_HTML = r"""<!doctype html>
         : mode === "busy" ? "Guide this task or queue what comes next" : "Describe what you want Libre Claw to do";
       const label = mode === "new" ? "Start task" : $("messageAction").value === "queue" ? "Queue follow-up" : $("messageAction").value === "steer" ? "Steer task" : "Send reply";
       $("sendMessage").setAttribute("aria-label", label); $("sendMessage").title = label;
+      $("sendMessage").disabled = state.sending || Boolean(team && (!profile?.enabled || !profile.ready));
+      const summary = $("runTeamSummary"); summary.hidden = !team && !state.selectedTeam;
+      if (team) summary.textContent = profile?.enabled && profile.ready
+        ? `Team: ${profile.name || profile.plugin_id} · ${profile.workers?.length || 0} worker roles · Lead: ${[profile.orchestrator?.provider, profile.orchestrator?.model].filter(Boolean).join(" / ") || "App default"}`
+        : "Selected team is unavailable. Open Plugins to enable it or choose No team.";
+      else if (mode !== "new" && state.selectedTeam) summary.textContent = `Team: ${state.selectedTeam} · This task keeps its saved team configuration`;
+      else summary.hidden = true;
     }
 
     bindUI("tasks", $("runForm"), "submit", async (event) => {
@@ -3127,8 +3454,14 @@ _DASHBOARD_HTML = r"""<!doctype html>
         if (mode === "busy") { setNotice("Choose steer or queue while this task is running.", true); return; }
         const body = { message: $("runMessage").value, surface: "dashboard" };
         if (mode === "new") {
-          if ($("runProvider").value.trim()) body.provider = $("runProvider").value.trim();
-          if ($("runModel").value.trim()) body.model = $("runModel").value.trim();
+          if (selectedOrchestrationPlugin) {
+            const team = selectedTeamProfile();
+            if (!team?.enabled || !team.ready) throw new Error("The selected team is unavailable. Enable it or choose No team.");
+            body.orchestration_plugin = selectedOrchestrationPlugin;
+          } else {
+            if ($("runProvider").value.trim()) body.provider = $("runProvider").value.trim();
+            if ($("runModel").value.trim()) body.model = $("runModel").value.trim();
+          }
           body.session = { mode: $("runMode").value };
           if ($("runWorktree").value) body.worktree_id = $("runWorktree").value;
         }
@@ -3202,6 +3535,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     bindTabNavigation(".settings-nav button", button => openSettingsPane(button.dataset.pane));
     bindTabNavigation(".view-tab", button => button.click());
     bindUI("tasks", $("messageAction"), "change", syncComposerMode);
+    bindUI("workflows", $("runTeam"), "change", () => { orchestrationLoaded = true; selectedOrchestrationPlugin = $("runTeam").value; syncComposerMode(); });
     bindUI("questions", $("questions"), "submit", event => {
       const record = [...questionForms.values()].find(item => item.form === event.target);
       if (!record) return;
@@ -3227,7 +3561,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (state.refreshing) return;
       state.refreshing = true; $("refreshAll").disabled = true;
       try {
-        const results = await Promise.allSettled([refreshHealth(), refreshUsage(), refreshAutomations(), refreshEngine()]);
+        const results = await Promise.allSettled([refreshHealth(), refreshUsage(), refreshAutomations(), refreshEngine(), refreshOrchestrationProfiles()]);
         if (results[0].status === "rejected") {
           engineActiveRuns = null; syncEngineControls();
           $("healthDot").className = "status-dot offline"; $("daemonStatus").textContent = "Disconnected"; $("daemonStatusMetric").textContent = "Disconnected";

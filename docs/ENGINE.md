@@ -52,6 +52,10 @@ The TUI supports `/engine` and `/plugins`. Standalone TUI runs share one engine
 and their own extension manager; daemon-backed TUI runs use the daemon. Shutdown
 joins task cleanup before closing plugin workers and the engine.
 
+The included [Model orchestration plugin](ORCHESTRATION.md) binds an explicitly
+selected team to a task. Its Cordis tools broker scoped concurrent workers through
+the existing agent service, with fixed model routes, ownership, and budgets.
+
 ## Extension workers
 
 An enabled extension runs in its own process for its project. Application-owned

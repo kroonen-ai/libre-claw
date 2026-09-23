@@ -32,6 +32,7 @@ class RunRecord:
     created_at: str
     updated_at: str
     path: Path
+    orchestration_plugin: str = ""
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ class RunStore:
         model: str,
         working_directory: str | Path | None = None,
         state: RunState = "running",
+        orchestration_plugin: str = "",
     ) -> RunRecord:
         async with self._lock:
             return await asyncio.to_thread(
@@ -68,6 +70,7 @@ class RunStore:
                 model,
                 working_directory,
                 state,
+                orchestration_plugin,
             )
 
     async def append_event(self, run_id: str, event_type: str, data: dict[str, Any] | None = None) -> RunEvent:
@@ -245,6 +248,7 @@ class RunStore:
         model: str,
         working_directory: str | Path | None,
         state: RunState,
+        orchestration_plugin: str = "",
     ) -> RunRecord:
         self.root.mkdir(parents=True, exist_ok=True)
         now = _now()
@@ -262,6 +266,7 @@ class RunStore:
             created_at=now,
             updated_at=now,
             path=path,
+            orchestration_plugin=orchestration_plugin,
         )
         _write_json(path / "meta.json", _record_to_json(record))
         (path / "events.jsonl").touch()
@@ -295,6 +300,7 @@ class RunStore:
             created_at=record.created_at,
             updated_at=_now(),
             path=record.path,
+            orchestration_plugin=record.orchestration_plugin,
         )
         _write_json(record.path / "meta.json", _record_to_json(updated))
         return updated
@@ -498,6 +504,7 @@ def _record_to_json(record: RunRecord) -> dict[str, Any]:
         "created_at": record.created_at,
         "updated_at": record.updated_at,
         "path": str(record.path),
+        **({"orchestration_plugin": record.orchestration_plugin} if record.orchestration_plugin else {}),
     }
 
 
@@ -523,6 +530,7 @@ def _load_record(path: Path) -> RunRecord | None:
         created_at=str(payload.get("created_at", "")),
         updated_at=str(payload.get("updated_at", "")),
         path=path,
+        orchestration_plugin=str(payload.get("orchestration_plugin", "")),
     )
 
 

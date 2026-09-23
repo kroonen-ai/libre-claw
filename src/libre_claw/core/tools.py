@@ -61,6 +61,7 @@ class ToolContext:
     skills_cli_command: str = "npx -y skills@latest"
     skills_cli_timeout: int = 45
     subagent_provider_factory: Callable[[str, str, Path, bool], LLMProvider] | None = None
+    orchestration_provider_factory: Callable[[str, str, Path, bool, Mapping[str, Any]], LLMProvider] | None = None
     subagent_max_concurrent: int = 3
     subagent_max_total: int = 12
     shared_state: dict[str, Any] = field(default_factory=dict)

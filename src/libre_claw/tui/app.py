@@ -139,6 +139,9 @@ from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry, refresh_cordis_tools, bind_cordis_manager
 from libre_claw.core.cordis_engine import CordisEngine
 from libre_claw.core.cordis import CordisManager
+from libre_claw.core.orchestration_setup import (
+    attach_orchestration, orchestration_provider_settings, orchestration_registry, prepare_orchestration,
+)
 from libre_claw.core.questions import AgentUserQuestionRequest, text_answer, validate_questions
 from libre_claw.updater import (
     UpdateError,
@@ -305,6 +308,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/usage", "/usage <provider>|all|attribution|presets", "Show tokens, cache reuse, and cost"),
     SlashCommand("/plugins", "/plugins [catalog|install|details|inspect|enable|disable] [value]", "Manage Cordis plugins for this project"),
+    SlashCommand("/team", "/team [orchestration|off]", "Select a configured model team for a fresh task"),
     SlashCommand("/engine", "/engine", "Inspect Cordis services and execution state"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
     SlashCommand("/models", "/models [provider] [search] [--refresh]", "Discover provider models"),
@@ -805,6 +809,8 @@ class LibreClawApp(App[None]):
         self._global_model_config_mtime_ns = _path_mtime_ns(self._global_model_config_path)
         self._daemon_model_sync_task: asyncio.Task[None] | None = None
         self.engine = CordisEngine()
+        self._orchestration_plugin = ""
+        self._team_base_config: LibreClawConfig | None = None
         self.cordis_manager = CordisManager(config=self.config, tool_timeout=self.config.cordis.tool_timeout, persistent=True)
         self.cordis_manager.engine = lambda: self.engine
 
@@ -1265,6 +1271,15 @@ class LibreClawApp(App[None]):
         command = parts[0].lower()
         argument = parts[1].strip() if len(parts) > 1 else ""
 
+        if command == "/team":
+            await self._handle_team_command(argument)
+            return
+        if getattr(self, "_orchestration_plugin", "") and (
+            command == "/goal" or (argument and command in {"/model", "/provider", "/fallback"})
+        ):
+            self._append_system("This task uses its saved team routes. Use /new and /team off before changing task models or starting a goal.")
+            return
+
         if command == "/exit":
             self._cancel_active_generation(cancel_daemon_run=False)
             self.exit()
@@ -1711,7 +1726,11 @@ class LibreClawApp(App[None]):
 
         try:
             if isinstance(self.agent, Agent):
-                self.agent.tool_registry = refresh_cordis_tools(self.config, self.agent.tool_registry)
+                if getattr(self, "_orchestration_plugin", "") and not isinstance(self.session.checkpoint.get("orchestration"), dict):
+                    raise ValueError("The saved team profile is unavailable. Start a new team task.")
+                if "orchestration" in self.session.checkpoint:
+                    prepare_orchestration(self.config, self.cordis_manager, self.session)
+                self.agent.tool_registry = orchestration_registry(refresh_cordis_tools(self.config, self.agent.tool_registry), self.session)
             async for event in self.agent.run(user_message, attachments=attachments):
                 handled, should_stop = self._handle_agent_stream_event(
                     event,
@@ -1727,6 +1746,11 @@ class LibreClawApp(App[None]):
             self._append_system("Generation cancelled.")
             self._record_run_event_later("cancelled", {"reason": "Generation cancelled."})
             run_state = "cancelled"
+        except (ValueError, RuntimeError, OSError) as exc:
+            run_state = "failed"
+            run_summary = str(exc)
+            self._append_system(f"Task could not continue: {exc}")
+            self._record_run_event_later("error", {"message": str(exc)})
         finally:
             self._flush_stream_buffer(assistant_index, stream_buffer)
             if assistant_index < len(self.transcript):
@@ -1825,16 +1849,23 @@ class LibreClawApp(App[None]):
                 async def start(message: str, **payload: Any) -> dict[str, Any]:
                     payload.pop("session", None)
                     return await self.daemon_client.continue_run(self._resumed_run_id, message, **payload)
+            selection = ({"orchestration_plugin": self._orchestration_plugin}
+                         if getattr(self, "_orchestration_plugin", "") else {
+                             "provider": _canonical_tui_provider(self.config.general.default_provider),
+                             "model": _effective_model(self.config),
+                         })
             started = await start(
                 user_message,
                 kind="chat",
-                provider=_canonical_tui_provider(self.config.general.default_provider),
-                model=_effective_model(self.config),
+                **selection,
                 surface="tui:daemon",
                 session=session_to_payload(self.session),
                 attachments=[attachment.as_payload() for attachment in attachments],
             )
             run = _object_payload(started.get("run"))
+            if run.get("orchestration_plugin"):
+                self._orchestration_plugin = str(run["orchestration_plugin"])
+                self.config = _replace_model_selection(self.config, str(run["provider"]), str(run["model"]))
             run_id = str(run.get("run_id", ""))
             if not run_id:
                 raise RuntimeError("Daemon did not return a run id.")
@@ -1883,6 +1914,7 @@ class LibreClawApp(App[None]):
                 if hasattr(self.daemon_client, "get_session"):
                     snapshot = await self.daemon_client.get_session(run_id)
                     self.session = session_from_payload(snapshot.get("session"))
+                    self._orchestration_plugin = str(run.get("orchestration_plugin", ""))
                 self._active_run_id = None
                 await self._refresh_artifact_panel_for_run_id(run_id)
                 return
@@ -2275,6 +2307,7 @@ class LibreClawApp(App[None]):
                 provider=_canonical_tui_provider(self.config.general.default_provider),
                 model=_effective_model(self.config),
                 working_directory=self.config.general.working_directory,
+                orchestration_plugin=getattr(self, "_orchestration_plugin", ""),
             )
         self._resumed_run_id = run.run_id
         try:
@@ -2681,13 +2714,76 @@ class LibreClawApp(App[None]):
             return
         self.transcript.clear()
         self.session.clear()
+        self._clear_user_questions()
         self._resumed_run_id = None
+        self._active_run_id = None
         self._last_assistant_response = ""
         self._tool_entry_by_call_id.clear()
         self._hide_change_review()
         self._startup_entry_index = None
         self._append_startup_entry()
         self._append_system("Transcript cleared.")
+        if getattr(self, "_orchestration_plugin", ""):
+            try:
+                base = self._team_base_config or self.config
+                base = replace(base, general=replace(base.general, theme=self.config.general.theme,
+                                                     working_directory=self.config.general.working_directory))
+                self.config = prepare_orchestration(base, self.cordis_manager, self.session, selected=self._orchestration_plugin)
+            except (ValueError, RuntimeError, OSError) as error:
+                self.agent = None
+                self.provider_error = str(error)
+                self._append_system(f"Could not prepare a new team task: {error}")
+                return
+        self._rebuild_agent()
+
+    async def _handle_team_command(self, argument: str) -> None:
+        selected = argument.strip()
+        current = getattr(self, "_orchestration_plugin", "")
+        if not selected:
+            self._append_system(f"Team: {current or 'off'}. Configure models in Dashboard → Plugins → Model orchestration.\n"
+                                "Use /team orchestration for a fresh task, /team off to leave, and /agents to inspect workers.")
+            return
+        if selected not in {"orchestration", "off"}:
+            self._append_system("Use /team orchestration or /team off.")
+            return
+        if ((self._active_task is not None and not self._active_task.done()) or self.session.messages
+                or self.session.summary or self.session.archived_messages or self._resumed_run_id):
+            self._append_system("Finish or cancel the active task, then use /new before changing teams.")
+            return
+        before, original_session = self.config, self.session
+        if selected == "off":
+            if self._team_base_config is not None:
+                self.config = replace(self._team_base_config, general=replace(
+                    self._team_base_config.general, theme=self.config.general.theme,
+                    working_directory=self.config.general.working_directory))
+            self._orchestration_plugin = ""
+            self._team_base_config = None
+            self.session.checkpoint.pop("orchestration", None)
+            self._rebuild_agent()
+            self._append_system("Team mode is off for the next task.")
+            return
+        try:
+            candidate = session_from_payload(session_to_payload(self.session))
+            base = self._team_base_config or self.config
+            base = replace(base, general=replace(base.general, theme=self.config.general.theme,
+                                                working_directory=self.config.general.working_directory))
+            configured = await asyncio.to_thread(prepare_orchestration, base, self.cordis_manager,
+                                                 candidate, selected=selected)
+        except (ValueError, RuntimeError, OSError) as error:
+            self._append_system(f"Could not select team: {error}")
+            return
+        if (self.session is not original_session or self.session.messages or self.session.summary or self.session.archived_messages
+                or self._resumed_run_id or (self._active_task is not None and not self._active_task.done())):
+            self._append_system("The task changed while selecting the team. Use /new and select it again.")
+            return
+        self.session, self.config = candidate, configured
+        if self._team_base_config is None:
+            self._team_base_config = before
+        self._orchestration_plugin = selected
+        self._rebuild_agent()
+        route = self.session.checkpoint["orchestration"]["profile"]["orchestrator"]
+        self._append_system(f"Team selected: {route['provider']}:{route['model']}. Worker roles and limits come from the saved plugin profile."
+                            + (f"\nProvider setup is incomplete: {self.provider_error}" if self.provider_error else ""))
 
     def _handle_theme_command(self, argument: str) -> None:
         selected, persist_global = _strip_global_flag(argument)
@@ -2841,6 +2937,9 @@ class LibreClawApp(App[None]):
         self._append_system(_model_catalog_text(self.config, provider, catalog, query=query))
 
     def _set_model(self, model: str) -> None:
+        if getattr(self, "_orchestration_plugin", ""):
+            self._append_system("The team owns this task's model selection. Use /new and /team off to select a different task model.")
+            return
         model, persist_global = _strip_global_flag(model)
         if not model:
             self._append_system(_model_help_text(self.config))
@@ -2889,12 +2988,12 @@ class LibreClawApp(App[None]):
             self._append_system(f"Model set to {provider}:{selected_model}.{suffix}")
 
     def _sync_daemon_model_after_selection(self, provider: str, model: str, *, persist_global: bool = False) -> None:
-        if self.daemon_client is None:
+        if self.daemon_client is None or getattr(self, "_orchestration_plugin", ""):
             return
         self._track_run_background_task(self._update_daemon_model_runtime(provider, model, persist_global=persist_global))
 
     async def _update_daemon_model_runtime(self, provider: str, model: str, *, persist_global: bool = False) -> None:
-        if self.daemon_client is None:
+        if self.daemon_client is None or getattr(self, "_orchestration_plugin", ""):
             return
         try:
             payload = await self.daemon_client.update_model(provider, model, persist_global=persist_global)
@@ -2913,7 +3012,7 @@ class LibreClawApp(App[None]):
         *,
         persist_global: bool = False,
     ) -> str:
-        if self.daemon_client is None:
+        if self.daemon_client is None or getattr(self, "_orchestration_plugin", ""):
             return ""
         try:
             await self.daemon_client.update_fallback(fallback, persist_global=persist_global)
@@ -2922,6 +3021,8 @@ class LibreClawApp(App[None]):
         return "Daemon fallback chain updated for new daemon-backed runs."
 
     async def _refresh_openrouter_model_limits(self) -> None:
+        if getattr(self, "_orchestration_plugin", ""):
+            return
         provider = _canonical_tui_provider(self.config.general.default_provider)
         if provider == "moonshot":
             updated = apply_moonshot_model_limits(self.config)
@@ -2937,6 +3038,8 @@ class LibreClawApp(App[None]):
             limits = await detect_openrouter_model_limits(self.config, model=self.config.general.default_model)
         except Exception as exc:
             self._append_system(f"OpenRouter model metadata unavailable; using configured context window. ({exc})")
+            return
+        if getattr(self, "_orchestration_plugin", ""):
             return
         updated = apply_openrouter_model_limits(self.config, limits, model=self.config.general.default_model)
         if not _runtime_model_metadata_changed(self.config, updated):
@@ -3120,16 +3223,26 @@ class LibreClawApp(App[None]):
         asyncio.create_task(self._load_session_async(name))
 
     async def _save_session_async(self, session_name: str) -> None:
+        if getattr(self, "_orchestration_plugin", "") or "orchestration" in self.session.checkpoint:
+            self._append_system("Team tasks are saved as durable runs. Use /runs and /resume; named session exports cannot preserve their team permissions.")
+            return
         stored = await self.memory_store.save_session(session_name, self.session)
         self._append_system(f"Session saved as {stored.name}.")
 
     async def _load_session_async(self, name: str) -> None:
+        if (self._active_task is not None and not self._active_task.done()) or getattr(self, "_orchestration_plugin", "") or "orchestration" in self.session.checkpoint:
+            self._append_system("Use /new and /team off before importing a named session. Use /resume to restore a saved team task.")
+            return
         stored = await self.memory_store.load_session(name)
         if stored is None:
             self._append_system(f"No saved session named {name}.")
             return
-        self.session.messages = stored.messages
-        self.session.summary = stored.summary or None
+        if self._active_task is not None and not self._active_task.done() or getattr(self, "_orchestration_plugin", ""):
+            self._append_system("The task changed while loading the session; try again after it finishes.")
+            return
+        self.session = Session(messages=stored.messages, summary=stored.summary or None, mode=self.session.mode)
+        self._resumed_run_id = None
+        self._active_run_id = None
         self.transcript = self._transcript_from_messages(stored.messages)
         self._startup_entry_index = None
         self._append_startup_entry()
@@ -3733,13 +3846,33 @@ class LibreClawApp(App[None]):
             return
         if self.daemon_client is not None and hasattr(self.daemon_client, "get_session"):
             payload = await self.daemon_client.get_session(run.run_id)
-            self.session = session_from_payload(payload.get("session"))
+            candidate = session_from_payload(payload.get("session"))
         else:
-            self.session = await self.run_store.load_session(run.run_id, recover=run.state not in {"running", "blocked"})
+            candidate = await self.run_store.load_session(run.run_id, recover=run.state not in {"running", "blocked"})
+        if run.orchestration_plugin and not isinstance(candidate.checkpoint.get("orchestration"), dict):
+            self._append_system("The saved team profile is unavailable. Start a new team task instead of resuming with different routes.")
+            return
+        if not run.orchestration_plugin and "orchestration" in candidate.checkpoint:
+            self._append_system("This saved run does not authorize the imported team profile. Start a new team task.")
+            return
+        before = self.config
+        base = self._team_base_config or before
+        configured = _replace_model_selection(base, run.provider, run.model)
+        configured = replace(configured, general=replace(configured.general, working_directory=workspace, theme=before.general.theme))
+        if run.orchestration_plugin:
+            try:
+                configured = await asyncio.to_thread(prepare_orchestration, configured, self.cordis_manager, candidate)
+            except (ValueError, RuntimeError, OSError) as error:
+                self._append_system(f"Could not restore the saved team: {error}")
+                return
+            if self._team_base_config is None:
+                self._team_base_config = before
+        else:
+            self._team_base_config = None
+        self.session, self.config = candidate, configured
+        self._orchestration_plugin = run.orchestration_plugin
         if run.state not in {"running", "blocked"} or self.daemon_client is None:
             self.session.recover_interrupted_tools()
-        self.config = _replace_model_selection(self.config, run.provider, run.model)
-        self.config = replace(self.config, general=replace(self.config.general, working_directory=workspace))
         self.skill_store = SkillStore(workspace, skills_config=self.config.skills)
         self.soul_store = SoulStore(workspace)
         self._resumed_run_id = run.run_id
@@ -4364,17 +4497,24 @@ class LibreClawApp(App[None]):
     def _rebuild_agent(self) -> None:
         self.agent = None
         self.provider_error = None
-        if self.daemon_client is not None:
-            return
         try:
-            provider = create_provider(self.config)
+            if getattr(self, "_orchestration_plugin", "") and not isinstance(self.session.checkpoint.get("orchestration"), dict):
+                raise ValueError("The saved team profile is unavailable. Use /new and select a team again.")
+            if "orchestration" in self.session.checkpoint:
+                if not getattr(self, "_orchestration_plugin", ""):
+                    raise ValueError("Select the team explicitly before importing its session.")
+                self.config = prepare_orchestration(self.config, self.cordis_manager, self.session)
+            if self.daemon_client is not None:
+                return
+            provider = create_provider(orchestration_provider_settings(self.config, self.session))
             fallbacks = create_fallback_providers(self.config)
-        except ProviderConfigurationError as exc:
+        except (ValueError, RuntimeError, OSError) as exc:
             self.provider_error = str(exc)
             return
         try:
             self.cordis_manager.config = self.config
             tool_registry = bind_cordis_manager(create_builtin_registry(self.config, memory_store=self.memory_store), self.cordis_manager)
+            tool_registry = orchestration_registry(tool_registry, self.session)
         except Exception as exc:
             self.provider_error = str(exc)
             return
@@ -4401,6 +4541,11 @@ class LibreClawApp(App[None]):
             fallback_recheck_after_attempts=self.config.fallback.recheck_after_attempts,
             checkpoint_callback=self._save_current_session,
         )
+        try:
+            attach_orchestration(self.agent, self.config, self.cordis_manager)
+        except (ValueError, RuntimeError, OSError) as error:
+            self.agent = None
+            self.provider_error = str(error)
 
     async def _initialize_memory(self) -> None:
         await self.memory_store.initialize()
@@ -5186,6 +5331,8 @@ class LibreClawApp(App[None]):
         self._update_status_bar()
 
     def _sync_daemon_model_later(self) -> None:
+        if getattr(self, "_orchestration_plugin", ""):
+            return
         if self.daemon_client is None:
             return
         if self._daemon_model_sync_task is not None and not self._daemon_model_sync_task.done():
@@ -5208,6 +5355,8 @@ class LibreClawApp(App[None]):
         self._apply_daemon_model_payload(payload, announce_model_change=True)
 
     def _apply_daemon_model_payload(self, payload: Mapping[str, Any], *, announce_model_change: bool) -> None:
+        if getattr(self, "_orchestration_plugin", ""):
+            return
         provider = _canonical_tui_provider(str(payload.get("provider", "")).strip())
         model = str(payload.get("model", "")).strip()
         if not provider or not model:
@@ -5229,6 +5378,8 @@ class LibreClawApp(App[None]):
             self.query_one("#status", Static).update(self._status_text())
 
     def _sync_global_model_if_changed(self) -> None:
+        if getattr(self, "_orchestration_plugin", ""):
+            return
         if self._active_task is not None and not self._active_task.done():
             return
         path = global_config_path(self.config)

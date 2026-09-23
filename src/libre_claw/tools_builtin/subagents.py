@@ -38,6 +38,7 @@ class SubagentSpawnTool(SubagentTool):
         "scope": {"type": "string", "description": "Existing workspace directory; use . for the current directory."},
         "read_only": {"type": "boolean", "default": True},
         "write_paths": {"type": "array", "items": {"type": "string"}},
+        "worker": {"type": "string", "description": "Approved worker profile ID when orchestration is active; otherwise omit."},
         "provider": {"type": "string"}, "model": {"type": "string"},
         "max_tool_calls": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
         "max_seconds": {"type": "number", "minimum": 1, "maximum": 900, "default": 180},
@@ -46,7 +47,28 @@ class SubagentSpawnTool(SubagentTool):
     permission_level = "allow"
 
     def is_read_only(self, arguments: Mapping[str, Any]) -> bool:
+        try:
+            if self.manager.policy is not None:
+                return self.manager.policy.resolve_spawn(dict(arguments))["read_only"]
+        except (ValueError, PermissionError):
+            return False
         return arguments.get("read_only", True) is True
+
+    def schema(self) -> dict[str, Any]:
+        schema = super().schema()
+        try:
+            policy = self.manager.policy
+        except ValueError:
+            policy = None
+        if policy is not None:
+            properties = {key: dict(value) for key, value in schema["input_schema"]["properties"].items()
+                          if key not in {"provider", "model"}}
+            properties["worker"] = {"type": "string", "enum": [worker["id"] for worker in policy.profile["workers"]],
+                                    "default": policy.profile["default_worker"], "description": "Choose an approved worker profile."}
+            for key in ("read_only", "max_tool_calls", "max_seconds"):
+                properties[key].pop("default", None)
+            schema["input_schema"]["properties"] = properties
+        return schema
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         return self.result(await self.manager.spawn(**kwargs))

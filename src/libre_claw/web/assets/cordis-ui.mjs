@@ -146,8 +146,8 @@ class DashboardServices {
     else if (/^\/engine(?:\/|$)/.test(pathname)) service = 'engine';
     else if (/^\/plugins(?:\/|$)/.test(pathname)) service = 'plugins';
     else if (/^\/config\/theme(?:\/|$)/.test(pathname)) service = 'appearance';
-    else if (/^\/(models|config)(?:\/|$)/.test(pathname)) service = 'models';
-    else if (/^\/(workspace|automations)(?:\/|$)/.test(pathname)) service = 'workflows';
+    else if (/^\/(models|providers|config)(?:\/|$)/.test(pathname)) service = 'models';
+    else if (/^\/(workspace|automations|orchestration)(?:\/|$)/.test(pathname)) service = 'workflows';
     else if (/^\/(runs|usage)(?:\/|$)/.test(pathname)) service = 'tasks';
     return this.#service(service).request(url.pathname + url.search, options);
   }

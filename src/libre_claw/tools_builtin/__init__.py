@@ -39,9 +39,15 @@ def create_builtin_registry(config: LibreClawConfig, memory_store: MemoryStore |
         ))
         return create_provider(child_config, provider_name=provider or None, model=model or None)
 
+    def orchestration_provider_factory(provider, model, scope, read_only, options):
+        from libre_claw.providers.factory import create_provider, orchestration_provider_config
+        child_config = orchestration_provider_config(config, provider, model, options, working_directory=scope)
+        return create_provider(child_config, provider_name=provider, model=model)
+
     context = ToolContext(
         working_directory=Path(config.general.working_directory).resolve(),
         subagent_provider_factory=subagent_provider_factory,
+        orchestration_provider_factory=orchestration_provider_factory,
         restrict_to_working_dir=config.sandbox.restrict_to_working_dir,
         command_timeout=config.sandbox.command_timeout,
         allow_sudo=config.sandbox.allow_sudo,

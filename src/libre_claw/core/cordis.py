@@ -18,6 +18,7 @@ import stat
 import tempfile
 import time
 import copy
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -27,7 +28,7 @@ from libre_claw.core.cordis_config import (
     CordisConfigError, bounded_json, effective_config, preserve_secrets,
     public_config, public_schema, validate_config, validate_schema,
 )
-from libre_claw.core.tools import BaseTool, ToolContext, ToolResult
+from libre_claw.core.tools import BaseTool, PermissionLevel, ToolContext, ToolResult
 
 
 MANIFEST_NAME = "libre-claw-plugin.json"
@@ -422,7 +423,53 @@ class CordisManager:
             "components": _public_components(manifest),
             **({"adapter": manifest["harness"]["adapter"], "requires_model_access": True}
                if manifest.get("harness", {}).get("adapter") else {}),
+            **({"requires_model_access": True} if self._is_bundled_orchestration(manifest["id"], digest) else {}),
         }
+
+    def _is_bundled_orchestration(self, plugin_id: str, digest: str) -> bool:
+        """Special host privileges belong only to the exact shipped source."""
+        if plugin_id != "orchestration":
+            return False
+        source = Path(__file__).resolve().parents[1] / "cordis_runtime" / "examples" / "orchestration"
+        _, _, _, included_digest = self._source(source)
+        return digest == included_digest
+
+    def orchestration_profile(self, workspace: str | Path) -> dict[str, Any]:
+        """Load an explicitly enabled included profile without starting any work.
+
+        The returned authorize callback is local-only. Persist only plugin_id,
+        digest and config in a task checkpoint, never the callback itself.
+        """
+        from libre_claw.core.orchestration import validate_profile
+
+        directory, key = _workspace(workspace)
+        plugin_id = "orchestration"
+
+        def checked() -> tuple[dict[str, Any], dict[str, Any]]:
+            if self.config is not None and not self.config.cordis.enabled:
+                raise CordisError("Cordis plugins are disabled in configuration.")
+            record = self._record(plugin_id)
+            _, manifest = self._verify(plugin_id, record)
+            if not self._is_bundled_orchestration(plugin_id, record["digest"]):
+                raise CordisError("Orchestration requires the unchanged included plugin. Reinstall builtin:orchestration.")
+            grants = record["workspaces"].get(key)
+            if not isinstance(grants, dict) or grants.get("allow_model") is not True:
+                raise CordisError("Enable the orchestration plugin with model access for this project first.")
+            return record, manifest
+
+        record, manifest = checked()
+        config = validate_profile(self._effective_config(record, manifest, key))
+        baseline = copy.deepcopy(_runtime_record(record, key))
+
+        def authorize() -> bool:
+            if not directory.is_dir():
+                raise CordisError("The orchestration workspace no longer exists.")
+            current, _ = checked()
+            if _runtime_record(current, key) != baseline:
+                raise CordisError("Orchestration grants, configuration, or source changed. Start a new task.")
+            return True
+
+        return {"plugin_id": plugin_id, "digest": record["digest"], "config": config, "authorize": authorize}
 
     @_registry_mutation
     def install(self, source: str | Path, *, expected_digest: str | None = None) -> dict[str, Any]:
@@ -794,6 +841,8 @@ class CordisManager:
             "components": _public_components(manifest),
             "runtime_lifetime": "per-call",
         }
+        if manifest and self._is_bundled_orchestration(plugin_id, record["digest"]):
+            result["requires_model_access"] = True
         if manifest.get("harness", {}).get("adapter"):
             result.update(adapter=manifest["harness"]["adapter"], runtime_lifetime="host-service",
                           state="HOST_SERVICE" if grants is not None else "DISABLED")
@@ -888,7 +937,12 @@ class CordisManager:
             if _runtime_record(latest, key) != _runtime_record(baseline, key):
                 raise CordisError("Plugin grants or settings changed during execution.")
             return grants
-        host = CordisHost(plugin_id, authorize, config=self.config, context=context, engine=self.engine)
+        orchestration_authorize = None
+        if (tool_name is not None and context is not None and grants.get("allow_model") is True
+                and self._is_bundled_orchestration(plugin_id, record["digest"])):
+            orchestration_authorize = self.orchestration_profile(workspace)["authorize"]
+        host = CordisHost(plugin_id, authorize, config=self.config, context=context, engine=self.engine,
+                          orchestration_authorize=orchestration_authorize)
         host_parameters = await host.initialize() if manifest.get("format") == "deepseek-harness" else {}
         state_dir = self.root / "state" / key / plugin_id
         for path in (self.root / "state", state_dir.parent, state_dir):
@@ -1262,7 +1316,6 @@ class CordisManager:
 class CordisTool(BaseTool):
     """Plugin calls always pass through the normal explicit tool approval flow."""
 
-    permission_level = "ask"
     read_only = False
 
     def __init__(self, context: ToolContext, manager: CordisManager, plugin_id: str, definition: dict[str, Any], digest: str) -> None:
@@ -1279,6 +1332,37 @@ class CordisTool(BaseTool):
 
     def schema(self) -> dict[str, Any]:
         return {**_parse(_json(self._definition)), "name": self.name}
+
+    def _orchestration_controller(self) -> Any:
+        if self.plugin_id != "orchestration":
+            return None
+        try:
+            from libre_claw.core.cordis_host import active_orchestration_controller
+            profile = self.manager.orchestration_profile(self.context.working_directory)
+            if profile["digest"] != self._digest or profile["authorize"]() is not True:
+                return None
+            return active_orchestration_controller(self.plugin_id, self.context)
+        except (CordisError, ValueError, PermissionError):
+            return None
+
+    @property
+    def permission_level(self) -> PermissionLevel:
+        # Per-task profile selection grants bounded delegation, matching the
+        # native subagent tools. Every worker retains ordinary tool approvals.
+        return "allow" if self._orchestration_controller() is not None else "ask"
+
+    def is_read_only(self, arguments: Mapping[str, Any]) -> bool:
+        controller = self._orchestration_controller()
+        if controller is None:
+            return False
+        if self.tool_name in {"status", "wait", "cancel"}:
+            return True
+        if self.tool_name == "delegate":
+            try:
+                return controller.tasks_read_only(arguments.get("tasks")) is True
+            except (ValueError, PermissionError):
+                return False
+        return False
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         try:

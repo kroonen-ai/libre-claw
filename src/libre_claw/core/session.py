@@ -112,8 +112,9 @@ class Session:
             sections.append("PLAN ONLY: inspect and explain. Do not change files, run mutating commands, or delegate write work. Produce an actionable plan for the user to edit or approve.")
         if self.plan_steps:
             sections.append("Task plan:\n" + "\n".join(f"{i}. [{step['status']}] {step['text']}" for i, step in enumerate(self.plan_steps, 1)))
-        if self.checkpoint:
-            sections.append("Task checkpoint:\n" + _checkpoint_text(self.checkpoint))
+        checkpoint_text = _checkpoint_text(self.checkpoint)
+        if checkpoint_text:
+            sections.append("Task checkpoint:\n" + checkpoint_text)
         return "\n\n".join(sections)
 
     def recover_interrupted_tools(self) -> None:
@@ -321,6 +322,10 @@ def session_from_payload(value: object) -> Session:
     session.mode = "plan" if value.get("mode") == "plan" else "default"
     if isinstance(value.get("checkpoint"), dict):
         session.update_checkpoint(value["checkpoint"])
+        if "orchestration" in value["checkpoint"]:
+            # Keep evidence of an invalid profile so application entrypoints
+            # reject it instead of silently resuming an unrestricted task.
+            session.checkpoint["orchestration"] = _orchestration_checkpoint(value["checkpoint"]["orchestration"])
     if isinstance(value.get("plan_steps"), list):
         session.plan_steps = [{"text": str(step["text"])[:2000], "status": str(step.get("status", "pending"))} for step in value["plan_steps"] if isinstance(step, dict) and step.get("text") and step.get("status", "pending") in {"pending", "running", "done"}][:100]
     if isinstance(value.get("pending_steering"), list):
@@ -346,6 +351,25 @@ def session_from_payload(value: object) -> Session:
         if blocks:
             session.messages.append(ChatMessage(role=cast(MessageRole, role), content=blocks))
     return session
+
+
+def _orchestration_checkpoint(value: object) -> dict[str, Any] | None:
+    from libre_claw.core.cordis_config import bounded_json
+    from libre_claw.core.orchestration import validate_profile
+
+    try:
+        bounded_json(value, limit=160 * 1024, label="Saved orchestration profile")
+        if not isinstance(value, dict) or set(value) != {"plugin_id", "digest", "config", "profile"}:
+            return None
+        digest = value["digest"]
+        if value["plugin_id"] != "orchestration" or not isinstance(digest, str) or len(digest) != 64:
+            return None
+        if any(character not in "0123456789abcdef" for character in digest):
+            return None
+        return {"plugin_id": "orchestration", "digest": digest,
+                "config": validate_profile(value["config"]), "profile": validate_profile(value["profile"])}
+    except (ValueError, TypeError, KeyError):
+        return None
 
 
 def _checkpoint_text(checkpoint: dict[str, Any]) -> str:

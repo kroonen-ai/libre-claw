@@ -364,6 +364,36 @@ DASHBOARD_CSS = r"""
     .plugin-section > h4, .plugin-remove > h4 { margin: 0 0 12px; font-size: 13px; font-weight: 600; }
     .plugin-section > .hint, .plugin-remove > .hint { font-size: 11px; line-height: 1.8; }
     .plugin-config-form { display: grid; gap: 18px; margin-top: 20px; }
+    .team-composer-summary { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
+    .orchestration-form { display: grid; gap: 22px; margin-top: 18px; }
+    .orchestration-lead { padding: 20px; border: 1px solid var(--line-strong); border-inline-start: 2px solid var(--accent); background: var(--bg); }
+    .orchestration-lead h4 { margin: 0 0 18px; font-size: 14px; font-weight: 500; }
+    .orchestration-route, .orchestration-identity, .orchestration-policy { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .settings-body .orchestration-field { min-width: 0; margin: 0; }
+    .orchestration-workers { display: grid; gap: 14px; }
+    .orchestration-worker { display: grid; gap: 16px; padding: 20px; border: 1px solid var(--line); background: var(--bg); }
+    .orchestration-worker-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .orchestration-worker-heading h4, .orchestration-worker-heading h5 { font-size: 13px; font-weight: 500; margin: 0; }
+    .orchestration-worker-heading button, .orchestration-form .orchestration-refresh { font-size: 10px; min-height: 32px; }
+    .orchestration-form .orchestration-remove { border: 0; padding: 3px 0; min-height: 26px; background: none; }
+    .orchestration-budget-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .orchestration-advanced { border-top: 1px solid var(--line); padding-top: 14px; }
+    .orchestration-advanced summary { font-size: 11px; color: var(--muted); cursor: pointer; }
+    .orchestration-advanced > :not(summary) { margin-top: 16px; }
+    .orchestration-route-status { font-size: 10px; line-height: 1.7; margin: 10px 0 14px; overflow-wrap: anywhere; }
+    .orchestration-worker .orchestration-route-status { margin: -7px 0 0; }
+    .settings-body .orchestration-readonly { display: flex; flex-direction: row; align-items: center; align-self: end; gap: 9px; min-height: 42px; color: var(--soft); }
+    .settings-body .orchestration-readonly input { flex: none; width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+    .orchestration-check-status { margin: 0; min-height: 20px; font-size: 11px; line-height: 1.7; }
+    .orchestration-route-results { display: grid; gap: 8px; }
+    .orchestration-route-result { display: grid; grid-template-columns: minmax(70px, .5fr) minmax(0, 1fr); gap: 5px 12px; border-inline-start: 2px solid var(--ok); padding: 8px 12px; background: var(--bg); font-size: 10px; overflow-wrap: anywhere; }
+    .orchestration-route-result strong { font-weight: 500; }
+    .orchestration-route-result span { color: var(--muted); }
+    .orchestration-route-result small { grid-column: 1 / -1; color: var(--muted); font-size: 10px; }
+    .orchestration-route-result.danger { border-color: var(--danger); }
+    .orchestration-launch { display: grid; gap: 14px; margin-top: 24px; padding: 18px; border: 1px solid var(--line); background: var(--accent-soft); }
+    .orchestration-launch .hint { margin: 0; font-size: 11px; line-height: 1.7; }
+    .orchestration-launch button { justify-self: start; font-size: 11px; }
     .plugin-config-form .hint { margin: 0; font-size: 10px; line-height: 1.8; }
     .plugin-config-field { min-width: 0; }
     .plugin-config-field .plugin-json-input { font: 11px/1.7 var(--font-mono); min-height: 130px; }
@@ -448,6 +478,8 @@ DASHBOARD_CSS = r"""
       .metric-grid { gap: 8px; }
     }
     @media (max-width: 600px) {
+      .orchestration-route, .orchestration-identity, .orchestration-budget-grid { grid-template-columns: minmax(0, 1fr); }
+      .orchestration-lead, .orchestration-worker { padding: 14px; }
       .engine-components { grid-template-columns: minmax(0, 1fr); }
       .engine-overview, .engine-component { padding: 16px; }
       .engine-extensions, .engine-recovery { align-items: flex-start; flex-direction: column; gap: 12px; }

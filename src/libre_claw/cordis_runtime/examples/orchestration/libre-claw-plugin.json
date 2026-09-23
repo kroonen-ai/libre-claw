@@ -1,0 +1,320 @@
+{
+  "id": "orchestration",
+  "name": "Model orchestration",
+  "version": "1.0.0",
+  "description": "Coordinate scoped scouts, builders, and reviewers using explicit model routes and budgets. Provider credentials stay in Libre Claw.",
+  "entry": "plugin.mjs",
+  "requires_model_access": true,
+  "config": {
+    "orchestrator": {
+      "provider": "",
+      "model": "",
+      "reasoning_effort": "",
+      "context_window_tokens": 98304,
+      "max_output_tokens": 16384,
+      "prompt": "Coordinate the task using the configured scout, builder, and reviewer roles. Delegate only bounded independent work with explicit scope and writing paths. Pass self-contained assignments, never the complete conversation. Inspect progress, wait for reports, and verify results before concluding."
+    },
+    "workers": [
+      {
+        "id": "scout",
+        "name": "Scout",
+        "role": "scout",
+        "provider": "",
+        "model": "",
+        "reasoning_effort": "",
+        "max_concurrent": 1,
+        "max_tool_calls": 20,
+        "max_seconds": 180,
+        "context_window_tokens": 32768,
+        "max_output_tokens": 4096,
+        "read_only": true,
+        "prompt": "Investigate the assigned scope without changing files. Return concise findings, relevant paths, uncertainties, and a recommended next step. Work only from the delegated task and explicitly available project information."
+      },
+      {
+        "id": "builder",
+        "name": "Builder",
+        "role": "worker",
+        "provider": "",
+        "model": "",
+        "reasoning_effort": "",
+        "max_concurrent": 1,
+        "max_tool_calls": 20,
+        "max_seconds": 180,
+        "context_window_tokens": 32768,
+        "max_output_tokens": 4096,
+        "read_only": false,
+        "prompt": "Implement the assigned change within the declared scope and write paths. Preserve unrelated work and ordinary tool approvals. Report changed files, checks the orchestrator should run, validation you actually performed, and remaining issues. Do not claim to have run shell commands."
+      },
+      {
+        "id": "reviewer",
+        "name": "Reviewer",
+        "role": "reviewer",
+        "provider": "",
+        "model": "",
+        "reasoning_effort": "",
+        "max_concurrent": 1,
+        "max_tool_calls": 20,
+        "max_seconds": 180,
+        "context_window_tokens": 32768,
+        "max_output_tokens": 4096,
+        "read_only": true,
+        "prompt": "Review the assigned change without modifying files. Prioritize concrete correctness, regression, security, and missing-validation issues. Cite relevant file locations; report clearly when no actionable issue is found."
+      }
+    ],
+    "default_worker": "scout",
+    "max_concurrent": 3,
+    "max_total_workers": 12
+  },
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "orchestrator": {
+        "type": "object",
+        "title": "Orchestrator",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider",
+            "description": "Leave blank to inherit the selected orchestrator route."
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "Exact provider model ID; leave blank to inherit the selected orchestrator route."
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "title": "Reasoning effort",
+            "description": "Optional effort accepted by the configured model."
+          },
+          "context_window_tokens": {
+            "type": "integer",
+            "minimum": 1024,
+            "title": "Context token limit",
+            "maximum": 16777216
+          },
+          "max_output_tokens": {
+            "type": "integer",
+            "minimum": 1,
+            "title": "Maximum output tokens",
+            "maximum": 1048576
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 16000,
+            "title": "Instructions"
+          }
+        },
+        "additionalProperties": false
+      },
+      "workers": {
+        "type": "array",
+        "title": "Workers",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 48
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "role": {
+              "type": "string",
+              "enum": [
+                "scout",
+                "worker",
+                "reviewer"
+              ]
+            },
+            "provider": {
+              "type": "string",
+              "title": "Provider",
+              "description": "Leave blank to inherit the selected orchestrator route."
+            },
+            "model": {
+              "type": "string",
+              "title": "Model",
+              "description": "Exact provider model ID; leave blank to inherit the selected orchestrator route."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "title": "Reasoning effort",
+              "description": "Optional effort accepted by the configured model."
+            },
+            "read_only": {
+              "type": "boolean",
+              "title": "Read only"
+            },
+            "max_concurrent": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Concurrent workers of this kind",
+              "maximum": 8
+            },
+            "max_tool_calls": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Tool call budget",
+              "maximum": 100
+            },
+            "max_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Time budget in seconds",
+              "maximum": 900
+            },
+            "context_window_tokens": {
+              "type": "integer",
+              "minimum": 1024,
+              "title": "Context token limit",
+              "maximum": 16777216
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Maximum output tokens",
+              "maximum": 1048576
+            },
+            "prompt": {
+              "type": "string",
+              "maxLength": 16000,
+              "title": "Instructions"
+            }
+          },
+          "required": [
+            "id",
+            "role"
+          ],
+          "additionalProperties": false
+        },
+        "minItems": 1,
+        "maxItems": 16
+      },
+      "default_worker": {
+        "type": "string",
+        "title": "Default worker"
+      },
+      "max_concurrent": {
+        "type": "integer",
+        "minimum": 1,
+        "title": "Total concurrent workers",
+        "maximum": 8
+      },
+      "max_total_workers": {
+        "type": "integer",
+        "minimum": 1,
+        "title": "Total worker budget",
+        "maximum": 32
+      }
+    },
+    "additionalProperties": false
+  },
+  "tools": [
+    {
+      "name": "delegate",
+      "description": "Delegate bounded independent tasks to configured workers. Routes, budgets, scopes, and approvals are enforced by Libre Claw. Only the supplied tasks are shared; wait for results before finishing.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "worker": {
+                  "type": "string",
+                  "description": "Configured worker ID, such as scout, builder, or reviewer."
+                },
+                "task": {
+                  "type": "string",
+                  "description": "Self-contained bounded assignment; only this supplied task is delegated."
+                },
+                "scope": {
+                  "type": "string",
+                  "description": "Existing directory within the current project; use . for the current directory."
+                },
+                "read_only": {
+                  "type": "boolean",
+                  "description": "May narrow a worker to read only; cannot broaden a configured read-only worker."
+                },
+                "write_paths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Required, nonoverlapping paths relative to scope for writing tasks."
+                }
+              },
+              "required": [
+                "worker",
+                "task",
+                "scope"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "tasks"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wait",
+      "description": "Wait up to 60 seconds for selected workers and return bounded reports. Omit IDs to inspect all workers for this task.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timeout": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 60,
+            "default": 0
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "status",
+      "description": "Inspect configured worker roles, current progress, and remaining orchestration budgets for this task.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "cancel",
+      "description": "Cancel selected workers and wait for their cleanup. Omit IDs to cancel all workers belonging to this task.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

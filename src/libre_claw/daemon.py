@@ -62,7 +62,11 @@ from libre_claw.core.memory import (
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.cordis_engine import CordisEngine, CordisEngineError
 from libre_claw.core.questions import AgentUserQuestionRequest, validate_answers
+from libre_claw.core.runs import settle_finalization
 from libre_claw.core.cordis_services import CordisServicePool
+from libre_claw.core.orchestration_setup import (
+    attach_orchestration, orchestration_provider_settings, orchestration_registry, prepare_orchestration,
+)
 from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, run_plan_text
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.soul import SoulStore
@@ -96,6 +100,7 @@ from libre_claw.web import dashboard_html
 from libre_claw.core.worktrees import ManagedWorktree
 from libre_claw.web.workflow_api import WorkflowAPI, WorkspaceBusyError
 from libre_claw.web.plugins_api import PluginAPI
+from libre_claw.web.orchestration_api import OrchestrationAPI
 from libre_claw.web.request_security import control_api_middleware
 
 
@@ -196,6 +201,7 @@ class DaemonServer:
         self._provider_cooldowns: dict[str, ProviderCooldown] = {}
         self.workflows = WorkflowAPI(self)
         self.plugins = PluginAPI(self, _cordis_local_request)
+        self.orchestration = OrchestrationAPI(self, _cordis_local_request)
         self._app: web.Application | None = None
         self._automation_task: asyncio.Task[None] | None = None
         self._telegram_task: asyncio.Task[None] | None = None
@@ -248,6 +254,7 @@ class DaemonServer:
         )
         app.add_routes([self._engine_route(route) for route in self.workflows.routes()])
         app.add_routes(self.plugins.routes())
+        app.add_routes(self.orchestration.routes())
         app.on_startup.append(self._on_startup)
         app.on_cleanup.append(self._on_cleanup)
         self._app = app
@@ -776,7 +783,7 @@ class DaemonServer:
                 run_config = replace(run_config, general=replace(run_config.general, working_directory=Path(worktree.path)))
             async with self._claim_managed_workspace(run_config.general.working_directory, worktree=worktree) as managed:
                 return await self._start_run_in_workspace(payload, message, kind, run_config, worktree=managed)
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, RuntimeError) as exc:
             return _json_error(str(exc), status=409)
 
     @contextlib.asynccontextmanager
@@ -801,6 +808,18 @@ class DaemonServer:
     ) -> web.Response:
         if self._closing:
             return _json_error("The daemon is shutting down.", status=503)
+        session = session_from_payload(payload.get("session"))
+        team = payload.get("orchestration_plugin", "")
+        if not isinstance(team, str):
+            return _json_error("orchestration_plugin must be a plugin ID.")
+        if team:
+            if kind != "chat":
+                return _json_error("Team profiles run chat tasks; start a team task instead of an autonomous goal.")
+            if payload.get("provider") or payload.get("model"):
+                return _json_error("Select team models in the plugin settings before starting the task.")
+            run_config = await asyncio.to_thread(prepare_orchestration, run_config, self.cordis_manager, session, selected=team)
+        elif "orchestration" in session.checkpoint:
+            return _json_error("Select the orchestration profile explicitly when importing a team session.")
         run = await self.run_store.create_run(
             message,
             kind=cast(RunKind, kind),
@@ -808,13 +827,20 @@ class DaemonServer:
             model=run_config.general.default_model,
             working_directory=run_config.general.working_directory,
             state="queued",
+            orchestration_plugin=team,
         )
         if worktree is not None:
             await self.workflows.worktrees.associate(worktree.worktree_id, run.run_id)
             await self.run_store.append_event(run.run_id, "worktree_attached", {"worktree_id": worktree.worktree_id})
         surface = str(payload.get("surface", "daemon")).strip() or "daemon"
         telegram_chat_id = _optional_int(payload.get("telegram_chat_id")) if "telegram_chat_id" in payload else None
-        session = session_from_payload(payload.get("session"))
+        if team:
+            # Persist the approved routes before the first provider call or a
+            # crash can detach the run from its profile.
+            await self.run_store.save_session(run.run_id, session)
+            await self.run_store.append_event(run.run_id, "orchestration_selected", {
+                "plugin_id": team, "profile": session.checkpoint["orchestration"]["profile"],
+            })
         attachments = _attachments_from_payload(payload.get("attachments"))
         task = asyncio.create_task(
             self._run_agent(
@@ -883,12 +909,18 @@ class DaemonServer:
                                 if self._closing:
                                     return
                                 session = await self.run_store.load_session(run_id, recover=True)
+                                if run.orchestration_plugin:
+                                    if "orchestration" not in session.checkpoint:
+                                        raise ValueError("The saved team profile is unavailable; queued follow-ups remain pending.")
+                                    config = await asyncio.to_thread(prepare_orchestration, config, self.cordis_manager, session)
                                 queued = await self.run_store.take_queued_message(run_id)
                                 if queued is None:
                                     return
                                 run = await self.run_store.update_state(run_id, "queued")
                                 self._active_sessions[run_id] = session
-                                task = asyncio.create_task(self._run_agent(run, queued["message"], config, surface="daemon:queue", session=session, continuation=True))
+                                task = asyncio.create_task(self._run_agent(
+                                    run, queued["message"], config, surface="daemon:queue", session=session, continuation=True,
+                                    **({"queued_claim": queued} if run.orchestration_plugin else {})))
                                 active = self._register_active(run_id, task, "daemon:queue")
                         except WorkspaceBusyError:
                             workspace_busy = True
@@ -1057,6 +1089,17 @@ class DaemonServer:
             if not workspace.is_dir():
                 return _json_error("The saved task workspace no longer exists.", status=409)
             run_config = replace(run_config, general=replace(run_config.general, working_directory=workspace))
+        if run.orchestration_plugin:
+            if payload.get("provider") not in (None, "", run.provider) or payload.get("model") not in (None, "", run.model):
+                return _json_error("This task keeps its saved team routes. Start a new task to change the team.")
+            if "orchestration" not in session.checkpoint:
+                return _json_error("The saved team profile is unavailable; start a new team task.", status=409)
+            try:
+                run_config = await asyncio.to_thread(prepare_orchestration, run_config, self.cordis_manager, session)
+            except (ValueError, RuntimeError) as error:
+                return _json_error(str(error), status=409)
+        elif payload.get("orchestration_plugin"):
+            return _json_error("Select a team when starting a new task.")
         try:
             async with self._claim_managed_workspace(run_config.general.working_directory, exclude_run_id=run_id):
                 if self._closing:
@@ -1289,27 +1332,7 @@ class DaemonServer:
             theme=self.config.general.theme,
             log_level=self.config.general.log_level,
         )
-        config = LibreClawConfig(
-            general=general,
-            agent=self.config.agent,
-            permissions=self.config.permissions,
-            sandbox=self.config.sandbox,
-            auth=self.config.auth,
-            tui=self.config.tui,
-            telegram=self.config.telegram,
-            goal=self.config.goal,
-            fallback=self.config.fallback,
-            heartbeat=self.config.heartbeat,
-            memory=self.config.memory,
-            daemon=self.config.daemon,
-            automations=self.config.automations,
-            browser=self.config.browser,
-            petdex=self.config.petdex,
-            mcp=self.config.mcp,
-            skills=self.config.skills,
-            providers=self.config.providers,
-            source_paths=self.config.source_paths,
-        )
+        config = replace(self.config, general=general)
         return await self._with_openrouter_model_limits(config)
 
     async def _run_agent(
@@ -1318,6 +1341,7 @@ class DaemonServer:
         attachments: tuple[UserAttachment, ...] = (), telegram_chat_id: int | None = None,
         deadline_monotonic: float | None = None, deadline_reserve_seconds: float = 0.0,
         continuation: bool = False,
+        queued_claim: dict[str, Any] | None = None,
     ) -> RunState:
         session = session if session is not None else Session()
         self._active_sessions[run.run_id] = session
@@ -1328,10 +1352,12 @@ class DaemonServer:
                     session=session, attachments=attachments, telegram_chat_id=telegram_chat_id,
                     deadline_monotonic=deadline_monotonic, deadline_reserve_seconds=deadline_reserve_seconds,
                     continuation=continuation,
+                    **({"queued_claim": queued_claim} if run.orchestration_plugin and queued_claim else {}),
                 )
                 if queued is None:
                     return state
                 message, attachments, continuation = queued["message"], (), True
+                queued_claim = queued
         finally:
             if self._active_sessions.get(run.run_id) is session:
                 self._active_sessions.pop(run.run_id, None)
@@ -1350,6 +1376,7 @@ class DaemonServer:
         deadline_monotonic: float | None = None,
         deadline_reserve_seconds: float = 0.0,
         continuation: bool = False,
+        queued_claim: dict[str, Any] | None = None,
     ) -> tuple[RunState, dict[str, Any] | None]:
         # The agent mutates this session in place; holding the reference lets the
         # daemon snapshot the full conversation for follow-up turns.
@@ -1359,7 +1386,12 @@ class DaemonServer:
         state: RunState = "done"
         primary_rate_limited = False
         queued: dict[str, Any] | None = None
+        message_recorded = False
         try:
+            if run.orchestration_plugin:
+                if "orchestration" not in session.checkpoint:
+                    raise ValueError("The saved team profile is unavailable; start a new team task.")
+                config = await asyncio.to_thread(prepare_orchestration, config, self.cordis_manager, session)
             try:
                 from libre_claw.core.git_review import create_checkpoint
                 session.checkpoint["last_turn_tree"] = await create_checkpoint(config.general.working_directory, name=run.run_id)
@@ -1392,6 +1424,7 @@ class DaemonServer:
                     "attachments": [_attachment_metadata(attachment) for attachment in attachments],
                 },
             )
+            message_recorded = True
             agent = await self._create_agent(
                 config,
                 session=session,
@@ -1590,6 +1623,9 @@ class DaemonServer:
             )
             await self.run_store.append_event(run.run_id, "error", {"message": str(exc)})
         finally:
+            if run.orchestration_plugin and queued_claim is not None and not message_recorded:
+                await settle_finalization(asyncio.create_task(self.run_store.release_queued_message(
+                    run.run_id, queued_claim, cancelled=state == "cancelled")))
             self._active_agents.pop(run.run_id, None)
             owner = asyncio.current_task()
             memory_extraction: asyncio.Task[None] | None = None
@@ -1902,9 +1938,12 @@ class DaemonServer:
         deadline_monotonic: float | None = None,
         deadline_reserve_seconds: float = 0.0,
     ) -> Agent:
+        session = session if session is not None else Session()
+        if "orchestration" in session.checkpoint:
+            config = await asyncio.to_thread(prepare_orchestration, config, self.cordis_manager, session)
         async with self._engine_lock:
             engine = self.engine
-        provider = self.provider_factory(config)
+        provider = self.provider_factory(orchestration_provider_settings(config, session))
         fallbacks = create_fallback_providers(config)
         memory_facts = await self.memory_store.list_always_injected_memories()
         skill_store = SkillStore(config.general.working_directory, skills_config=config.skills)
@@ -1912,11 +1951,12 @@ class DaemonServer:
         permission_manager = PermissionManager(config.permissions)
         if surface.startswith("automation:"):
             permission_manager.allow_tools_for_session(config.automations.auto_approve_tools)
-        return Agent(
+        agent = Agent(
             engine=engine,
-            session=session or Session(),
+            session=session,
             provider=provider,
-            tool_registry=bind_cordis_manager(self.registry_factory(config, self.memory_store), self.cordis_manager),
+            tool_registry=orchestration_registry(
+                bind_cordis_manager(self.registry_factory(config, self.memory_store), self.cordis_manager), session),
             permission_manager=permission_manager,
             system_prompt=config.agent.system_prompt,
             max_tool_calls_per_turn=config.agent.max_tool_calls_per_turn,
@@ -1943,6 +1983,8 @@ class DaemonServer:
             deadline_monotonic=deadline_monotonic,
             deadline_reserve_seconds=deadline_reserve_seconds,
         )
+        attach_orchestration(agent, config, self.cordis_manager)
+        return agent
 
     async def _with_openrouter_model_limits(self, config: LibreClawConfig) -> LibreClawConfig:
         provider = config.general.default_provider.lower()
@@ -2698,6 +2740,7 @@ def _run_payload(run: RunRecord) -> dict[str, Any]:
         "created_at": run.created_at,
         "updated_at": run.updated_at,
         "path": str(run.path),
+        **({"orchestration_plugin": run.orchestration_plugin} if run.orchestration_plugin else {}),
     }
 
 

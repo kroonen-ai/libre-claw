@@ -85,6 +85,7 @@ def request_subagent_resume(session: Session, argument: str) -> tuple[str, str]:
 def saved_subagent_snapshots(session: Session) -> list[dict[str, Any]]:
     """Render saved worker status without exposing raw child sessions or reasoning."""
     fields = {"id", "task", "scope", "read_only", "write_paths", "provider", "model", "status", "output", "error", "tool_calls", "max_tool_calls", "max_seconds", "created_at", "usage", "elapsed_seconds", "resume_count"}
+    fields.update({"worker_id", "role", "name", "reasoning_effort", "context_window_tokens", "max_output_tokens"})
     snapshots = []
     pending = {item["id"] for item in session.pending_subagent_resumes}
     for agent_id, value in session.subagents.items():

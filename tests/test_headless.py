@@ -223,6 +223,7 @@ async def test_headless_consumer_error_closes_agent_before_plugin_and_engine_res
     class StreamAgent:
         def __init__(self, **kwargs):
             self.engine = kwargs["engine"]
+            self.session = kwargs["session"]
 
         async def run(self, message):
             try:

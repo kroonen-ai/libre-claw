@@ -41,6 +41,8 @@ REQUIRED_PACKAGE_FILES = (
     "cordis_runtime/compat/upstream.json", "cordis_runtime/compat/upstream/LICENSE",
     "cordis_runtime/examples/text-utilities/plugin.mjs",
     "cordis_runtime/examples/text-utilities/libre-claw-plugin.json",
+    "cordis_runtime/examples/orchestration/libre-claw-plugin.json",
+    "cordis_runtime/examples/orchestration/plugin.mjs",
     "cordis_runtime/examples/native-provider/package.json",
     "cordis_runtime/examples/native-provider/cordis.patch.yml",
     "cordis_runtime/examples/native-provider/runtime/native-provider-plugin.js",

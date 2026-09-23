@@ -263,6 +263,24 @@ export class CordisRuntime {
           delete: key => storage.delete(key),
         });
         this.cordis = Object.freeze({ Context, Service });
+        const orchestration = async (method, parameters) => {
+          const call = runtime.#calls.getStore();
+          if (!call || call.closed || !call.agent || typeof runtime.#hostCall !== 'function') {
+            throw new PublicError('Orchestration requires an active task with an explicitly selected profile.');
+          }
+          call.signal.throwIfAborted();
+          const result = await runtime.#hostCall(`orchestration.${method}`,
+            copyJson(parameters, MAX_VALUE_BYTES, 'Orchestration arguments exceed their size limit.'));
+          call.signal.throwIfAborted();
+          if (call.closed) throw new PublicError('The orchestration task is no longer active.');
+          return copyJson(result, 256 * 1024, 'The orchestration report exceeds its size limit.');
+        };
+        this.orchestration = Object.freeze({
+          dispatch: tasks => orchestration('dispatch', { tasks }),
+          wait: (ids, timeout = 0) => orchestration('wait', { ...(ids === undefined ? {} : { ids }), timeout }),
+          status: () => orchestration('status', {}),
+          cancel: ids => orchestration('cancel', ids === undefined ? {} : { ids }),
+        });
       }
 
       registerTool(definition, handler) {
@@ -352,6 +370,7 @@ export class CordisRuntime {
       const call = {
         callId: supplied.callId ?? supplied.call_id ?? randomUUID(),
         signal: new AbortController().signal,
+        closed: false,
         ...(supplied.agent ? { agent: supplied.agent } : supplied.session_id ? { agent: {
           id: supplied.agent_id ?? supplied.session_id,
           session: { id: supplied.session_id,
@@ -360,7 +379,8 @@ export class CordisRuntime {
           },
         } } : {}),
       };
-      result = await this.#calls.run(call, () => tool.handler(args));
+      try { result = await this.#calls.run(call, () => tool.handler(args)); }
+      finally { call.closed = true; }
     }
     catch { throw new PublicError('The plugin tool failed.'); }
     if (typeof result === 'string') result = { content: result, error: false };

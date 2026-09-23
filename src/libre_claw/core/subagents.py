@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 
 FILE_WRITE_TOOLS = frozenset({"write_file", "edit_file", "apply_patch"})
+PROFILE_READ_TOOLS = frozenset({"read_file", "list_directory", "search_files", "glob", "view_image", "think", "task_checkpoint"})
 ACTIVE_STATES = frozenset({"running", "blocked"})
 MAX_OUTPUT_CHARS = 16_000
 
@@ -41,6 +42,14 @@ class SubagentState:
     model: str
     max_tool_calls: int
     max_seconds: float
+    worker_id: str = ""
+    role: str = ""
+    name: str = ""
+    reasoning_effort: str = ""
+    context_window_tokens: int | None = None
+    max_output_tokens: int | None = None
+    role_prompt: str = ""
+    orchestration_fingerprint: str = ""
     session: Session = field(default_factory=Session)
     status: str = "running"
     output: str = ""
@@ -65,10 +74,15 @@ class SubagentState:
             "max_tool_calls": self.max_tool_calls, "max_seconds": self.max_seconds,
             "created_at": self.created_at, "elapsed_seconds": self.elapsed(),
             "usage": asdict(self.usage) if self.usage is not None else None,
+            **({"worker_id": self.worker_id, "role": self.role, "name": self.name,
+                "reasoning_effort": self.reasoning_effort, "context_window_tokens": self.context_window_tokens,
+                "max_output_tokens": self.max_output_tokens, "orchestration_fingerprint": self.orchestration_fingerprint}
+               if self.worker_id else {}),
         }
 
     def durable_snapshot(self) -> dict[str, Any]:
-        return {**self.snapshot(), "session": copy.deepcopy(session_to_payload(self.session))}
+        return {**self.snapshot(), "session": copy.deepcopy(session_to_payload(self.session)),
+                **({"role_prompt": self.role_prompt} if self.worker_id else {})}
 
     @classmethod
     def restore(cls, value: dict[str, Any]) -> SubagentState:
@@ -81,6 +95,10 @@ class SubagentState:
             read_only=value["read_only"], write_paths=tuple(Path(path) for path in value.get("write_paths", [])),
             provider=str(value.get("provider", "")), model=str(value.get("model", "")),
             max_tool_calls=int(value["max_tool_calls"]), max_seconds=float(value["max_seconds"]),
+            worker_id=str(value.get("worker_id", "")), role=str(value.get("role", "")), name=str(value.get("name", "")),
+            reasoning_effort=str(value.get("reasoning_effort", "")), context_window_tokens=value.get("context_window_tokens"),
+            max_output_tokens=value.get("max_output_tokens"), role_prompt=str(value.get("role_prompt", "")),
+            orchestration_fingerprint=str(value.get("orchestration_fingerprint", "")),
             session=session_from_payload(value.get("session")), status=status,
             output=str(value.get("output", ""))[-MAX_OUTPUT_CHARS:], error=value.get("error"),
             tool_calls=max(0, int(value.get("tool_calls", 0))),
@@ -110,9 +128,16 @@ class ScopedTool(BaseTool):
         self.permission_level = wrapped.permission_level
 
     def is_read_only(self, arguments: Mapping[str, Any]) -> bool:
+        if self.state.worker_id and self.name == "task_checkpoint":
+            return True
         return self.wrapped.is_read_only(arguments)
 
     async def execute(self, **kwargs: Any) -> ToolResult:
+        if self.state.orchestration_fingerprint:
+            try:
+                self.parent.subagents._validate_policy_state(self.state)
+            except (ValueError, PermissionError) as exc:
+                return ToolResult(error=str(exc))
         if self.state.scope.resolve() != self.state.scope:
             return ToolResult(error="The assigned scope changed on disk; stop and revalidate the worker workspace.")
         if not self.is_read_only(kwargs):
@@ -142,8 +167,10 @@ class SubagentManager:
         self.events: asyncio.Queue[AgentEvent] = parent.control_events
         self._spawn_count = 0
         self._turn_usage: dict[str, Usage | None] = {}
+        self._turn_ids: set[str] = set()
         self._spawn_lock = asyncio.Lock()
         self._session = parent.session
+        self.policy = None
         self._restore()
 
     def _restore(self) -> None:
@@ -170,6 +197,7 @@ class SubagentManager:
             self._restore()
         self._spawn_count = 0
         self._turn_usage.clear()
+        self._turn_ids.clear()
 
     def total_usage(self) -> Usage | None:
         usage = None
@@ -188,37 +216,125 @@ class SubagentManager:
         async with self._spawn_lock:
             return await self._spawn(**kwargs)
 
-    async def _spawn(
-        self, *, task: str, scope: str, read_only: bool = True,
-        write_paths: list[str] | None = None, provider: str = "", model: str = "",
-        max_tool_calls: int = 20, max_seconds: float = 180,
-    ) -> dict[str, Any]:
+    def _prepare_state(self, arguments: dict[str, Any]) -> SubagentState:
+        allowed = {"task", "scope", "read_only", "write_paths", "provider", "model", "max_tool_calls", "max_seconds", "worker"}
+        if set(arguments) - allowed:
+            raise ValueError("Unknown subagent assignment fields.")
+        if self.policy is not None:
+            arguments = self.policy.resolve_spawn(arguments)
+        elif "worker" in arguments:
+            raise ValueError("Worker profile selection requires active orchestration.")
+        task, scope = arguments.get("task"), arguments.get("scope")
+        read_only, write_paths = arguments.get("read_only", True), arguments.get("write_paths", [])
+        provider, model = arguments.get("provider", ""), arguments.get("model", "")
+        max_tool_calls, max_seconds = arguments.get("max_tool_calls", 20), arguments.get("max_seconds", 180)
         context = self.parent.tool_registry.context
         if context is None:
             raise ValueError("Subagents require a workspace tool context.")
-        if not task.strip() or len(task) > 16_000:
+        if not isinstance(task, str) or not task.strip() or len(task) > 16_000:
             raise ValueError("task must contain 1 to 16000 characters")
-        if not scope.strip():
+        if not isinstance(scope, str) or not scope.strip():
             raise ValueError("An explicit subagent scope is required.")
         if not isinstance(read_only, bool):
             raise ValueError("read_only must be a boolean")
-        if not isinstance(max_tool_calls, int) or not 1 <= max_tool_calls <= 100:
+        if type(max_tool_calls) is not int or not 1 <= max_tool_calls <= 100:
             raise ValueError("max_tool_calls must be between 1 and 100")
-        if not 1 <= max_seconds <= 900:
+        if type(max_seconds) not in {float, int} or not 1 <= max_seconds <= 900:
             raise ValueError("max_seconds must be between 1 and 900")
+        if not isinstance(provider, str) or not isinstance(model, str):
+            raise ValueError("provider and model must be strings")
+        if write_paths is None:
+            write_paths = []
+        if (not isinstance(write_paths, list) or len(write_paths) > 128
+                or any(not isinstance(path, str) or not path.strip() or len(path) > 4096 or "\0" in path for path in write_paths)):
+            raise ValueError("write_paths must be a bounded list of paths")
         resolved_scope, owners = self._validate_scope(scope, read_only, write_paths or [])
-        self._check_available(read_only, owners)
         provider_name = provider or context.default_provider
         model_name = model or (context.default_model if not provider or provider == context.default_provider else "")
         state = SubagentState(
             id=uuid.uuid4().hex[:12], task=task, scope=resolved_scope, read_only=read_only,
             write_paths=tuple(owners), provider=provider_name, model=model_name,
             max_tool_calls=min(max_tool_calls, self.parent.max_tool_calls_per_turn), max_seconds=float(max_seconds),
+            **{key: arguments[key] for key in ("worker_id", "role", "name", "reasoning_effort", "context_window_tokens",
+                                               "max_output_tokens", "role_prompt", "orchestration_fingerprint") if key in arguments},
         )
+        return state
+
+    def _check_batch(self, states: list[SubagentState]) -> None:
+        if self.parent.deadline_monotonic is not None and time.monotonic() >= self.parent.deadline_monotonic:
+            raise ValueError("The parent task deadline has been reached.")
+        for state in states:
+            self._check_available(state.read_only, state.write_paths)
+            if state.scope.resolve() != state.scope:
+                raise ValueError("The worker scope changed before execution.")
+        if self.policy is not None:
+            self.policy.admit(states)
+        else:
+            context = self.parent.tool_registry.context
+            if self._spawn_count + len(states) > max(1, context.subagent_max_total):
+                raise ValueError("The subagent budget for this task has been reached.")
+            if sum(state.status in ACTIVE_STATES for state in self.states.values()) + len(states) > max(1, context.subagent_max_concurrent):
+                raise ValueError("All subagent slots are busy. Wait for or cancel a worker first.")
+        for index, state in enumerate(states):
+            for other in states[:index]:
+                if any(left.is_relative_to(right) or right.is_relative_to(left) for left in state.write_paths for right in other.write_paths):
+                    raise ValueError("Write scopes overlap inside the requested worker batch.")
+
+    async def _spawn(self, **arguments: Any) -> dict[str, Any]:
+        state = self._prepare_state(arguments)
+        self._check_batch([state])
         child = await self._build_child(state)
+        self._check_batch([state])
         self.states[state.id] = state
-        await self._start(state, child, task)
+        await self._start(state, child, state.task)
         return state.snapshot()
+
+    async def spawn_batch(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Validate the whole batch and checkpoint ownership before any model runs."""
+        if not isinstance(tasks, list) or not 1 <= len(tasks) <= 16 or any(not isinstance(task, dict) for task in tasks):
+            raise ValueError("Provide a bounded list of worker assignments.")
+        async with self._spawn_lock:
+            states = [self._prepare_state(task) for task in tasks]
+            self._check_batch(states)
+            children = [await self._build_child(state) for state in states]
+            self._check_batch(states)
+            count = self._spawn_count
+            gate = asyncio.Event()
+            async def run_when_ready(state, child):
+                await gate.wait()
+                await self._run(state, child, state.task)
+            try:
+                for state in states:
+                    self.states[state.id] = state
+                    state.started_monotonic = time.monotonic()
+                self._spawn_count += len(states)
+                await self._persist()
+                if self.policy is not None:
+                    self.policy.authorize()
+                if any(state.status != "running" for state in states):
+                    raise ValueError("Worker batch was cancelled before execution.")
+                for state, child in zip(states, children):
+                    coroutine = run_when_ready(state, child)
+                    try:
+                        state.task_handle = asyncio.create_task(coroutine, name=f"subagent-{state.id}")
+                    except BaseException:
+                        coroutine.close()
+                        raise
+                    self._publish(state)
+                snapshots = [state.snapshot() for state in states]
+                self._turn_ids.update(state.id for state in states)
+                gate.set()
+                return snapshots
+            except BaseException:
+                for state in states:
+                    if state.task_handle is not None:
+                        state.task_handle.cancel()
+                await asyncio.gather(*(state.task_handle for state in states if state.task_handle is not None), return_exceptions=True)
+                for state in states:
+                    self.states.pop(state.id, None)
+                self._spawn_count = count
+                self._save_states()
+                raise
 
     def _validate_scope(self, scope: str, read_only: bool, write_paths: list[str]) -> tuple[Path, tuple[Path, ...]]:
         context = self.parent.tool_registry.context
@@ -244,9 +360,9 @@ class SubagentManager:
 
     def _check_available(self, read_only: bool, owners: tuple[Path, ...]) -> None:
         context = self.parent.tool_registry.context
-        if self._spawn_count >= max(1, context.subagent_max_total):
+        if self.policy is None and self._spawn_count >= max(1, context.subagent_max_total):
             raise ValueError("The subagent budget for this task has been reached.")
-        if sum(state.status in ACTIVE_STATES for state in self.states.values()) >= max(1, context.subagent_max_concurrent):
+        if self.policy is None and sum(state.status in ACTIVE_STATES for state in self.states.values()) >= max(1, context.subagent_max_concurrent):
             raise ValueError("All subagent slots are busy. Wait for or cancel a worker first.")
         if self.parent.session.mode == "plan" and not read_only:
             raise ValueError("Plan mode permits only read-only subagents.")
@@ -259,7 +375,16 @@ class SubagentManager:
 
     async def _build_child(self, state: SubagentState) -> Agent:
         context = self.parent.tool_registry.context
-        if context.subagent_provider_factory is None:
+        self._validate_policy_state(state)
+        profile_factory = getattr(context, "orchestration_provider_factory", None) if state.worker_id else None
+        if profile_factory is not None:
+            child_provider = await asyncio.to_thread(profile_factory, state.provider, state.model, state.scope, state.read_only, {
+                "reasoning_effort": state.reasoning_effort, "context_window_tokens": state.context_window_tokens,
+                "max_output_tokens": state.max_output_tokens,
+            })
+        elif state.worker_id and state.reasoning_effort:
+            raise ValueError("This runtime cannot apply the worker profile's reasoning setting.")
+        elif context.subagent_provider_factory is None:
             if state.provider != context.default_provider or state.model != context.default_model:
                 raise ValueError("This runtime has no subagent provider factory for model overrides.")
             child_provider = copy.copy(self.parent.provider)
@@ -270,12 +395,21 @@ class SubagentManager:
         if hasattr(child_provider, "sandbox") or hasattr(child_provider, "approval_policy"):
             raise ValueError("This provider runs its own tools; use a client-tool provider for scoped subagents.")
         effective_model = getattr(child_provider, "model", None)
-        if isinstance(effective_model, str) and effective_model:
+        # Profile identity records the selected route, including provider aliases.
+        # Adapters may normalize that alias internally without changing the grant.
+        if not state.worker_id and isinstance(effective_model, str) and effective_model:
             state.model = effective_model
+        if state.worker_id:
+            from libre_claw.core.orchestration import LimitedProvider
+            child_provider = LimitedProvider(child_provider, context_window_tokens=state.context_window_tokens,
+                                             max_output_tokens=state.max_output_tokens,
+                                             authorize=lambda: self._validate_policy_state(state))
         child_context = replace(context, working_directory=state.scope, restrict_to_working_dir=True, shared_state={})
         child_tools = []
         for tool in self.parent.tool_registry.tools():
             if tool.name.startswith("subagent_"):
+                continue
+            if state.worker_id and tool.name not in PROFILE_READ_TOOLS | (FILE_WRITE_TOOLS if not state.read_only else frozenset()):
                 continue
             if tool.is_read_only({}) or (not state.read_only and tool.name in FILE_WRITE_TOOLS):
                 child_tools.append(ScopedTool(tool, state, child_context, self.parent))
@@ -303,11 +437,15 @@ class SubagentManager:
             session=state.session, provider=child_provider, tool_registry=ToolRegistry(child_tools),
             permission_manager=permissions, system_prompt=self.parent.system_prompt,
             system_prompt_extra=(
-                f"You are a delegated worker. Complete only this assigned task. Workspace scope: {state.scope}. "
+                f"You are a delegated {state.role or 'worker'}. Complete only this assigned task. Workspace scope: {state.scope}. "
                 f"Mode: {'read only' if state.read_only else 'write only to declared paths ' + ', '.join(map(str, state.write_paths))}. "
-                "Return findings, verification and unresolved issues to the parent. Do not delegate further."
+                "Return findings, observed verification and unresolved issues to the parent. Do not delegate further. "
+                + ("You have no shell or external network tools. The parent runs tests and integration commands; never claim those ran here."
+                   if state.worker_id else "")
+                + ("\n\n" + state.role_prompt if state.role_prompt else "")
             ), max_tool_calls_per_turn=min(state.max_tool_calls - state.tool_calls, self.parent.max_tool_calls_per_turn),
-            context_window_tokens=self.parent.context_window_tokens,
+            context_window_tokens=state.context_window_tokens or self.parent.context_window_tokens,
+            **({"provider_retry_attempts": 0} if state.worker_id else {}),
             deadline_monotonic=deadline, deadline_reserve_seconds=min(5.0, remaining_seconds / 10),
             checkpoint_callback=checkpoint, usage_callback=record_usage,
         )
@@ -319,21 +457,25 @@ class SubagentManager:
         self._spawn_count += 1
         try:
             await self._persist()
-        except Exception:
-            state.status = "interrupted"
+            self._validate_policy_state(state)
+            if state.status != "running":
+                raise ValueError("Worker start was cancelled before execution.")
+        except BaseException:
+            if state.status == "running":
+                state.status = "interrupted"
             state.error = "Worker could not start because its checkpoint could not be saved."
             state.elapsed_seconds = state.elapsed()
             state.started_monotonic = None
             self._save_states()
             raise
-        if state.status != "running":
-            raise ValueError("Worker start was cancelled before execution.")
         self._publish(state)
         state.task_handle = asyncio.create_task(self._run(state, child, prompt), name=f"subagent-{state.id}")
+        self._turn_ids.add(state.id)
 
     async def resume(self, agent_id: str, guidance: str = "") -> dict[str, Any]:
         async with self._spawn_lock:
             state = self._state(agent_id)
+            self._validate_policy_state(state)
             if state.status != "interrupted":
                 raise ValueError("Only interrupted workers can resume; completed, failed and cancelled workers are not replayed.")
             if not isinstance(guidance, str) or len(guidance) > 16_000:
@@ -344,6 +486,8 @@ class SubagentManager:
                 raise ValueError("This worker has exhausted its time budget.")
             scope, owners = self._validate_scope(str(state.scope), state.read_only, [str(path) for path in state.write_paths])
             self._check_available(state.read_only, owners)
+            if self.policy is not None:
+                self.policy.admit([state])
             state.scope, state.write_paths = scope, owners
             child = await self._build_child(state)
             if state.status != "interrupted":
@@ -360,6 +504,12 @@ class SubagentManager:
                 prompt += "\nCurrent user guidance: " + guidance.strip()
             await self._start(state, child, prompt)
             return state.snapshot()
+
+    def _validate_policy_state(self, state: SubagentState) -> None:
+        if self.policy is not None:
+            self.policy.validate_resume(state)
+        elif state.orchestration_fingerprint or state.worker_id:
+            raise ValueError("This worker requires its original orchestration profile before resuming.")
 
     def steer(self, guidance: str) -> None:
         for state in self.states.values():
@@ -525,6 +675,11 @@ class SubagentManager:
         return self.states[agent_id]
 
     def ownership_error(self, call: ToolCall) -> str | None:
+        if self.policy is not None:
+            try:
+                self.policy.authorize()
+            except (ValueError, PermissionError) as exc:
+                return str(exc)
         context = self.parent.tool_registry.context
         if context is None or call.name.startswith("subagent_"):
             return None

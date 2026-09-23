@@ -66,6 +66,11 @@ def catalog() -> list[dict[str, Any]]:
         "source": "builtin:text-utilities", "tool_count": 1,
         "offline": True,
     }, {
+        "id": "orchestration", "name": "Model orchestration", "version": "1.0.0",
+        "description": "Coordinate scoped scouts, builders, and reviewers with explicit model routes and budgets.",
+        "source": "builtin:orchestration", "tool_count": 4, "offline": True,
+        "requires_model_access": True,
+    }, {
         "id": "native-provider", "name": "Libre WebUI bridge", "version": "0.1.1",
         "description": "Use Libre Claw models in Libre WebUI over a private local connection.",
         "source": "builtin:native-provider", "tool_count": 0, "offline": False,
@@ -531,7 +536,8 @@ def _stage_files(manager: CordisManager, files: dict[str, bytes]) -> tuple[Path,
 
 
 def _read_local(source: str, workspace: Path) -> tuple[dict[str, bytes], str, str]:
-    included = {"builtin:text-utilities": "text-utilities", "builtin:native-provider": "native-provider"}
+    included = {"builtin:text-utilities": "text-utilities", "builtin:native-provider": "native-provider",
+                "builtin:orchestration": "orchestration"}
     if source in included:
         files = _package_files(_EXAMPLES / included[source])
         kind = "builtin"
