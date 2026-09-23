@@ -271,6 +271,13 @@ class _OpenCodeChatProvider(OpenAIProvider):
         """OpenCode gateways can label a complete tool payload as ``stop``."""
         return True
 
+    def _accept_compat_tool_finish_reason(self, reason: str) -> bool:
+        # OpenCode-compatible gateways have used both OpenAI's `stop` and
+        # provider-specific `tool_use`/`function_call` labels. A complete,
+        # parseable function payload is safe to release for any of them;
+        # truncated JSON still fails closed in _finalize_tool_calls.
+        return reason in {"stop", "length", "tool_use", "function_call"}
+
     def _reasoning_delta(self, delta: Any) -> ReasoningDelta | None:
         text = _object_field(delta, "reasoning_content") or _object_field(delta, "reasoning")
         return ReasoningDelta(str(text), self.reasoning_scope) if isinstance(text, str) and text else None

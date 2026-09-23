@@ -176,9 +176,8 @@ class OpenAIProvider(LLMProvider):
                     if finish_reason:
                         stop_reason = str(finish_reason)
                         if (
-                            stop_reason == "stop"
-                            and accumulators
-                            and self._accept_stop_with_complete_tools()
+                            accumulators
+                            and self._accept_compat_tool_finish_reason(stop_reason)
                             and not finalized_tools
                         ):
                             normalized = self._finalize_tool_calls(accumulators)
@@ -313,6 +312,9 @@ class OpenAIProvider(LLMProvider):
     def _accept_stop_with_complete_tools(self) -> bool:
         """Keep strict OpenAI semantics unless a gateway opts into this quirk."""
         return False
+
+    def _accept_compat_tool_finish_reason(self, reason: str) -> bool:
+        return reason == "stop" and self._accept_stop_with_complete_tools()
 
     def _format_assistant_message(self, blocks: Sequence[ContentBlock]) -> dict[str, Any]:
         return _format_assistant_message(blocks)
