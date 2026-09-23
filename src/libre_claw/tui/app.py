@@ -1037,7 +1037,7 @@ class LibreClawApp(App[None]):
     def on_resize(self, event: events.Resize) -> None:
         self.set_class(event.size.width < 90, "narrow")
         self.set_class(event.size.height < 30, "short")
-        if self.is_mounted and self.transcript:
+        if self.is_running and self.transcript:
             self._sync_sidebar_visibility(width=event.size.width)
             self._update_shell_chrome()
             self.call_after_refresh(self._refresh_command_menu)
@@ -1080,7 +1080,7 @@ class LibreClawApp(App[None]):
 
     async def _refresh_model_suggestions(self, provider: str) -> None:
         await discover_models(self.config, provider)
-        if self.is_mounted:
+        if self.is_running:
             self._update_slash_suggestions(self.query_one("#input", Input).value)
 
     def on_key(self, event: events.Key) -> None:
@@ -4495,13 +4495,13 @@ class LibreClawApp(App[None]):
         return str(self.config.general.working_directory)
 
     def _update_shell_chrome(self) -> None:
-        if not self.is_mounted:
+        if not self.is_running:
             return
         self.query_one("#workspace-bar", Static).update(Text(self._workspace_bar_text()))
         self.query_one("#composer-meta", Static).update(Text(self._composer_meta_text()))
 
     def _update_status_bar(self) -> None:
-        if not self.is_mounted or not self.config.tui.show_status_bar:
+        if not self.is_running or not self.config.tui.show_status_bar:
             return
         status = self._status_text()
         if status != self._last_status_text:
@@ -4513,7 +4513,7 @@ class LibreClawApp(App[None]):
         workspace = root.name or str(root)
         change_count = len(self._change_entries())
         suffix = f"  ·  {change_count} edit{'s' if change_count != 1 else ''}  ·  Ctrl+E review" if change_count else ""
-        width = self.query_one("#workspace-bar").content_size.width if self.is_mounted else 80
+        width = self.query_one("#workspace-bar").content_size.width if self.is_running else 80
         width = width or max(8, self.size.width - (30 if self.sidebar_visible else 8 if self.size.width >= 90 else 0) - 4)
         label = Text(workspace)
         label.truncate(max(8, width - len(suffix)), overflow="ellipsis")
@@ -4590,7 +4590,7 @@ class LibreClawApp(App[None]):
         return "\n".join(lines)
 
     def _menu_width(self, selector: str) -> int:
-        width = self.query_one(selector).content_size.width if self.is_mounted else 0
+        width = self.query_one(selector).content_size.width if self.is_running else 0
         return width or max(20, self.size.width - 12)
 
     def _refresh_command_menu(self) -> None:
@@ -5176,6 +5176,10 @@ class LibreClawApp(App[None]):
         )
 
     def _update_status(self) -> None:
+        # App.is_mounted is a widget lookup method. The message-pump flag turns
+        # false before Textual removes the screen during shutdown.
+        if not self.is_running:
+            return
         self._sync_global_model_if_changed()
         self._sync_daemon_model_later()
         self._update_shell_chrome()

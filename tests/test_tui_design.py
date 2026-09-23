@@ -84,6 +84,35 @@ async def test_theme_switch_updates_widget_components_and_quiet_borders(design_a
             assert all(abs(a - b) <= 1 for a, b in zip(Color.parse(button_color).get_truecolor(), Color.parse(palette.accent).get_truecolor()))
 
 
+async def test_status_timer_ignores_the_partial_shutdown_dom(design_app: LibreClawApp, monkeypatch) -> None:
+    app = design_app
+    close_all = app._close_all
+    late_tick_finished = False
+
+    def unexpected_model_sync() -> None:
+        pytest.fail("A stopped app must not begin model synchronization")
+
+    async def close_with_late_status_tick() -> None:
+        nonlocal late_tick_finished
+        try:
+            # Textual stops the app before pruning its screens, but an already
+            # queued timer callback can still run while children disappear.
+            assert not app.is_running
+            await app.query_one("#workspace-bar").remove()
+            monkeypatch.setattr(app, "_sync_global_model_if_changed", unexpected_model_sync)
+            monkeypatch.setattr(app, "_sync_daemon_model_later", unexpected_model_sync)
+            app._update_status()
+            late_tick_finished = True
+        finally:
+            await close_all()
+
+    monkeypatch.setattr(app, "_close_all", close_with_late_status_tick)
+    async with app.run_test(size=(120, 36)):
+        assert app.is_running
+        assert app.query_one("#workspace-bar").display
+    assert late_tick_finished
+
+
 @pytest.mark.parametrize("preview_lines", [1, 120])
 async def test_narrow_resize_reflows_branding_and_keeps_approval_actions_visible(
     design_app: LibreClawApp, monkeypatch, preview_lines: int,
