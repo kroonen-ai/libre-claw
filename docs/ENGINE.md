@@ -33,9 +33,16 @@ implementation without launching an application runtime.
 The standalone Telegram bridge owns the same engine and extension lifecycle.
 Daemon-backed clients use the daemon's discovery and execution services. Store
 bindings reject new asynchronous methods until they have an explicit service
-mapping. Health, read-only recovery views, cancellation, plugin revocation, and
+mapping. Health, read-only recovery views, usage reporting, cancellation, plugin revocation, and
 failure-state persistence deliberately remain usable when the engine is down;
 they cannot perform model inference or execute agent tools.
+
+Engine counters report service calls since the current engine started, not
+completed conversations. Dashboard usage reads are diagnostics and do not add
+session calls. A bounded in-memory cache retains only normalized usage records;
+file identity, size, and timestamps invalidate changed histories, including
+updates written by another CLI or TUI process. Unchanged histories are not
+reread on every dashboard refresh.
 
 Reviewed extensions can register core dispatch methods or add service nodes
 with dependencies. This requires a separate `allow_engine` workspace grant.

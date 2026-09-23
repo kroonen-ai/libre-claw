@@ -343,6 +343,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
             <p id="engineStatus" class="hint" role="status" aria-live="polite" aria-atomic="true">Connecting to the core runtime…</p>
           </section>
           <div class="engine-section-heading"><h4>Core services</h4><span id="engineCounts" class="tiny">Waiting for runtime</span></div>
+          <p class="hint">Internal service calls since engine start, including background work.</p>
           <div id="engineComponents" class="engine-components" aria-label="Core services" aria-busy="true"></div>
           <section class="engine-extensions"><div><h4>Extend your workspace</h4><p class="hint">Add tools and integrations with their own project permissions.</p></div><button id="engineOpenPlugins" type="button">Manage plugins ↗</button></section>
           <div class="engine-recovery"><p id="engineRestartHint" class="hint">Restart is available when no work is running.</p><button id="restartEngine" type="button" aria-describedby="engineRestartHint" disabled>Restart engine</button></div>
@@ -699,8 +700,33 @@ _DASHBOARD_HTML = r"""<!doctype html>
       syncEngineControls();
     }
 
-    async function refreshUsage() {
-      const usage = await request("/usage?limit=250");
+    /* Shared usage snapshot: the status strip and pane never fetch separately. */
+    let usageSnapshot = null, usageUpdatedAt = -Infinity, usageRequest = null, usageFollowup = null;
+    function getUsageSnapshot(force = false) {
+      if (usageRequest) {
+        if (!force) return usageRequest;
+        // A turn may finish after the pending read started. Coalesce one fresh
+        // read after it settles so the completion cannot reuse stale totals.
+        if (!usageFollowup) usageFollowup = usageRequest.catch(error => {
+          if (document.hidden || !dashboardUI?.active("tasks")) throw error;
+        }).then(payload => {
+          usageFollowup = null;
+          if (document.hidden || !dashboardUI?.active("tasks")) return payload;
+          return getUsageSnapshot(true);
+        }, error => { usageFollowup = null; throw error; });
+        return usageFollowup;
+      }
+      const maxAge = dashboardHasActiveWork() ? 3000 : 30000;
+      if (!force && usageSnapshot && Date.now() - usageUpdatedAt < maxAge) return Promise.resolve(usageSnapshot);
+      usageRequest = request("/usage?limit=250").then(payload => {
+        usageSnapshot = payload; usageUpdatedAt = Date.now();
+        return payload;
+      }).finally(() => { usageRequest = null; });
+      return usageRequest;
+    }
+
+    async function refreshUsage(force = false) {
+      const usage = await getUsageSnapshot(force);
       const totalTokens = usage.summary?.total_tokens ?? 0;
       const compact = formatCompactNumber(totalTokens);
       const tokenNode = $("usageTokens");
@@ -708,6 +734,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       tokenNode.title = `${formatExactNumber(totalTokens)} tokens`;
       $("usageTokensMetric").textContent = compact;
       $("usageExact").textContent = `${formatExactNumber(totalTokens)} provider tokens`;
+      if (settingsPaneVisible("usage")) renderUsagePane(usage);
     }
 
     async function refreshRuns() {
@@ -844,7 +871,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
        update only the live assistant node, and a requestAnimationFrame
        typewriter smooths each chunk into a per-character reveal instead of a
        block repaint. */
-    let streamTimer = 0;
+    let streamTimer = 0, streamGeneration = 0;
     const STREAM_STATES = new Set(["queued", "running", "blocked"]);
     const stream = { node: null, text: "", shown: 0, raf: 0 };
 
@@ -866,14 +893,16 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     function scheduleStream(runState) {
+      ++streamGeneration;
       cancelUI(streamTimer);
       state.streaming = STREAM_STATES.has(runState);
+      scheduleDashboardRefresh();
       if (!state.streaming) {
         resetStreamNode();
         renderEvents();
         return;
       }
-      streamTimer = timeoutUI("tasks", () => { void pollRunEvents(); }, 300, $("timeline"));
+      if (!document.hidden) streamTimer = timeoutUI("tasks", () => { void pollRunEvents(); }, 300, $("timeline"));
     }
 
     function nearBottom(container) {
@@ -934,12 +963,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     async function pollRunEvents() {
-      const runId = state.selectedRunId;
-      if (!runId || !state.streaming) return;
+      const runId = state.selectedRunId, generation = streamGeneration;
+      if (!runId || !state.streaming || document.hidden) return;
       let sawDelta = false;
       try {
         const payload = await request(`/runs/${runId}/events?after=${lastNumericEventId()}`);
-        if (runId !== state.selectedRunId) return;
+        if (runId !== state.selectedRunId || generation !== streamGeneration || document.hidden) return;
         const fresh = payload.events || [];
         if (fresh.length) {
           state.events.push(...fresh);
@@ -947,6 +976,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
             resetStreamNode();
             await refreshRunDetail();
             await refreshRuns();
+            if (fresh.some(event => event.type === "run_finished")) await refreshUsage(true);
             return;
           }
           sawDelta = fresh.some((event) => event.type === "assistant_delta");
@@ -958,7 +988,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       } catch (_error) {
         /* transient poll errors: keep streaming */
       }
-      streamTimer = timeoutUI("tasks", () => { void pollRunEvents(); }, sawDelta ? 250 : 900, $("timeline"));
+      if (!document.hidden && state.streaming && generation === streamGeneration) streamTimer = timeoutUI("tasks", () => { void pollRunEvents(); }, sawDelta ? 250 : 900, $("timeline"));
     }
 
     function setView(view) {
@@ -1691,7 +1721,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           heading.append(engineNode("h4", "", component.title || id), engineNode("span", component.state === "ACTIVE" ? "engine-service-state active" : "engine-service-state", component.state || "Unknown"));
           const dependencies = Array.isArray(component.dependencies) ? component.dependencies.map(String) : [];
           const count = engineNode("dl", "engine-service-counts");
-          for (const [label, value] of [["Working", component.active_operations], ["Completed", component.completed], ["Failed", component.failed], ["Cancelled", component.cancelled]]) {
+          for (const [label, value] of [["Working", component.active_operations], ["Completed calls", component.completed], ["Failed", component.failed], ["Cancelled", component.cancelled]]) {
             const metric = engineNode("div"); metric.append(engineNode("dt", "", label), engineNode("dd", "", engineNumber(value))); count.append(metric);
           }
           card.append(heading, engineNode("p", "engine-dependencies", dependencies.length ? `Uses ${dependencies.join(" · ")}` : "Independent service"), count);
@@ -2955,48 +2985,51 @@ _DASHBOARD_HTML = r"""<!doctype html>
       table.append(tbody);
     }
 
-    async function loadUsagePane() {
+    function renderUsagePane(payload) {
+      const summary = payload.summary || {};
+      $("usagePaneTokens").textContent = formatCompactNumber(summary.total_tokens);
+      $("usagePaneTokensExact").textContent = `${formatExactNumber(summary.total_tokens)} total`;
+      $("usagePaneRequests").textContent = formatExactNumber(summary.requests);
+      $("usagePaneRuns").textContent = `${formatExactNumber(summary.runs)} runs`;
+      $("usagePaneCost").textContent = formatCost(summary.cost);
+      $("usagePaneCached").textContent = formatCompactNumber(summary.cached_tokens);
+      $("usagePaneCacheWrites").textContent = formatCompactNumber(summary.cache_write_tokens);
+      const inputTokens = Number(summary.input_tokens) || 0;
+      $("usagePaneCacheRatio").textContent = inputTokens > 0
+        ? `${(Math.min(1, Math.max(0, Number(summary.cached_tokens) || 0) / inputTokens) * 100).toFixed(1)}%`
+        : "—";
+      usageTable(
+        $("usageByModel"),
+        ["Model", "Requests", "Input", "Reused", "Output", "Total", "Cost"],
+        (summary.by_model || []).map((group) => [
+          group.name || "unknown",
+          formatExactNumber(group.requests),
+          formatCompactNumber(group.input_tokens),
+          formatCompactNumber(group.cached_tokens),
+          formatCompactNumber(group.output_tokens),
+          formatCompactNumber(group.total_tokens),
+          formatCost(group.cost),
+        ]),
+      );
+      usageTable(
+        $("usageRecent"),
+        ["Run", "Model", "Tokens", "Cost", "When"],
+        (payload.records || []).slice(0, 12).map((record) => [
+          record.title || record.run_id,
+          `${record.provider}:${record.model}`,
+          formatCompactNumber(record.total_tokens),
+          formatCost(record.cost),
+          formatShortTime(record.timestamp),
+        ]),
+      );
+      $("usagePaneStatus").textContent = "Usage from the latest 250 runs.";
+    }
+
+    async function loadUsagePane(force = false) {
       $("usagePaneStatus").textContent = "Loading usage…";
       $("refreshUsagePane").disabled = true;
       try {
-        const payload = await request("/usage?limit=250");
-        const summary = payload.summary || {};
-        $("usagePaneTokens").textContent = formatCompactNumber(summary.total_tokens);
-        $("usagePaneTokensExact").textContent = `${formatExactNumber(summary.total_tokens)} total`;
-        $("usagePaneRequests").textContent = formatExactNumber(summary.requests);
-        $("usagePaneRuns").textContent = `${formatExactNumber(summary.runs)} runs`;
-        $("usagePaneCost").textContent = formatCost(summary.cost);
-        $("usagePaneCached").textContent = formatCompactNumber(summary.cached_tokens);
-        $("usagePaneCacheWrites").textContent = formatCompactNumber(summary.cache_write_tokens);
-        const inputTokens = Number(summary.input_tokens) || 0;
-        $("usagePaneCacheRatio").textContent = inputTokens > 0
-          ? `${(Math.min(1, Math.max(0, Number(summary.cached_tokens) || 0) / inputTokens) * 100).toFixed(1)}%`
-          : "—";
-        usageTable(
-          $("usageByModel"),
-          ["Model", "Requests", "Input", "Reused", "Output", "Total", "Cost"],
-          (summary.by_model || []).map((group) => [
-            group.name || "unknown",
-            formatExactNumber(group.requests),
-            formatCompactNumber(group.input_tokens),
-            formatCompactNumber(group.cached_tokens),
-            formatCompactNumber(group.output_tokens),
-            formatCompactNumber(group.total_tokens),
-            formatCost(group.cost),
-          ]),
-        );
-        usageTable(
-          $("usageRecent"),
-          ["Run", "Model", "Tokens", "Cost", "When"],
-          (payload.records || []).slice(0, 12).map((record) => [
-            record.title || record.run_id,
-            `${record.provider}:${record.model}`,
-            formatCompactNumber(record.total_tokens),
-            formatCost(record.cost),
-            formatShortTime(record.timestamp),
-          ]),
-        );
-        $("usagePaneStatus").textContent = "Usage from the latest 250 runs.";
+        await refreshUsage(force);
       } catch (error) {
         $("usagePaneStatus").textContent = `Could not load usage: ${error.message || error}`;
         setNotice(String(error.message || error), true);
@@ -3609,7 +3642,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
         $("runForm").requestSubmit();
       }
     });
-    bindUI("tasks", $("refreshAll"), "click", refreshAll);
+    bindUI("tasks", $("refreshAll"), "click", () => refreshAll({force: true}));
+    bindUI("tasks", document, "visibilitychange", handleDashboardVisibility);
     bindUI("tasks", $("runSearch"), "input", renderRuns);
     bindUI("tasks", $("runStateFilter"), "change", renderRuns);
     bindUI("tasks", $("eventFilter"), "change", renderEvents);
@@ -3643,7 +3677,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       event.preventDefault(); void submitQuestion(record);
     });
     bindUI("workflows", $("automationRoute"), "change", syncAutomationRoute);
-    bindUI("tasks", $("refreshUsagePane"), "click", loadUsagePane);
+    bindUI("tasks", $("refreshUsagePane"), "click", () => loadUsagePane(true));
     bindUI("plugins", $("refreshPlugins"), "click", () => { void loadPlugins(); });
     bindUI("plugins", $("addPlugin"), "click", () => { void openPluginInstall(); });
     bindUI("plugins", $("pluginSearch"), "input", () => { if (pluginCatalog) renderPlugins(pluginCatalog); });
@@ -3658,27 +3692,70 @@ _DASHBOARD_HTML = r"""<!doctype html>
       } catch (error) { setNotice(error.message || String(error), true); $("cancelRun").disabled = false; }
     });
 
-    async function refreshAll() {
-      if (state.refreshing) return;
+    /* One adaptive poll owns overview refreshes; Cordis owns its lifetime. */
+    let dashboardTimer = null, dashboardRefresh = null, backgroundUpdatedAt = -Infinity;
+    function settingsPaneVisible(pane) {
+      return !$("settingsOverlay").hidden && !$(`pane${pane[0].toUpperCase()}${pane.slice(1)}`).hidden;
+    }
+    function dashboardHasActiveWork() {
+      return state.sending || state.streaming || (engineActiveRuns ?? 0) > 0
+        || state.runs.some(run => STREAM_STATES.has(run.state));
+    }
+    function scheduleDashboardRefresh() {
+      cancelUI(dashboardTimer); dashboardTimer = null;
+      if (document.hidden || dashboardRefresh || !dashboardUI?.active("tasks")) return;
+      dashboardTimer = timeoutUI("tasks", () => refreshAll({automatic: true}), dashboardHasActiveWork() ? 3000 : 30000);
+    }
+    function handleDashboardVisibility() {
+      ++streamGeneration;
+      cancelUI(dashboardTimer); dashboardTimer = null;
+      cancelUI(streamTimer); streamTimer = 0;
+      if (document.hidden) { cancelUI(stream.raf); stream.raf = 0; return; }
+      // Refresh the selected detail once to catch up, then resume incremental events.
+      state.streaming = false;
+      return refreshAll({force: true});
+    }
+    function refreshAll({force = false, automatic = false} = {}) {
+      if (automatic && document.hidden) return Promise.resolve();
+      if (dashboardRefresh) return dashboardRefresh;
+      cancelUI(dashboardTimer); dashboardTimer = null;
       state.refreshing = true; $("refreshAll").disabled = true;
-      try {
-        const results = await Promise.allSettled([refreshHealth(), refreshUsage(), refreshAutomations(), refreshEngine(), refreshOrchestrationProfiles()]);
-        if (results[0].status === "rejected") {
-          engineActiveRuns = null; syncEngineControls();
-          $("healthDot").className = "status-dot offline"; $("daemonStatus").textContent = "Disconnected"; $("daemonStatusMetric").textContent = "Disconnected";
-          throw results[0].reason;
+      dashboardRefresh = (async () => {
+        try {
+          const wasActive = dashboardHasActiveWork();
+          try { await refreshHealth(); }
+          catch (error) {
+            engineActiveRuns = null; syncEngineControls();
+            $("healthDot").className = "status-dot offline"; $("daemonStatus").textContent = "Disconnected"; $("daemonStatusMetric").textContent = "Disconnected";
+            throw error;
+          }
+          if (document.hidden || !dashboardUI?.active("tasks")) return;
+          await refreshRuns();
+          if (document.hidden || !dashboardUI?.active("tasks")) return;
+          const finished = wasActive && !dashboardHasActiveWork();
+          const backgroundDue = force || Date.now() - backgroundUpdatedAt >= 30000;
+          const refreshes = [refreshUsage(force || finished)];
+          if (backgroundDue) {
+            backgroundUpdatedAt = Date.now();
+            refreshes.push(refreshAutomations(), refreshOrchestrationProfiles());
+          }
+          if (backgroundDue || settingsPaneVisible("engine")) refreshes.push(refreshEngine());
+          const results = await Promise.allSettled(refreshes);
+          const failed = results.find(result => result.status === "rejected");
+          if (failed) setNotice(failed.reason?.message || "Some dashboard data could not be refreshed.", true);
+          // Incremental events own the conversation while a task is streaming.
+          if (document.hidden || !dashboardUI?.active("tasks")) return;
+          if (state.selectedRunId && !state.streaming) await refreshRunDetail();
+          else if (state.selectedRunId && state.view === "plan") await loadPlan();
+          $("lastRefresh").textContent = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date());
+        } catch (error) {
+          setNotice(error.message || String(error), true);
+        } finally {
+          dashboardRefresh = null; state.refreshing = false; $("refreshAll").disabled = false;
+          scheduleDashboardRefresh();
         }
-        const failed = results.find(result => result.status === "rejected");
-        if (failed) setNotice(failed.reason?.message || "Some dashboard data could not be refreshed.", true);
-        await refreshRuns();
-        // While streaming, the incremental poll owns the conversation pane; a
-        // full detail refresh here would repaint mid-token.
-        if (state.selectedRunId && !state.streaming) await refreshRunDetail();
-        else if (state.selectedRunId && state.view === "plan") await loadPlan();
-        $("lastRefresh").textContent = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date());
-      } catch (error) {
-        setNotice(error.message || String(error), true);
-      } finally { state.refreshing = false; $("refreshAll").disabled = false; }
+      })();
+      return dashboardRefresh;
     }
 
     async function mountDashboardServices() {
@@ -3688,8 +3765,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         features.appearance.setup = () => { initTheme(); initRail(); initMobileSidebar(); };
         features.appearance.dispose = () => { cancelUI(noticeTimer); };
         features.plugins.dispose = () => { void closePluginClient(); };
-        features.tasks.intervals = [{handler: refreshAll, milliseconds: 3000}];
-        features.tasks.dispose = () => { state.streaming = false; cancelUI(streamTimer); resetStreamNode(); };
+        features.tasks.dispose = () => { state.streaming = false; cancelUI(dashboardTimer); cancelUI(streamTimer); resetStreamNode(); };
         dashboardUI = await mountDashboard({scope: document, features, onError: error => setNotice(error.message || String(error), true)});
         for (const bindings of Object.values(uiBindings)) bindings.length = 0;
         document.documentElement.dataset.uiEngine = "cordis";
@@ -3697,7 +3773,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         resolveDashboard(dashboardUI);
         clearSelectedRun();
         void loadWorktrees();
-        void refreshAll();
+        void refreshAll({automatic: true});
       } catch (error) {
         rejectDashboard(error);
         $("sendMessage").disabled = true;

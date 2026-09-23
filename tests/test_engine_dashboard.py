@@ -60,7 +60,7 @@ def test_engine_live_counters_dependencies_and_method_metadata_render_as_text(tm
   assert.equal($('engineStrip').textContent, 'Cordis · ready');
   assert.equal($('engineCounts').textContent, '1 / 1 active');
   assert.match(text($('engineComponents')), /Uses tools · providers · sessions/);
-  assert.match(text($('engineComponents')), /Working 0 Completed 4 Failed 1 Cancelled 2/);
+  assert.match(text($('engineComponents')), /Working 0 Completed calls 4 Failed 1 Cancelled 2/);
   assert.match(text($('engineComponents')), /agent.run/);
   assert.match(text($('enginePrivacy')), /Core network blocked/);
   assert.equal($('restartEngine').disabled, false);

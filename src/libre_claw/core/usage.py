@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+import asyncio
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from libre_claw.core.runs import RunEvent, RunRecord, RunStore
@@ -68,6 +70,68 @@ class UsageGroup:
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
+
+
+EventFingerprint = tuple[int, int, int, int, int] | None
+
+
+def _event_fingerprint(path: Path) -> EventFingerprint:
+    try:
+        stat = (path / "events.jsonl").stat()
+    except FileNotFoundError:
+        return None
+    # Include identity and ctime, so replacing/truncating a file cannot reuse a
+    # cache entry merely because its length or restored mtime happens to match.
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+class UsageHistoryCache:
+    """Read-only reporting cache shared by a daemon's dashboard clients.
+
+    Only normalized usage records are retained, never prompts or tool output.
+    Filesystem fingerprints detect changes from other RunStore instances,
+    including the CLI and TUI. A lock coalesces simultaneous cold requests;
+    unchanged histories are not read or parsed again.
+    """
+
+    def __init__(self, run_store: RunStore, *, max_entries: int = 1000) -> None:
+        if not isinstance(max_entries, int) or isinstance(max_entries, bool) or max_entries < 1:
+            raise ValueError("Usage cache capacity must be a positive integer.")
+        self.run_store = run_store
+        self.max_entries = max_entries
+        self._lock = asyncio.Lock()
+        self._entries: OrderedDict[str, tuple[RunRecord, EventFingerprint, tuple[UsageRecord, ...]]] = OrderedDict()
+
+    async def load(self, *, provider: str | None = None, limit: int = 250) -> list[UsageRecord]:
+        async with self._lock:
+            runs = await self.run_store.list_runs(limit=max(1, limit))
+            provider_filter = provider.lower() if provider else None
+            selected = [run for run in runs if not provider_filter or run.provider.lower() == provider_filter]
+            fingerprints = await asyncio.to_thread(
+                lambda: {run.run_id: _event_fingerprint(run.path) for run in selected},
+            )
+            records: list[UsageRecord] = []
+            for run in selected:
+                fingerprint = fingerprints[run.run_id]
+                cached = self._entries.get(run.run_id)
+                if cached is not None and cached[:2] == (run, fingerprint):
+                    self._entries.move_to_end(run.run_id)
+                    records.extend(cached[2])
+                    continue
+                self._entries.pop(run.run_id, None)
+                try:
+                    events = await self.run_store.load_events(run.run_id)
+                except ValueError:
+                    # A run can disappear between directory listing and read.
+                    continue
+                loaded = tuple(usage_records_from_run(run, events))
+                records.extend(loaded)
+                if await asyncio.to_thread(_event_fingerprint, run.path) == fingerprint:
+                    self._entries[run.run_id] = (run, fingerprint, loaded)
+                    while len(self._entries) > self.max_entries:
+                        self._entries.popitem(last=False)
+            records.sort(key=lambda record: record.timestamp, reverse=True)
+            return records
 
 
 async def load_usage_records(

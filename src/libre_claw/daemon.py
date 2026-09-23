@@ -78,7 +78,7 @@ from libre_claw.core.soul import SoulStore
 from libre_claw.core.themes import THEME_ALIASES, THEME_PALETTES, normalize_theme
 from libre_claw.core.tools import ToolRegistry
 from libre_claw.core.usage import (
-    load_usage_records,
+    UsageHistoryCache,
     openrouter_attribution_payload,
     usage_record_payload,
     usage_report_text,
@@ -224,6 +224,7 @@ class DaemonServer:
     def run_store(self, store: RunStore) -> None:
         self._recovery_run_store = store
         self._bound_run_store = BoundStore(store, lambda: self.engine, RUN_METHODS)
+        self._usage_history = UsageHistoryCache(store)
 
     @property
     def memory_store(self) -> BoundStore:
@@ -702,7 +703,10 @@ class DaemonServer:
         if provider == "all":
             provider = None
         limit = _positive_int(request.query.get("limit"), default=250, maximum=1000)
-        records = await load_usage_records(self.run_store, provider=provider, limit=limit)
+        # Usage is a read-only diagnostic, like the run-history endpoints. It
+        # remains available when the engine is stopped and must not manufacture
+        # session work simply because a dashboard is observing it.
+        records = await self._usage_history.load(provider=provider, limit=limit)
         return web.json_response(
             {
                 "summary": usage_summary_payload(records),
