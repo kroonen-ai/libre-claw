@@ -284,6 +284,47 @@ DASHBOARD_CSS = r"""
     .plugin-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
     .plugin-actions button { min-height: 38px; font-size: 11px; }
     .plugin-install-command { display: block; color: var(--text); padding: 12px; background: var(--surface-2); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+    #panePlugins .panel-header { flex-wrap: wrap; gap: 14px; }
+    .plugin-toolbar-actions { display: flex; gap: 8px; margin-inline-start: auto; }
+    .plugin-toolbar-actions button { min-height: 38px; white-space: nowrap; font-size: 11px; }
+    #pluginSearch { width: 100%; background: var(--bg); }
+    .plugin-group { margin-top: 22px; }
+    .plugin-group-title { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; color: var(--text); font-size: 12px; font-weight: 600; }
+    .plugin-group-title span { color: var(--muted); font-size: 10px; font-weight: 400; }
+    .plugin-card { transition: border-color .16s ease, background .16s ease; }
+    .plugin-card:hover { border-color: var(--line-strong); }
+    .plugin-card.included { background: color-mix(in srgb, var(--accent-soft) 28%, var(--bg)); }
+    .plugin-description { margin: 12px 0 16px; color: var(--soft); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+    .plugin-state.enabled { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); background: var(--ok-soft); }
+    .plugin-empty { padding: 28px; border-style: dashed; }
+    .plugin-empty .hint { max-width: 46ch; line-height: 1.8; margin-block: 10px 18px; }
+    .plugin-breadcrumb { display: flex; align-items: center; gap: 10px; margin: 0 0 24px; color: var(--muted); font-size: 11px; }
+    .plugin-breadcrumb > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .plugin-breadcrumb button { flex: none; min-height: 32px; padding: 5px 8px; border-color: transparent; background: none; font-size: 11px; }
+    .plugin-breadcrumb button:hover { background: var(--panel-hover); }
+    .plugin-detail-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+    .plugin-detail-head h3, .plugin-page-title { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.5px; overflow-wrap: anywhere; }
+    .plugin-detail-actions { padding-top: 0; border-top: 0; justify-content: flex-start; margin-top: 18px; }
+    .plugin-section { margin-top: 26px; padding-top: 24px; border-top: 1px solid var(--line); }
+    .plugin-section > h4, .plugin-remove > h4 { margin: 0 0 12px; font-size: 13px; font-weight: 600; }
+    .plugin-section > .hint, .plugin-remove > .hint { font-size: 11px; line-height: 1.8; }
+    .plugin-config-form { display: grid; gap: 18px; margin-top: 20px; }
+    .plugin-config-form .hint { margin: 0; font-size: 10px; line-height: 1.8; }
+    .plugin-config-field { min-width: 0; }
+    .plugin-config-field .plugin-json-input { font: 11px/1.7 var(--font-mono); min-height: 130px; }
+    .plugin-required { color: var(--accent); }
+    .plugin-config-field .plugin-clear-secret { justify-self: start; border: 0; background: none; color: var(--danger); min-height: 28px; padding: 2px 0; font-size: 10px; }
+    .plugin-tool-detail { margin-block: 10px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); }
+    .plugin-tool-detail summary, .plugin-source-help summary { color: var(--soft); font-size: 11px; cursor: pointer; overflow-wrap: anywhere; }
+    .plugin-tool-detail .hint { font-size: 11px; line-height: 1.7; }
+    .plugin-json { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.7 var(--font-mono); margin: 12px 0 0; max-height: 280px; overflow-y: auto; color: var(--muted); }
+    .plugin-digest { display: block; font: 10px/1.8 var(--font-mono); overflow-wrap: anywhere; margin-top: 12px; color: var(--muted); }
+    .plugin-remove { margin-top: 34px; padding: 20px; border: 1px solid color-mix(in srgb, var(--danger) 25%, var(--line)); border-radius: var(--radius); }
+    .plugin-remove .plugin-actions { margin-top: 12px; }
+    .plugin-install-form { display: grid; gap: 18px; padding: 22px; margin-top: 24px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-panel); }
+    .plugin-source-help .hint { font-size: 11px; line-height: 1.9; }
+    #pluginPage > .plugin-card { margin-top: 24px; }
+    #pluginRuntimeStatus { line-height: 1.8; overflow-wrap: anywhere; }
     .automation-list { display: grid; gap: 12px; margin-top: 22px; }
     .automation { border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--bg); padding: 17px; display: grid; gap: 10px; }
     .automation-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -354,7 +395,13 @@ DASHBOARD_CSS = r"""
     @media (max-width: 600px) {
       .plugin-card-head { flex-wrap: wrap; }
       .plugin-card, .plugin-empty { padding: 14px; }
-      .plugin-actions button { width: 100%; }
+      .plugin-actions { flex-wrap: wrap; }
+      .plugin-actions button { flex: 1 1 auto; }
+      .plugin-toolbar-actions { width: 100%; }
+      .plugin-toolbar-actions button { flex: 1; }
+      .plugin-install-form, .plugin-remove { padding: 16px; }
+      .plugin-detail-head { flex-wrap: wrap; }
+      .plugin-breadcrumb { margin-bottom: 18px; }
       .plugin-grants { grid-template-columns: 76px minmax(0, 1fr); gap: 6px 8px; }
       .model-fields { grid-template-columns: 1fr; gap: 20px; }
       .model-actions { width: 100%; }

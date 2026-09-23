@@ -135,7 +135,7 @@ from libre_claw.providers.model_catalog import ModelCatalog, cached_models, disc
 from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.release import latest_release_notes
-from libre_claw.tools_builtin import create_builtin_registry
+from libre_claw.tools_builtin import create_builtin_registry, refresh_cordis_tools
 from libre_claw.updater import (
     UpdateError,
     libre_claw_checkout_path,
@@ -300,7 +300,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/paste-image", "/paste-image", "Attach an image from the OS clipboard"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/usage", "/usage <provider>|all|attribution|presets", "Show tokens, cache reuse, and cost"),
-    SlashCommand("/plugins", "/plugins [list|inspect|enable|disable] [id]", "Manage local Cordis plugins for this project"),
+    SlashCommand("/plugins", "/plugins [catalog|install|details|inspect|enable|disable] [value]", "Manage Cordis plugins for this project"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
     SlashCommand("/models", "/models [provider] [search] [--refresh]", "Discover provider models"),
     SlashCommand("/fallback", "/fallback list|set|clear", "Manage fallback provider/model slots"),
@@ -1644,6 +1644,8 @@ class LibreClawApp(App[None]):
         run_summary = ""
 
         try:
+            if isinstance(self.agent, Agent):
+                self.agent.tool_registry = refresh_cordis_tools(self.config, self.agent.tool_registry)
             async for event in self.agent.run(user_message, attachments=attachments):
                 handled, should_stop = self._handle_agent_stream_event(
                     event,

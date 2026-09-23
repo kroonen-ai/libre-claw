@@ -114,6 +114,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
       <div class="runs" id="runs" aria-label="Recent tasks"></div>
 
       <div class="side-foot">
+        <button class="side-foot-row" id="openPlugins" type="button" title="Plugins" aria-label="Plugins">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H4v6h2a3 3 0 1 1 0 6H4v6h6v-2a3 3 0 1 1 6 0v2h5v-6h-2a3 3 0 1 1 0-6h2V3h-6v2a3 3 0 1 1-6 0z"/></svg>
+          <span class="grow">Plugins</span>
+        </button>
         <button class="side-foot-row" id="openSettings" type="button">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span class="grow">Settings</span>
@@ -322,12 +326,19 @@ _DASHBOARD_HTML = r"""<!doctype html>
           </section>
         </div>
         <div class="settings-body" id="panePlugins" role="tabpanel" aria-labelledby="settingsTabPlugins" tabindex="0" hidden>
-          <div class="panel-header"><div><h3>Plugins</h3><p class="panel-description">Local Cordis tools for this project.</p></div><button id="refreshPlugins" type="button">Refresh</button></div>
-          <div class="plugin-scope"><span class="eyebrow">Project scope</span><strong id="pluginsWorkspace">Current project only</strong><p class="hint">New tasks discover enabled tools. Disabling a plugin revokes its access.</p></div>
-          <p id="pluginsDisabled" class="hint" hidden>Cordis is turned off. Set <code>enabled = true</code> in your <code>[cordis]</code> configuration to enable tools.</p>
-          <div id="pluginsPrivacy" class="plugin-privacy" aria-label="Plugin privacy defaults"></div>
-          <p id="pluginsStatus" class="hint" role="status" aria-live="polite" aria-atomic="true">Refresh to load installed plugins.</p>
-          <div id="pluginsList" class="plugin-list" aria-label="Installed plugins"></div>
+          <div class="panel-header" id="pluginsHeader"><div><h3>Plugins</h3><p class="panel-description">Install and manage tools for this project.</p></div><div class="plugin-toolbar-actions"><button id="refreshPlugins" type="button">Refresh</button><button id="addPlugin" class="primary" type="button">+ Add plugin</button></div></div>
+          <div id="pluginsScopeBlock">
+            <div class="plugin-scope"><span class="eyebrow">Project scope</span><strong id="pluginsWorkspace">Current project only</strong><p class="hint">Enabled tools are available on your next message. Disabling a plugin revokes its access.</p></div>
+            <p id="pluginsDisabled" class="hint" hidden>Cordis is turned off. Set <code>enabled = true</code> in your <code>[cordis]</code> configuration to enable tools.</p>
+            <div id="pluginsPrivacy" class="plugin-privacy" aria-label="Plugin privacy defaults"></div>
+          </div>
+          <p id="pluginsStatus" class="hint" role="status" aria-live="polite" aria-atomic="true">Load your local plugins.</p>
+          <div id="pluginsInventory">
+            <input id="pluginSearch" type="search" placeholder="Search plugins or tools" aria-label="Search plugins or tools">
+            <section class="plugin-group"><h4 class="plugin-group-title">Installed <span id="pluginsInstalledCount">0</span></h4><div id="pluginsList" class="plugin-list" aria-label="Installed plugins"></div></section>
+            <section class="plugin-group" id="pluginsIncludedSection" hidden><h4 class="plugin-group-title">Included <span>Ready to add</span></h4><div id="pluginsIncluded" class="plugin-list" aria-label="Included plugins"></div></section>
+          </div>
+          <div id="pluginPage" hidden></div>
         </div>
         <div class="settings-body" id="paneSchedules" role="tabpanel" aria-labelledby="settingsTabSchedules" tabindex="0" hidden>
           <div class="panel-header"><div><h3>Schedules</h3><p class="panel-description">Keep recurring work on track.</p></div></div>
@@ -1501,11 +1512,17 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     /* Cordis plugins */
     let pluginCatalog = null, pluginLoading = false, pluginPending = "", pluginPendingEnable = false;
-    function pluginNode(tag, className, text) {
+    let pluginDetail = null, pluginView = "list", pluginRevision = 0, pluginInstall = null;
+    let pluginConfigFields = [], pluginConfigDirty = false, pluginRuntimeStatus = null;
+    function pluginNode(tag, className = "", text) {
       const node = document.createElement(tag);
       node.className = className;
       if (text !== undefined) node.textContent = String(text);
       return node;
+    }
+    function pluginButton(label, action, className = "") {
+      const node = pluginNode("button", className, label); node.type = "button";
+      node.addEventListener("click", action); return node;
     }
     function setPluginStatus(message, error = false) {
       $("pluginsStatus").textContent = message;
@@ -1513,116 +1530,409 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
     function syncPluginControls() {
       const busy = pluginLoading || Boolean(pluginPending);
-      $("refreshPlugins").disabled = busy;
+      $("refreshPlugins").disabled = busy || pluginView !== "list";
       $("refreshPlugins").textContent = pluginLoading ? "Refreshing…" : "Refresh";
+      $("addPlugin").disabled = busy;
       $("pluginsList").setAttribute("aria-busy", String(busy));
-      for (const button of $("pluginsList").querySelectorAll("button[data-plugin-id]")) {
-        const plugin = pluginCatalog?.plugins.find(item => String(item.id) === button.dataset.pluginId);
-        const blocked = !plugin || (!plugin.enabled && (!pluginCatalog.enabled || plugin.integrity !== "valid"));
-        button.disabled = busy || blocked;
-        button.textContent = pluginPending === button.dataset.pluginId
-          ? (pluginPendingEnable ? "Enabling…" : "Disabling…")
-          : (plugin?.enabled ? "Disable" : "Enable offline");
+      $("pluginPage").setAttribute("aria-busy", String(busy));
+      for (const root of [$("pluginsList"), $("pluginsIncluded"), $("pluginPage")]) {
+        for (const button of root.querySelectorAll("button")) {
+          button.disabled = (busy && !(pluginPending === "preview" && button.dataset.cancelPreview === "true")) || button.dataset.blocked === "true";
+          if (button.dataset.pluginAction !== "toggle") continue;
+          const plugin = pluginCatalog?.plugins.find(item => String(item.id) === button.dataset.pluginId);
+          button.disabled = busy || !plugin || (!plugin.enabled && (!pluginCatalog.enabled || plugin.integrity !== "valid"));
+          button.textContent = pluginPending === button.dataset.pluginId
+            ? (pluginPendingEnable ? "Enabling…" : "Disabling…") : (plugin?.enabled ? "Disable" : "Enable offline");
+        }
       }
+      for (const field of $("pluginPage").querySelectorAll("input, select, textarea")) field.disabled = busy;
+    }
+    function pluginToggle(plugin) {
+      const name = String(plugin.name || plugin.id);
+      const button = pluginButton(plugin.enabled ? "Disable" : "Enable offline", () => { void togglePlugin(String(plugin.id)); }, plugin.enabled ? "" : "primary");
+      button.dataset.pluginId = String(plugin.id); button.dataset.pluginAction = "toggle";
+      button.setAttribute("aria-label", `${plugin.enabled ? "Disable" : "Enable offline"}: ${name} for this project`);
+      button.setAttribute("aria-describedby", "pluginsStatus"); return button;
+    }
+    function pluginState(plugin) {
+      const changed = plugin.integrity !== "valid";
+      return pluginNode("span", changed ? "plugin-state danger" : plugin.enabled ? "plugin-state enabled" : "plugin-state",
+        changed ? "Files changed" : plugin.enabled ? (pluginCatalog?.enabled ? "Enabled" : "Paused") : "Disabled");
+    }
+    function pluginPermissions(plugin) {
+      const grants = plugin.grants || {}, node = pluginNode("dl", "plugin-grants");
+      for (const [label, value] of [
+        ["Network", grants.allow_network === true ? "Allowed" : "Denied"],
+        ["Extra reads", grants.read_paths?.length ? grants.read_paths.join(", ") : "None"],
+        ["Extra writes", grants.write_paths?.length ? grants.write_paths.join(", ") : "None"],
+      ]) node.append(pluginNode("dt", "", label), pluginNode("dd", "", value));
+      return node;
     }
     function renderPlugins(payload) {
       $("pluginsWorkspace").textContent = payload.workspace ? String(payload.workspace) : "Current project only";
       $("pluginsDisabled").hidden = payload.enabled === true;
-      const privacy = payload.privacy || {};
-      const privacyList = $("pluginsPrivacy");
-      privacyList.replaceChildren();
+      const privacy = payload.privacy || {}, privacyList = $("pluginsPrivacy"); privacyList.replaceChildren();
       for (const [key, label] of [["telemetry", "No telemetry"], ["history_shared", "No automatic chat access"], ["credentials_inherited", "No inherited credentials"]]) {
         if (privacy[key] === false) privacyList.append(pluginNode("span", "plugin-privacy-item", label));
       }
       if (privacy.default_network === "denied") privacyList.append(pluginNode("span", "plugin-privacy-item", "Offline by default"));
-      const list = $("pluginsList");
-      list.replaceChildren();
-      if (!payload.plugins.length) {
+      const query = $("pluginSearch").value.trim().toLowerCase();
+      const matches = item => [item.id, item.name, item.description, ...(item.tools || [])].join(" ").toLowerCase().includes(query);
+      const sorted = items => [...items].sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)) || String(a.id).localeCompare(String(b.id)));
+      const list = $("pluginsList"); list.replaceChildren();
+      const installed = sorted(payload.plugins.filter(matches));
+      $("pluginsInstalledCount").textContent = String(payload.plugins.length);
+      if (!installed.length) {
         const empty = pluginNode("div", "plugin-empty");
-        empty.append(pluginNode("h4", "", "No plugins installed"));
-        empty.append(pluginNode("p", "hint", "Install a trusted local folder, then refresh this list."));
-        empty.append(pluginNode("code", "plugin-install-command", "libre-claw cordis install <folder>"));
+        empty.append(pluginNode("h4", "", query ? "No matching plugins" : "Make this workspace your own"),
+          pluginNode("p", "hint", query ? "Try a different name or tool." : "No plugins installed. Start with an included tool, or add a package you trust."));
+        if (!query) empty.append(pluginButton("Add your first plugin", () => { void openPluginInstall(); }, "primary"));
         list.append(empty);
-        return;
       }
-      for (const plugin of payload.plugins) {
-        const name = String(plugin.name || plugin.id);
-        const card = pluginNode("article", "plugin-card");
-        card.setAttribute("aria-label", name);
-        const header = pluginNode("div", "plugin-card-head");
-        const identity = pluginNode("div", "plugin-identity");
-        identity.append(pluginNode("h4", "", name));
-        identity.append(pluginNode("p", "tiny", [plugin.id, plugin.version].filter(Boolean).join(" · ")));
-        const status = plugin.integrity !== "valid" ? "Files changed" : plugin.enabled ? (payload.enabled ? "Enabled" : "Paused") : "Disabled";
-        header.append(identity, pluginNode("span", plugin.integrity !== "valid" ? "plugin-state danger" : "plugin-state", status));
-        const grants = plugin.grants || {};
-        const permissions = pluginNode("dl", "plugin-grants");
-        for (const [label, value] of [
-          ["Network", grants.allow_network === true ? "Allowed" : "Denied"],
-          ["Extra reads", Array.isArray(grants.read_paths) && grants.read_paths.length ? grants.read_paths.join(", ") : "None"],
-          ["Extra writes", Array.isArray(grants.write_paths) && grants.write_paths.length ? grants.write_paths.join(", ") : "None"],
-        ]) permissions.append(pluginNode("dt", "", label), pluginNode("dd", "", value));
-        const tools = Array.isArray(plugin.tools) ? plugin.tools : [];
-        const toolNames = pluginNode("p", "plugin-tools", tools.length ? `Tools: ${tools.join(", ")}` : "No tools declared");
-        card.append(header, permissions, toolNames);
+      for (const plugin of installed) {
+        const name = String(plugin.name || plugin.id), card = pluginNode("article", "plugin-card"); card.setAttribute("aria-label", name);
+        const head = pluginNode("div", "plugin-card-head"), identity = pluginNode("div", "plugin-identity");
+        identity.append(pluginNode("h4", "", name), pluginNode("p", "tiny", [plugin.id, plugin.version].filter(Boolean).join(" · ")));
+        head.append(identity, pluginState(plugin)); card.append(head);
+        if (plugin.description) card.append(pluginNode("p", "plugin-description", plugin.description));
+        card.append(pluginPermissions(plugin), pluginNode("p", "plugin-tools", plugin.tools?.length ? `Tools: ${plugin.tools.join(", ")}` : "No tools declared"));
         if (plugin.integrity !== "valid") card.append(pluginNode("p", "hint danger", "Files changed since installation. Reinstall before enabling."));
         const actions = pluginNode("div", "plugin-actions");
-        const toggle = pluginNode("button", plugin.enabled ? "" : "primary");
-        toggle.type = "button";
-        toggle.dataset.pluginId = String(plugin.id);
-        toggle.setAttribute("aria-label", `${plugin.enabled ? "Disable" : "Enable offline"}: ${name} for this project`);
-        toggle.setAttribute("aria-describedby", "pluginsStatus");
-        toggle.addEventListener("click", () => togglePlugin(String(plugin.id)));
-        actions.append(toggle);
-        card.append(actions);
-        list.append(card);
+        actions.append(pluginButton("Details & configure", () => { void openPluginDetail(String(plugin.id)); }), pluginToggle(plugin));
+        card.append(actions); list.append(card);
       }
+      const included = $("pluginsIncluded"); included.replaceChildren();
+      const available = sorted((payload.catalog || []).filter(item => !payload.plugins.some(installed => installed.id === item.id)).filter(matches));
+      $("pluginsIncludedSection").hidden = !available.length;
+      for (const item of available) {
+        const card = pluginNode("article", "plugin-card included"), identity = pluginNode("div", "plugin-identity");
+        identity.append(pluginNode("h4", "", item.name || item.id), pluginNode("p", "tiny", `Included · ${item.version || ""}`));
+        card.append(identity, pluginNode("p", "plugin-description", item.description || "An included tool for this workspace."));
+        const actions = pluginNode("div", "plugin-actions"); actions.append(pluginButton("Add to workspace", () => { void openPluginInstall(item.source); }));
+        card.append(actions); included.append(card);
+      }
+      syncPluginControls();
     }
     async function loadPlugins(message = "") {
       if (pluginLoading || (pluginPending && !message)) return false;
-      pluginLoading = true;
-      syncPluginControls();
-      setPluginStatus("Loading installed plugins…");
+      pluginLoading = true; syncPluginControls(); setPluginStatus("Loading plugins…");
       try {
         const payload = await request("/plugins");
         if (!Array.isArray(payload.plugins) || typeof payload.enabled !== "boolean") throw new Error("Invalid plugin registry response.");
-        pluginCatalog = payload;
-        renderPlugins(payload);
-        setPluginStatus(message || `${payload.plugins.length} plugin${payload.plugins.length === 1 ? "" : "s"} installed locally.`);
-        return true;
+        pluginCatalog = payload; renderPlugins(payload);
+        setPluginStatus(message || `${payload.plugins.length} plugin${payload.plugins.length === 1 ? "" : "s"} installed locally.`); return true;
       } catch (error) {
-        pluginCatalog = null;
-        $("pluginsList").replaceChildren();
-        $("pluginsPrivacy").replaceChildren();
-        setPluginStatus(`${message ? "Change saved, but plugins could not be refreshed" : "Could not load plugins"}: ${error.message || error}`, true);
-        return false;
+        pluginCatalog = null; $("pluginsList").replaceChildren(); $("pluginsIncluded").replaceChildren(); $("pluginsPrivacy").replaceChildren();
+        setPluginStatus(`${message ? "Change saved, but plugins could not be refreshed" : "Could not load plugins"}: ${error.message || error}`, true); return false;
       } finally { pluginLoading = false; syncPluginControls(); }
     }
     async function togglePlugin(id) {
       if (pluginLoading || pluginPending || !pluginCatalog) return;
       const plugin = pluginCatalog.plugins.find(item => String(item.id) === id);
       if (!plugin || (!plugin.enabled && (!pluginCatalog.enabled || plugin.integrity !== "valid"))) return;
-      const enabled = !plugin.enabled;
-      const name = String(plugin.name || id);
-      const trigger = [...$("pluginsList").querySelectorAll("button[data-plugin-id]")].find(item => item.dataset.pluginId === id);
-      const restoreFocus = document.activeElement === trigger;
-      pluginPending = id;
-      pluginPendingEnable = enabled;
-      syncPluginControls();
-      setPluginStatus(`${enabled ? "Enabling" : "Disabling"} ${name}${enabled ? " offline" : ""}…`);
+      const enabled = !plugin.enabled, name = String(plugin.name || id);
+      const restoreFocus = document.activeElement?.dataset.pluginId === id;
+      pluginPending = id; pluginPendingEnable = enabled; syncPluginControls();
       try {
         await request(`/plugins/${encodeURIComponent(id)}`, {method: "PATCH", body: JSON.stringify({enabled})});
-        await loadPlugins(enabled ? `${name} enabled offline. Start a new task to use its tools.` : `${name} disabled. Its access has been revoked.`);
-      } catch (error) {
-        setPluginStatus(`Could not ${enabled ? "enable" : "disable"} ${name}: ${error.message || error}`, true);
-      } finally {
-        pluginPending = "";
-        syncPluginControls();
-        if (restoreFocus && (document.activeElement === trigger || document.activeElement === document.body)
-          && !$("panePlugins").hidden && !$("settingsOverlay").hidden) {
-          const button = [...$("pluginsList").querySelectorAll("button[data-plugin-id]")].find(item => item.dataset.pluginId === id);
-          if (button && !button.disabled) button.focus();
+        await loadPlugins(enabled ? `${name} enabled offline. Its tools are available on your next message.` : `${name} disabled. Its access has been revoked.`);
+        if (pluginDetail?.id === id && pluginView === "detail") {
+          pluginDetail = (await request(`/plugins/${encodeURIComponent(id)}`)).plugin; renderPluginDetail();
         }
+      } catch (error) { setPluginStatus(`Could not ${enabled ? "enable" : "disable"} ${name}: ${error.message || error}`, true); }
+      finally {
+        pluginPending = ""; syncPluginControls();
+        if (restoreFocus) {
+          const root = pluginView === "detail" ? $("pluginPage") : $("pluginsList");
+          [...root.querySelectorAll("button[data-plugin-id]")].find(button => button.dataset.pluginId === id)?.focus();
+        }
+      }
+    }
+    function showPluginView(view) {
+      pluginView = view; $("pluginsInventory").hidden = view !== "list"; $("pluginPage").hidden = view === "list";
+      $("pluginsHeader").hidden = view !== "list"; $("pluginsScopeBlock").hidden = view !== "list";
+    }
+    async function leavePluginPage() {
+      if ((pluginPending && pluginPending !== "preview") || pluginLoading) return;
+      const cancelledCheck = pluginPending === "preview";
+      if (cancelledCheck) pluginPending = "";
+      const token = pluginInstall?.preview?.token;
+      pluginRevision++; pluginInstall = null; pluginDetail = null; pluginConfigFields = []; pluginConfigDirty = false; pluginRuntimeStatus = null;
+      $("pluginPage").replaceChildren(); showPluginView("list"); syncPluginControls();
+      if (cancelledCheck) setPluginStatus("Package check closed. Nothing was installed.");
+      if (token) {
+        try { await request(`/plugins/preview/${encodeURIComponent(token)}`, {method: "DELETE"}); }
+        catch (error) { setPluginStatus(`Could not discard package preview: ${error.message || error}. It will expire automatically.`, true); }
+      }
+    }
+    function pluginBreadcrumb(title) {
+      const row = pluginNode("nav", "plugin-breadcrumb"); row.setAttribute("aria-label", "Plugin navigation");
+      const back = pluginButton("← Plugins", () => { void leavePluginPage(); }); back.dataset.cancelPreview = "true";
+      row.append(back, pluginNode("span", "", "/"), pluginNode("span", "", title)); return row;
+    }
+    async function openPluginDetail(id) {
+      if (pluginLoading || pluginPending) return;
+      pluginPending = "detail"; const revision = ++pluginRevision; syncPluginControls(); setPluginStatus("Loading plugin details…");
+      try {
+        const payload = await request(`/plugins/${encodeURIComponent(id)}`);
+        if (revision !== pluginRevision) return;
+        pluginDetail = payload.plugin; showPluginView("detail"); renderPluginDetail(); setPluginStatus("");
+      } catch (error) { setPluginStatus(`Could not load plugin: ${error.message || error}`, true); }
+      finally { pluginPending = ""; syncPluginControls(); }
+    }
+    function renderPluginDetail() {
+      const plugin = pluginDetail, page = $("pluginPage"); page.replaceChildren();
+      page.append(pluginBreadcrumb(plugin.name || plugin.id));
+      const head = pluginNode("div", "plugin-detail-head"), identity = pluginNode("div", "plugin-identity");
+      identity.append(pluginNode("h3", "", plugin.name || plugin.id), pluginNode("p", "tiny", `${plugin.id} · ${plugin.version}`));
+      head.append(identity, pluginState(plugin)); page.append(head);
+      if (plugin.description) page.append(pluginNode("p", "plugin-description", plugin.description));
+      const actions = pluginNode("div", "plugin-actions plugin-detail-actions"), check = pluginButton("Check runtime", () => { void checkPluginRuntime(); });
+      check.dataset.blocked = String(!plugin.enabled || !pluginCatalog?.enabled || plugin.integrity !== "valid");
+      check.title = "Loads this enabled plugin in its isolated runtime, using its existing grants.";
+      actions.append(check, pluginToggle(plugin)); page.append(actions);
+      const runtime = pluginRuntimeStatus = pluginNode("p", "hint"); runtime.id = "pluginRuntimeStatus"; runtime.setAttribute("role", "status");
+      runtime.textContent = plugin.enabled ? "Check that this plugin loads with its current permissions." : "Enable offline to check its runtime."; page.append(runtime);
+      const config = pluginNode("section", "plugin-section"); config.append(pluginNode("h4", "", "Configuration"));
+      renderPluginConfig(config, plugin); page.append(config);
+      const permissions = pluginNode("section", "plugin-section"); permissions.append(pluginNode("h4", "", "Permissions"), pluginPermissions(plugin),
+        pluginNode("p", "hint", "Private storage belongs to this project. Additional filesystem or network access must be granted explicitly from the CLI.")); page.append(permissions);
+      const tools = pluginNode("section", "plugin-section"); tools.append(pluginNode("h4", "", "Tools"));
+      for (const tool of plugin.tool_definitions || []) {
+        const item = pluginNode("details", "plugin-tool-detail"); item.append(pluginNode("summary", "", tool.name || tool.id || "Tool"));
+        if (tool.description) item.append(pluginNode("p", "hint", tool.description));
+        item.append(pluginNode("pre", "plugin-json", JSON.stringify(tool.parameters || tool.input_schema || tool, null, 2))); tools.append(item);
+      }
+      if (!plugin.tool_definitions?.length) tools.append(pluginNode("p", "hint", "No tools declared.")); page.append(tools);
+      const verification = pluginNode("details", "plugin-tool-detail"); verification.append(pluginNode("summary", "", "Package verification"),
+        pluginNode("p", "hint", `Integrity: ${plugin.integrity}`), pluginNode("code", "plugin-digest", plugin.digest || "Digest unavailable")); page.append(verification);
+      const removal = pluginNode("section", "plugin-remove"); removal.append(pluginNode("h4", "", "Remove plugin"),
+        pluginNode("p", "hint", "Uninstalls this package and deletes its grants, configuration, and private state in every project."),
+        pluginButton("Remove plugin…", () => showPluginRemoval(removal), "danger")); page.append(removal); syncPluginControls();
+    }
+    function renderPluginConfig(container, plugin) {
+      const schema = plugin.config_schema || {}, properties = schema.properties || {}, config = plugin.config || {};
+      pluginConfigFields = []; pluginConfigDirty = false;
+      const form = pluginNode("form", "plugin-config-form"); form.autocomplete = "off";
+      const markDirty = () => { pluginConfigDirty = true; save.dataset.blocked = "false"; reset.dataset.blocked = "false"; syncPluginControls(); };
+      for (const [key, field] of Object.entries(properties)) {
+        const secret = field.writeOnly === true || field.format === "password";
+        const pointer = "/" + key.replace(/~/g, "~0").replace(/\//g, "~1");
+        const label = pluginNode("label", "plugin-config-field"), title = pluginNode("span", "", field.title || key);
+        if (schema.required?.includes(key)) title.append(pluginNode("span", "plugin-required", " *")); label.append(title);
+        let input, kind = secret ? "secret" : Array.isArray(field.enum) ? "enum" : field.type;
+        if (kind === "enum") {
+          input = pluginNode("select"); const empty = pluginNode("option", "", "Use default"); empty.value = ""; input.append(empty);
+          for (const option of field.enum) { const node = pluginNode("option", "", String(option)); node.value = JSON.stringify(option); input.append(node); }
+          input.value = Object.hasOwn(config, key) ? JSON.stringify(config[key]) : "";
+        } else if (kind === "boolean") {
+          input = pluginNode("select");
+          for (const [value, text] of [["", "Use default"], ["true", "On"], ["false", "Off"]]) { const option = pluginNode("option", "", text); option.value = value; input.append(option); }
+          input.value = Object.hasOwn(config, key) ? String(config[key]) : "";
+        } else if (["string", "number", "integer", "secret"].includes(kind)) {
+          input = pluginNode("input"); input.type = secret ? "password" : ["number", "integer"].includes(kind) ? "number" : "text";
+          input.value = !secret && Object.hasOwn(config, key) ? config[key] ?? "" : "";
+          if (kind === "integer") input.step = "1"; else if (kind === "number") input.step = "any";
+          if (field.minimum !== undefined) input.min = String(field.minimum);
+          if (field.maximum !== undefined) input.max = String(field.maximum);
+          if (secret) { input.autocomplete = "new-password"; input.placeholder = plugin.configured_secrets?.includes(pointer) ? "Saved · leave blank to keep" : "Not configured"; }
+        } else {
+          kind = "json"; input = pluginNode("textarea", "plugin-json-input"); input.rows = 5;
+          input.value = Object.hasOwn(config, key) ? JSON.stringify(config[key], null, 2) : "";
+          input.placeholder = "JSON · leave blank for default";
+        }
+        input.setAttribute("aria-label", field.title || key); label.append(input);
+        if (field.description) label.append(pluginNode("span", "hint", field.description));
+        if (kind === "json") label.append(pluginNode("span", "hint", "Advanced JSON. Saved secret fields are omitted; leaving them out keeps their values."));
+        if (secret && field.type && field.type !== "string") label.append(pluginNode("span", "hint", `Enter a JSON ${field.type}. Its value stays concealed.`));
+        const entry = {key, kind, input, clear: false, touched: false, present: Object.hasOwn(config, key), secretType: secret ? field.type : null}; pluginConfigFields.push(entry);
+        const changed = () => { entry.clear = false; entry.touched = true; markDirty(); };
+        input.addEventListener("input", changed); input.addEventListener("change", changed);
+        if (secret && plugin.configured_secrets?.includes(pointer)) {
+          label.append(pluginButton("Clear saved value", () => { input.value = ""; input.placeholder = "Will be cleared on save"; entry.clear = true; markDirty(); }, "plugin-clear-secret"));
+        }
+        form.append(label);
+      }
+      if (!Object.keys(properties).length) {
+        const label = pluginNode("label", "plugin-config-field"); label.append(pluginNode("span", "", "Configuration JSON"));
+        const input = pluginNode("textarea", "plugin-json-input"); input.rows = 6; input.value = JSON.stringify(config, null, 2);
+        input.setAttribute("aria-label", "Configuration JSON"); input.addEventListener("input", markDirty); label.append(input);
+        form.append(label); pluginConfigFields.push({kind: "root", input});
+      }
+      const save = pluginButton("Save configuration", () => { void savePluginConfig(); }, "primary");
+      const reset = pluginButton("Reset changes", () => { renderPluginDetail(); });
+      save.dataset.blocked = "true"; reset.dataset.blocked = "true";
+      const actions = pluginNode("div", "plugin-actions"); actions.append(reset, save); form.append(actions);
+      form.addEventListener("submit", event => { event.preventDefault(); void savePluginConfig(); });
+      container.append(pluginNode("p", "hint", "Changes stay here until you save. Secrets are stored locally and never returned to this page."), form);
+    }
+    function collectPluginConfig() {
+      const config = JSON.parse(JSON.stringify(pluginDetail.config || {}));
+      for (const field of pluginConfigFields) {
+        const raw = String(field.input.value);
+        if (field.kind === "root") {
+          const value = JSON.parse(raw);
+          if (!value || Array.isArray(value) || typeof value !== "object") throw new Error("Configuration must be a JSON object.");
+          return value;
+        }
+        delete config[field.key];
+        if (field.kind === "string" && !field.present && !field.touched && raw === "") continue;
+        let value;
+        if (field.kind === "secret") {
+          if (field.clear) value = null;
+          else if (raw && field.secretType && field.secretType !== "string") {
+            try { value = JSON.parse(raw); } catch { throw new Error(`${field.key} must contain a valid JSON ${field.secretType}.`); }
+          } else if (raw) value = raw;
+          else continue;
+        }
+        else if (!raw && field.kind !== "string") continue;
+        else if (["number", "integer"].includes(field.kind)) {
+          value = Number(raw); if (!Number.isFinite(value) || (field.kind === "integer" && !Number.isInteger(value))) throw new Error(`${field.key} must be a valid ${field.kind}.`);
+        } else if (["json", "enum", "boolean"].includes(field.kind)) {
+          try { value = JSON.parse(raw); } catch { throw new Error(`${field.key} must contain valid JSON.`); }
+        } else value = raw;
+        Object.defineProperty(config, field.key, {value, enumerable: true, writable: true, configurable: true});
+      }
+      return config;
+    }
+    async function savePluginConfig() {
+      if (pluginPending || !pluginDetail || !pluginConfigDirty) return;
+      let config; try { config = collectPluginConfig(); } catch (error) { setPluginStatus(error.message, true); return; }
+      pluginPending = "config"; syncPluginControls(); setPluginStatus("Saving configuration…");
+      try {
+        pluginDetail = (await request(`/plugins/${encodeURIComponent(pluginDetail.id)}/config`, {method: "PUT", body: JSON.stringify({config})})).plugin;
+        renderPluginDetail(); setPluginStatus("Configuration saved for this project. New tool calls use these settings.");
+      } catch (error) { setPluginStatus(`Could not save configuration: ${error.message || error}`, true); }
+      finally { pluginPending = ""; syncPluginControls(); }
+    }
+    async function checkPluginRuntime() {
+      if (pluginPending || !pluginDetail?.enabled) return;
+      pluginPending = "inspect"; syncPluginControls(); const status = pluginRuntimeStatus; status.textContent = "Checking isolated runtime…";
+      try {
+        const result = (await request(`/plugins/${encodeURIComponent(pluginDetail.id)}/inspect`, {method: "POST", body: "{}"})).plugin;
+        status.textContent = `Runtime ${result.state || "ready"}${result.runtime_version ? ` · Cordis ${result.runtime_version}` : ""}. Checked with current permissions; the temporary runtime has stopped.`;
+        status.className = "hint";
+      } catch (error) { status.textContent = `Runtime check failed: ${error.message || error}`; status.className = "hint danger"; }
+      finally { pluginPending = ""; syncPluginControls(); }
+    }
+    function showPluginRemoval(container) {
+      if (pluginPending) return;
+      const name = String(pluginDetail.name || pluginDetail.id); container.replaceChildren();
+      container.append(pluginNode("h4", "danger", `Remove ${name}?`), pluginNode("p", "hint", "This deletes the package and its grants, configuration, and private state across all projects. This cannot be undone."));
+      const actions = pluginNode("div", "plugin-actions"); actions.append(pluginButton("Keep plugin", renderPluginDetail), pluginButton(`Remove ${name}`, () => { void removePlugin(); }, "danger")); container.append(actions);
+    }
+    async function removePlugin() {
+      if (pluginPending || !pluginDetail) return;
+      pluginPending = "remove"; syncPluginControls(); const {id, name} = pluginDetail;
+      try {
+        await request(`/plugins/${encodeURIComponent(id)}`, {method: "DELETE"});
+        pluginDetail = null; $("pluginPage").replaceChildren(); showPluginView("list");
+        await loadPlugins(`${name || id} removed from all projects.`);
+      } catch (error) { setPluginStatus(`Could not remove plugin: ${error.message || error}`, true); }
+      finally { pluginPending = ""; syncPluginControls(); }
+    }
+    async function openPluginInstall(source = "") {
+      if (pluginPending || pluginLoading) return;
+      await leavePluginPage(); pluginInstall = {source, stage: "source", preview: null}; showPluginView("install"); renderPluginInstall(); setPluginStatus("");
+      if (source) await previewPlugin();
+    }
+    function renderPluginInstall() {
+      const page = $("pluginPage"); page.replaceChildren(); page.append(pluginBreadcrumb("Add plugin"));
+      page.append(pluginNode("h3", "plugin-page-title", pluginInstall.stage === "done" ? "Ready when you are" : "Add a plugin"));
+      if (pluginInstall.stage === "source") {
+        page.append(pluginNode("p", "plugin-description", "Bring a trusted Cordis package into your workspace."));
+        const form = pluginNode("form", "plugin-install-form"), label = pluginNode("label"); label.append(pluginNode("span", "", "Package source"));
+        const input = pluginNode("input"); input.id = "pluginSource"; input.value = pluginInstall.source;
+        input.placeholder = "/path/to/plugin or npm:@scope/package@1.0.0"; input.autocomplete = "off"; input.spellcheck = false;
+        input.addEventListener("input", () => { pluginInstall.source = input.value; }); label.append(input); form.append(label);
+        const help = pluginNode("details", "plugin-source-help"); help.append(pluginNode("summary", "", "What can I install?"),
+          pluginNode("p", "hint", "A local folder, a .tgz package, or npm:package@version with a Libre Claw plugin manifest. Registry packages are downloaded only when you check them. Install scripts never run.")); form.append(help);
+        const actions = pluginNode("div", "plugin-actions"), cancel = pluginButton("Cancel", () => { void leavePluginPage(); }); cancel.dataset.cancelPreview = "true";
+        actions.append(cancel, pluginButton("Check package", () => { void previewPlugin(); }, "primary")); form.append(actions);
+        form.addEventListener("submit", event => { event.preventDefault(); void previewPlugin(); }); page.append(form);
+      } else {
+        const item = pluginInstall.preview, card = pluginNode("article", "plugin-card");
+        card.append(pluginNode("h4", "", item.name || item.id), pluginNode("p", "tiny", `${item.id} · ${item.version}`));
+        if (item.description) card.append(pluginNode("p", "plugin-description", item.description));
+        const toolCount = item.tool_count ?? item.tools?.length ?? 0;
+        card.append(pluginNode("p", "plugin-tools", `${toolCount} tool${toolCount === 1 ? "" : "s"} · Offline by default`));
+        const reviewTools = pluginNode("details", "plugin-tool-detail"); reviewTools.append(pluginNode("summary", "", "Review declared tools"));
+        for (const tool of item.tool_definitions || (item.tools || []).map(name => ({name}))) {
+          const definition = pluginNode("details", "plugin-tool-detail"); definition.append(pluginNode("summary", "", tool.name || tool.id || "Tool"));
+          if (tool.description) definition.append(pluginNode("p", "hint", tool.description));
+          if (tool.parameters || tool.input_schema) definition.append(pluginNode("pre", "plugin-json", JSON.stringify(tool.parameters || tool.input_schema, null, 2)));
+          reviewTools.append(definition);
+        }
+        if (toolCount) card.append(reviewTools);
+        if (pluginInstall.stage === "done") {
+          card.append(pluginNode("p", "hint", item.enabled ? "Installed and already enabled for this project. Existing permissions are unchanged." : "Installed and disabled. Enable it for this project when you’re ready."));
+        } else {
+          card.append(pluginNode("p", "hint", "The package has been checked without executing it. Installation keeps it disabled until you enable it."));
+          const verify = pluginNode("details", "plugin-tool-detail"); verify.append(pluginNode("summary", "", "Package fingerprint"), pluginNode("code", "plugin-digest", item.digest || "")); card.append(verify);
+        }
+        if (pluginInstall.stage !== "done" && pluginCatalog?.plugins.some(plugin => plugin.id === item.id)) {
+          card.append(pluginNode("p", "hint danger", "This replaces an installed package. If its files changed, saved grants and configuration will be revoked in every project."));
+        }
+        const actions = pluginNode("div", "plugin-actions");
+        if (pluginInstall.stage === "done") {
+          actions.append(pluginButton("Done", () => { void leavePluginPage(); }));
+          if (item.enabled) actions.append(pluginButton("Open plugin", () => { pluginInstall = null; void openPluginDetail(String(item.id)); }, "primary"));
+          else {
+            const enable = pluginButton("Enable now", () => { void enableInstalledPlugin(); }, "primary"); enable.dataset.blocked = String(!pluginCatalog?.enabled); actions.append(enable);
+          }
+        } else actions.append(pluginButton("Back", () => { void backPluginInstall(); }), pluginButton("Install plugin", () => { void installPlugin(); }, "primary"));
+        card.append(actions); page.append(card);
+      }
+      syncPluginControls();
+    }
+    async function previewPlugin() {
+      if (pluginPending || !pluginInstall) return;
+      const source = pluginInstall.source.trim(); if (!source) { setPluginStatus("Enter a package source first.", true); return; }
+      const revision = ++pluginRevision;
+      pluginPending = "preview"; syncPluginControls(); setPluginStatus("Checking package metadata and files…");
+      try {
+        const preview = await request("/plugins/preview", {method: "POST", body: JSON.stringify({source})});
+        if (revision !== pluginRevision) {
+          // Discard an abandoned check; the server also expires unclaimed previews.
+          try { await request(`/plugins/preview/${encodeURIComponent(preview.token)}`, {method: "DELETE"}); } catch { /* Expiry provides cleanup if the connection was lost. */ }
+          return;
+        }
+        pluginInstall.preview = preview; pluginInstall.stage = "preview"; renderPluginInstall(); setPluginStatus("Package checked. Review it before installing.");
+      } catch (error) {
+        if (revision === pluginRevision) setPluginStatus(`Could not check package: ${error.message || error}. Edit the source and try again.`, true);
+      } finally { if (revision === pluginRevision) pluginPending = ""; syncPluginControls(); }
+    }
+    async function backPluginInstall() {
+      if (pluginPending) return;
+      const token = pluginInstall.preview?.token;
+      let cleanupError = "";
+      if (token) {
+        pluginPending = "discard"; syncPluginControls();
+        try { await request(`/plugins/preview/${encodeURIComponent(token)}`, {method: "DELETE"}); }
+        catch (error) { cleanupError = `Could not discard preview: ${error.message || error}. Unused previews expire automatically.`; }
+        finally { pluginPending = ""; }
+      }
+      pluginInstall.preview = null; pluginInstall.stage = "source"; renderPluginInstall(); setPluginStatus(cleanupError, Boolean(cleanupError));
+    }
+    async function installPlugin() {
+      if (pluginPending || !pluginInstall?.preview?.token) return;
+      pluginPending = "install"; syncPluginControls(); setPluginStatus("Installing the checked package…");
+      try {
+        const result = await request("/plugins/install", {method: "POST", body: JSON.stringify({token: pluginInstall.preview.token})});
+        pluginInstall.preview = {...pluginInstall.preview, ...result.plugin, token: null}; pluginInstall.stage = "done";
+        await loadPlugins(`${pluginInstall.preview.name || pluginInstall.preview.id} installed. ${pluginInstall.preview.enabled ? "It remains enabled for this project." : "It is disabled."}`); renderPluginInstall();
+      } catch (error) {
+        pluginInstall.preview = null; pluginInstall.stage = "source"; renderPluginInstall();
+        setPluginStatus(`Could not install plugin: ${error.message || error}. Check the package again to retry.`, true);
+      }
+      finally { pluginPending = ""; syncPluginControls(); }
+    }
+    async function enableInstalledPlugin() {
+      if (pluginPending || pluginInstall?.stage !== "done") return;
+      const id = String(pluginInstall.preview.id);
+      if (!pluginCatalog?.plugins.some(plugin => plugin.id === id && plugin.enabled)) await togglePlugin(id);
+      if (pluginCatalog?.plugins.some(plugin => plugin.id === id && plugin.enabled)) {
+        pluginInstall = null; await openPluginDetail(id);
       }
     }
 
@@ -1631,6 +1941,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     let settingsReturnFocus = null;
     function openSettingsPane(pane) {
       if (!PANES.includes(pane)) return;
+      if (pane !== "plugins" && pluginPending && pluginPending !== "preview") { setPluginStatus("Wait for the plugin operation to finish before changing sections."); return; }
       closeMobileSidebar();
       const overlay = $("settingsOverlay"), wasOpen = !overlay.hidden;
       if (!wasOpen) { settingsReturnFocus = document.activeElement; $("settingsNotice").hidden = true; }
@@ -1653,11 +1964,14 @@ _DASHBOARD_HTML = r"""<!doctype html>
         void loadLlamacppConfig();
       }
       if (pane === "schedules") void refreshAutomations().catch(error => setNotice(error.message || String(error), true));
-      if (pane === "plugins") void loadPlugins();
+      if (pane === "plugins" && pluginView === "list") void loadPlugins();
+      if (pane !== "plugins" && (!pluginPending || pluginPending === "preview")) void leavePluginPage();
       if (pane === "usage") void loadUsagePane();
     }
     function closeSettingsPanel() {
       if ($("settingsOverlay").hidden) return;
+      if (pluginPending && pluginPending !== "preview") { setPluginStatus("Wait for the plugin operation to finish before closing."); return; }
+      void leavePluginPage();
       $("settingsOverlay").classList.remove("open"); $("settingsOverlay").hidden = true;
       $("appFrame").inert = false;
       if (settingsReturnFocus?.isConnected) settingsReturnFocus.focus();
@@ -2526,6 +2840,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     $("tabWorktrees").addEventListener("click", () => setView("worktrees"));
     $("focusRunInput").addEventListener("click", newSession);
     $("openSettings").addEventListener("click", () => openSettingsPane("general"));
+    $("openPlugins").addEventListener("click", () => openSettingsPane("plugins"));
     $("closeSettings").addEventListener("click", closeSettingsPanel);
     $("settingsMask").addEventListener("click", closeSettingsPanel);
     document.addEventListener("keydown", handleSettingsKeydown);
@@ -2538,6 +2853,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
     $("automationRoute").addEventListener("change", syncAutomationRoute);
     $("refreshUsagePane").addEventListener("click", loadUsagePane);
     $("refreshPlugins").addEventListener("click", () => { void loadPlugins(); });
+    $("addPlugin").addEventListener("click", () => { void openPluginInstall(); });
+    $("pluginSearch").addEventListener("input", () => { if (pluginCatalog) renderPlugins(pluginCatalog); });
     $("refreshSchedules").addEventListener("click", () => { void refreshAutomations().catch(error => setNotice(error.message || String(error), true)); });
     $("cancelAutomationEdit").addEventListener("click", () => resetAutomationForm($("automationForm")));
     $("cancelRun").addEventListener("click", async () => {

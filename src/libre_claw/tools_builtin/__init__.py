@@ -8,7 +8,7 @@ from dataclasses import replace
 
 from libre_claw.config import LibreClawConfig
 from libre_claw.core.memory import MemoryStore
-from libre_claw.core.cordis import CordisManager
+from libre_claw.core.cordis import CordisManager, CordisTool
 from libre_claw.core.tools import ToolContext, ToolRegistry, registered_tool_types
 
 # Import modules for their @register_tool side effects.
@@ -91,6 +91,19 @@ def create_builtin_registry(config: LibreClawConfig, memory_store: MemoryStore |
             tool for tool in CordisManager(tool_timeout=config.cordis.tool_timeout).create_tools(context)
             if _tool_is_enabled(tool.name, allowlist, denylist, unavailable)
         )
+    return ToolRegistry(tools)
+
+
+def refresh_cordis_tools(config: LibreClawConfig, registry: ToolRegistry) -> ToolRegistry:
+    """Discover plugin changes between turns while retaining other tool state."""
+    context = registry.context
+    if context is None:
+        return create_builtin_registry(config)
+    tools = [tool for tool in registry.tools() if not isinstance(tool, CordisTool)]
+    if config.cordis.enabled:
+        allowlist, denylist = set(config.agent.tool_allowlist), set(config.agent.tool_denylist)
+        tools.extend(tool for tool in CordisManager(tool_timeout=config.cordis.tool_timeout).create_tools(context)
+                     if _tool_is_enabled(tool.name, allowlist, denylist, set()))
     return ToolRegistry(tools)
 
 

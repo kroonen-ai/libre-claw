@@ -20,12 +20,19 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from libre_claw.core.cordis_config import (
+    CordisConfigError, bounded_json, effective_config, preserve_secrets,
+    public_config, public_schema, validate_config, validate_schema,
+)
 from libre_claw.core.tools import BaseTool, ToolContext, ToolResult
 
 
 MANIFEST_NAME = "libre-claw-plugin.json"
 MAX_PACKAGE_BYTES = 2 * 1024 * 1024
 MAX_PACKAGE_FILES = 256
+MAX_PACKAGE_DIRECTORIES = 256
+MAX_PACKAGE_ENTRIES = 1024
+MAX_PACKAGE_DEPTH = 32
 MAX_RPC_LINE = 1024 * 1024
 MAX_RPC_BYTES = 4 * 1024 * 1024
 CLEANUP_GRACE_SECONDS = 3.0
@@ -46,7 +53,7 @@ def _json(value: Any) -> str:
 def _parse(data: bytes | str) -> Any:
     try:
         return json.loads(data, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
-    except (ValueError, UnicodeError) as exc:
+    except (ValueError, UnicodeError, RecursionError) as exc:
         raise CordisError("Invalid plugin JSON.") from exc
 
 
@@ -75,23 +82,44 @@ def _scan(directory: Path, *, exclude: bool) -> dict[str, bytes]:
         raise CordisError("Plugin source must be a local directory, not a symlink.")
     files: dict[str, bytes] = {}
     size = 0
-    for current, directories, filenames in os.walk(directory, followlinks=False):
-        parent = Path(current)
-        retained = []
-        for name in sorted(directories):
-            child = parent / name
-            if exclude and (name.startswith(".") or name in _EXCLUDED):
+    entries = 0
+    directories = 1
+    pending = [(directory, 0)]
+    while pending:
+        parent, depth = pending.pop()
+        if parent.is_symlink():
+            raise CordisError("Plugin symlinks are not allowed.")
+        children: list[tuple[Path, bool]] = []
+        try:
+            # os.walk materializes each entire directory before yielding and
+            # silently ignores unreadable subtrees. Bound enumeration itself.
+            with os.scandir(parent) as listing:
+                for child in listing:
+                    entries += 1
+                    if entries > MAX_PACKAGE_ENTRIES:
+                        raise CordisError("Plugin contains too many directory entries.")
+                    is_directory = child.is_dir(follow_symlinks=False)
+                    if exclude and child.name.startswith("."):
+                        continue
+                    if exclude and child.name in _EXCLUDED and (is_directory or child.is_dir(follow_symlinks=True)):
+                        continue
+                    if exclude and not is_directory and Path(child.name).suffix.lower() in {".pem", ".key", ".p12", ".pfx"}:
+                        continue
+                    if child.is_symlink():
+                        raise CordisError("Plugin symlinks are not allowed.")
+                    if is_directory:
+                        directories += 1
+                        if directories > MAX_PACKAGE_DIRECTORIES:
+                            raise CordisError("Plugin contains too many directories.")
+                        if depth + 1 > MAX_PACKAGE_DEPTH:
+                            raise CordisError("Plugin directory nesting exceeds the allowed depth.")
+                    children.append((Path(child.path), is_directory))
+        except OSError as exc:
+            raise CordisError("Cannot safely read plugin directories.") from exc
+        for path, is_directory in sorted(children, key=lambda item: item[0].name):
+            if is_directory:
+                pending.append((path, depth + 1))
                 continue
-            if child.is_symlink():
-                raise CordisError("Plugin symlinks are not allowed.")
-            retained.append(name)
-        directories[:] = retained
-        for name in sorted(filenames):
-            if exclude and (name.startswith(".") or Path(name).suffix.lower() in {".pem", ".key", ".p12", ".pfx"}):
-                continue
-            path = parent / name
-            if path.is_symlink():
-                raise CordisError("Plugin symlinks are not allowed.")
             if len(files) >= MAX_PACKAGE_FILES:
                 raise CordisError("Plugin contains too many files.")
             data = _regular_bytes(path, MAX_PACKAGE_BYTES - size)
@@ -116,6 +144,8 @@ def _manifest(data: bytes) -> dict[str, Any]:
     for field in ("name", "version"):
         if not isinstance(value.get(field), str) or not value[field].strip() or len(value[field]) > 160:
             raise CordisError(f"Plugin manifest requires a valid {field}.")
+    if not isinstance(value.get("description", ""), str) or len(value.get("description", "")) > 4000:
+        raise CordisError("Plugin description must be a string of at most 4000 characters.")
     entry = value.get("entry")
     if not isinstance(entry, str) or not entry or "\\" in entry:
         raise CordisError("Plugin entry must be a relative JavaScript file.")
@@ -124,10 +154,12 @@ def _manifest(data: bytes) -> dict[str, Any]:
         raise CordisError("Plugin entry must remain inside its snapshot.")
     if entry_path.suffix not in {".js", ".mjs", ".cjs"}:
         raise CordisError("Plugin entry must be a JavaScript file.")
-    if not isinstance(value.get("config", {}), dict):
-        raise CordisError("Plugin config must be a JSON object.")
-    if len(_json(value.get("config", {})).encode()) > 64 * 1024:
-        raise CordisError("Plugin config exceeds 64 KiB.")
+    try:
+        if "config_schema" in value:
+            validate_schema(value["config_schema"])
+        validate_config(value.get("config", {}), value.get("config_schema"), partial=True)
+    except CordisConfigError as exc:
+        raise CordisError(str(exc)) from exc
     tools = value.get("tools")
     if not isinstance(tools, list) or not 1 <= len(tools) <= 64:
         raise CordisError("Plugin manifest must declare between 1 and 64 tools.")
@@ -220,11 +252,14 @@ class CordisManager:
         return value
 
     def _write_registry(self, registry: dict[str, Any]) -> None:
+        data = _json(registry) + "\n"
+        if len(data.encode()) > MAX_PACKAGE_BYTES:
+            raise CordisError("Cordis registry exceeds the allowed size.")
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         descriptor, temporary = tempfile.mkstemp(prefix=".registry-", dir=self.root)
         try:
             with os.fdopen(descriptor, "w") as handle:
-                handle.write(_json(registry) + "\n")
+                handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.root / "registry.json")
@@ -240,6 +275,8 @@ class CordisManager:
             raise CordisError("Invalid plugin snapshot reference.")
         if not isinstance(record.get("workspaces"), dict):
             raise CordisError("Invalid plugin workspace grants.")
+        if not isinstance(record.get("configs", {}), dict):
+            raise CordisError("Invalid plugin workspace configuration.")
         return record
 
     def _snapshot(self, plugin_id: str, record: dict[str, Any]) -> Path:
@@ -261,8 +298,7 @@ class CordisManager:
             raise CordisError("Plugin identity or entry does not match its snapshot.")
         return snapshot, manifest
 
-    @_registry_mutation
-    def install(self, source: str | Path) -> dict[str, Any]:
+    def _source(self, source: str | Path) -> tuple[dict[str, bytes], dict[str, Any], dict[str, str], str]:
         source = Path(source).expanduser().absolute()
         files = _scan(source, exclude=True)
         if MANIFEST_NAME not in files:
@@ -270,15 +306,34 @@ class CordisManager:
         manifest = _manifest(files[MANIFEST_NAME])
         if manifest["entry"] not in files:
             raise CordisError("Plugin entry is missing or excluded from installation.")
-        plugin_id = manifest["id"]
         checksums = _checksums(files)
         digest = hashlib.sha256(_json(checksums).encode()).hexdigest()
+        return files, manifest, checksums, digest
+
+    def preview(self, source: str | Path) -> dict[str, Any]:
+        """Review exact local package bytes without installing or executing code."""
+        _, manifest, _, digest = self._source(source)
+        return {
+            "id": manifest["id"], "name": manifest["name"], "version": manifest["version"],
+            "description": manifest.get("description", ""), "digest": digest,
+            "tools": [tool["name"] for tool in manifest["tools"]],
+            "tool_count": len(manifest["tools"]), "tool_definitions": manifest["tools"],
+        }
+
+    @_registry_mutation
+    def install(self, source: str | Path, *, expected_digest: str | None = None) -> dict[str, Any]:
+        files, manifest, checksums, digest = self._source(source)
+        if expected_digest is not None and (not isinstance(expected_digest, str) or not _DIGEST.fullmatch(expected_digest) or digest != expected_digest):
+            raise CordisError("Plugin source changed since its preview. Review the package again before installation.")
+        plugin_id = manifest["id"]
         registry = self._read_registry()
         previous = registry["plugins"].get(plugin_id, {})
         record = {
             "digest": digest, "files": checksums,
             "name": manifest["name"], "version": manifest["version"],
             "workspaces": previous.get("workspaces", {}) if previous.get("digest") == digest else {},
+            # New code must not silently inherit either grants or credentials.
+            "configs": previous.get("configs", {}) if previous.get("digest") == digest else {},
         }
         destination = self._snapshot(plugin_id, record)
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -307,7 +362,8 @@ class CordisManager:
             raise CordisError("Network permission must be explicitly true or false.")
         registry = self._read_registry()
         record = self._record(plugin_id, registry)
-        self._verify(plugin_id, record)
+        _, manifest = self._verify(plugin_id, record)
+        self._effective_config(record, manifest, key)
         record["workspaces"][key] = {
             "allow_network": allow_network,
             "read_paths": _grant_paths(read_paths),
@@ -315,6 +371,55 @@ class CordisManager:
         }
         self._write_registry(registry)
         return self._describe(plugin_id, record, key)
+
+    def _effective_config(self, record: dict[str, Any], manifest: dict[str, Any], key: str, *, partial: bool = False) -> dict[str, Any]:
+        try:
+            overrides = record.get("configs", {}).get(key, {})
+            # Validate the envelope first; secret null tombstones are resolved
+            # before applying the declared schema to the resulting config.
+            validate_config(overrides, None)
+            result = effective_config(manifest["config"], overrides, manifest.get("config_schema"))
+            validate_config(result, manifest.get("config_schema"), partial=partial)
+            return result
+        except CordisConfigError as exc:
+            raise CordisError(str(exc)) from exc
+
+    def details(self, plugin_id: str, workspace: str | Path) -> dict[str, Any]:
+        """Return editable metadata without executing code or exposing secrets."""
+        _, key = _workspace(workspace)
+        record = self._record(plugin_id)
+        _, manifest = self._verify(plugin_id, record)
+        config, configured = public_config(self._effective_config(record, manifest, key, partial=True), manifest.get("config_schema"))
+        return {
+            **self._describe(plugin_id, record, key), "digest": record["digest"],
+            "config_schema": public_schema(manifest.get("config_schema")),
+            "config": config, "configured_secrets": configured,
+            "tool_definitions": manifest["tools"],
+        }
+
+    @_registry_mutation
+    def configure(self, plugin_id: str, workspace: str | Path, config: dict[str, Any]) -> dict[str, Any]:
+        """Save workspace overrides; omission retains secrets, null clears them.
+
+        Ordinary fields replace previous overrides and inherit manifest defaults.
+        Disabling a plugin does not discard config. Installing changed code does.
+        """
+        _, key = _workspace(workspace)
+        registry = self._read_registry()
+        record = self._record(plugin_id, registry)
+        _, manifest = self._verify(plugin_id, record)
+        try:
+            validate_config(config, None)
+            previous = record.get("configs", {}).get(key, {})
+            validate_config(previous, None)
+            overrides = preserve_secrets(config, previous, manifest.get("config_schema"))
+            bounded_json(overrides)
+        except CordisConfigError as exc:
+            raise CordisError(str(exc)) from exc
+        record.setdefault("configs", {})[key] = overrides
+        self._effective_config(record, manifest, key)
+        self._write_registry(registry)
+        return self.details(plugin_id, workspace)
 
     @_registry_mutation
     def disable(self, plugin_id: str, workspace: str | Path) -> dict[str, Any]:
@@ -348,15 +453,18 @@ class CordisManager:
 
     def _describe(self, plugin_id: str, record: dict[str, Any], workspace_key: str | None) -> dict[str, Any]:
         error = None
+        description = ""
         tools: list[str] = []
         try:
             _, manifest = self._verify(plugin_id, record)
+            description = manifest.get("description", "")
             tools = [tool["name"] for tool in manifest["tools"]]
         except (CordisError, OSError) as exc:
             error = str(exc)
         grants = record.get("workspaces", {}).get(workspace_key) if workspace_key else None
         result = {
             "id": plugin_id, "name": record.get("name", plugin_id), "version": record.get("version", ""),
+            "description": description,
             "enabled": grants is not None,
             "integrity": "changed" if error else "valid",
             "tools": tools, "tool_count": len(tools),
@@ -411,6 +519,7 @@ class CordisManager:
         if not isinstance(grants.get("allow_network"), bool) or not isinstance(grants.get("read_paths"), list) or not isinstance(grants.get("write_paths"), list):
             raise CordisError("Invalid plugin grants; enable the plugin again.")
         snapshot, manifest = self._verify(plugin_id, record)
+        config = self._effective_config(record, manifest, key)
         if tool_name is not None and tool_name not in {tool["name"] for tool in manifest["tools"]}:
             raise CordisError("Plugin tool is not declared in its manifest.")
         state_dir = self.root / "state" / key / plugin_id
@@ -470,7 +579,7 @@ class CordisManager:
                 limit=MAX_RPC_LINE,
             )
             stderr_task = asyncio.create_task(drain_stderr())
-            await rpc("initialize", {"entry": str(snapshot / manifest["entry"]), "plugin_id": plugin_id, "config": manifest["config"], "state_dir": str(state_dir)})
+            await rpc("initialize", {"entry": str(snapshot / manifest["entry"]), "plugin_id": plugin_id, "config": config, "state_dir": str(state_dir)})
             catalog = await rpc("tools/list")
             actual = catalog.get("tools") if isinstance(catalog, dict) else None
             if not isinstance(actual, list) or not all(isinstance(tool, dict) and isinstance(tool.get("name"), str) for tool in actual):

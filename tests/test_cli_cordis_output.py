@@ -28,6 +28,6 @@ def test_cordis_enable_keeps_stdout_json_and_sends_guidance_to_stderr(monkeypatc
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == payload
-    assert "Start a new task" not in result.stdout
-    assert "Start a new task" in result.stderr
+    assert "next message" not in result.stdout
+    assert "next message" in result.stderr
     assert "normal approval" in result.stderr

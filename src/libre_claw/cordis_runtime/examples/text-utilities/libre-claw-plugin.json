@@ -1,0 +1,30 @@
+{
+  "id": "text-utilities",
+  "name": "Text utilities",
+  "version": "1.0.0",
+  "description": "Count words, lines, and characters without sending text anywhere.",
+  "entry": "plugin.mjs",
+  "config": {"include_characters": true},
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "include_characters": {
+        "type": "boolean",
+        "title": "Include character count",
+        "description": "Count Unicode characters alongside words and lines.",
+        "default": true
+      }
+    },
+    "additionalProperties": false
+  },
+  "tools": [{
+    "name": "count_text",
+    "description": "Count words and lines in supplied text, with an optional Unicode character count. Runs entirely locally.",
+    "input_schema": {
+      "type": "object",
+      "properties": {"text": {"type": "string", "description": "Text to count."}},
+      "required": ["text"],
+      "additionalProperties": false
+    }
+  }]
+}

@@ -83,6 +83,9 @@ const refreshAutomations = async () => {};
 const loadUsagePane = () => {};
 let pluginLoads = 0;
 const loadPlugins = async () => { pluginLoads++; };
+let pluginView = 'list', pluginPending = '', pluginLeaves = 0, pluginStatus = '';
+const leavePluginPage = async () => { pluginLeaves++; pluginPending = ''; pluginView = 'list'; };
+const setPluginStatus = message => { pluginStatus = message; };
 const setNotice = () => {};
 const closeMobileSidebar = () => {};
 const keyboard = (key, shiftKey = false) => ({key, shiftKey, prevented: false, preventDefault() { this.prevented = true; }});
@@ -308,3 +311,31 @@ def test_all_dashboard_themes_use_shared_colors_and_libre_design() -> None:
     assert 'html:is([data-theme="libre"], [data-theme="libre-light"])' not in html
     assert '@media (prefers-reduced-motion: reduce)' in html
     assert 'fonts.googleapis.com' not in html
+
+
+def test_plugin_writes_block_modal_exit_but_package_checks_can_be_left(tmp_path) -> None:
+    html = dashboard_html()
+    source = html[html.index("    const PANES ="):html.index("    async function loadModelConfig(")]
+    run_script(tmp_path, MODAL_DOM + source + r"""
+openSettingsPane('plugins');
+pluginView = 'install'; pluginPending = 'install';
+const initialLeaves = pluginLeaves;
+closeSettingsPanel();
+assert.equal(elements.settingsOverlay.hidden, false);
+assert.equal(pluginLeaves, initialLeaves);
+assert.match(pluginStatus, /Wait for the plugin operation/);
+openSettingsPane('models');
+assert.equal(elements.panePlugins.hidden, false);
+assert.equal(modelLoads, 0);
+pluginPending = 'preview';
+closeSettingsPanel();
+assert.equal(elements.settingsOverlay.hidden, true);
+assert.equal(pluginLeaves, initialLeaves + 1);
+assert.equal(pluginPending, '');
+openSettingsPane('plugins');
+pluginView = 'detail';
+openSettingsPane('general');
+assert.equal(elements.paneGeneral.hidden, false);
+assert.equal(pluginView, 'list');
+assert.equal(pluginLeaves, initialLeaves + 2);
+""")

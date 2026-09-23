@@ -63,3 +63,19 @@ node --test src/libre_claw/cordis_runtime/tests/runtime.test.mjs
 
 Recheck the bundle and outbound tests whenever the runtime or its dependencies
 change. See [Cordis plugins](CORDIS.md) for the complete permission model.
+
+## Guided package installation
+
+The dashboard package manager adds an explicit download path for sources the
+user enters as `npm:package@version`. This installation path is separate from
+plugin execution: it requests public metadata and an integrity-checked archive
+only from `https://registry.npmjs.org`, rejects redirects and external archive
+hosts, and sends no inherited credentials or proxy settings. It never runs npm,
+install scripts, or the downloaded plugin. Local folders, local archives, and
+the included catalog do not require a network request. Installation remains
+separate from enabling a plugin and granting it network access.
+
+The source validation, archive limits, preview cancellation, and project-bound
+installation tokens are covered by `tests/test_cordis_packages.py` and
+`tests/test_plugin_manager_api.py`. The offline execution restrictions and
+outbound regression probes remain in place.

@@ -8,12 +8,15 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shlex
 from pathlib import Path
+from typing import TextIO
 
 import click
 
 from libre_claw.config import LibreClawConfig, load_config
 from libre_claw.core.cordis import CordisManager
+from libre_claw.core.cordis_packages import CordisPackagePreviews, catalog
 
 
 def manager_for(config: LibreClawConfig) -> CordisManager:
@@ -25,6 +28,7 @@ def plugin_status(config: LibreClawConfig) -> dict:
         "enabled": config.cordis.enabled,
         "workspace": str(config.general.working_directory.resolve()),
         "plugins": manager_for(config).list_plugins(config.general.working_directory),
+        "catalog": catalog(),
         "privacy": {
             "telemetry": False,
             "history_shared": False,
@@ -42,20 +46,30 @@ def format_plugins(payload: dict) -> str:
         state = "enabled" if plugin.get("enabled") else "disabled"
         lines.append(f"- {plugin['id']} · {plugin.get('version', '')} · {state} · integrity: {plugin.get('integrity', 'unknown')}")
     if not payload["plugins"]:
-        lines.append("No plugins installed. Create one with `libre-claw cordis new ./my-plugin`.")
-    lines.append("Commands: /plugins, /plugins inspect <id>, /plugins enable <id>, /plugins disable <id>.")
+        lines.append("No plugins installed. Use /plugins catalog or open Plugins in the dashboard.")
+    lines.append("Commands: /plugins catalog|install|details|inspect|enable|disable. Configure plugins in the dashboard.")
     return "\n".join(lines)
 
 
 async def plugin_command(config: LibreClawConfig, argument: str) -> str:
-    parts = argument.split()
+    parts = shlex.split(argument)
     if not parts or parts == ["list"]:
         return format_plugins(plugin_status(config))
-    if len(parts) != 2 or parts[0] not in {"enable", "disable", "inspect"}:
-        return "Use /plugins [list|inspect <id>|enable <id>|disable <id>]. Install local packages with libre-claw cordis install."
+    if parts == ["catalog"]:
+        return "Included plugins\n" + "\n".join(
+            f"- {item['name']}: {item['description']}\n  /plugins install {item['source']}" for item in catalog())
+    if len(parts) != 2 or parts[0] not in {"enable", "disable", "inspect", "details", "install"}:
+        return "Use /plugins catalog, /plugins install <source>, or /plugins details|inspect|enable|disable <id>. Quote paths containing spaces."
     action, plugin_id = parts
     manager = manager_for(config)
     workspace = config.general.working_directory
+    if action == "install":
+        plugin = await install_package(config, plugin_id)
+        state = ("It remains enabled for this project with its existing permissions."
+                 if plugin["enabled"] else f"It is disabled. Use /plugins enable {plugin['id']} to enable it offline.")
+        return f"Installed {plugin['name']} {plugin['version']}. {state}"
+    if action == "details":
+        return json.dumps(await asyncio.to_thread(manager.details, plugin_id, workspace), indent=2)
     if action == "disable":
         manager.disable(plugin_id, workspace)
         return f"Disabled {plugin_id} for this project. Existing tool grants are revoked."
@@ -63,7 +77,7 @@ async def plugin_command(config: LibreClawConfig, argument: str) -> str:
         raise ValueError("Cordis is disabled. Set [cordis].enabled = true before enabling or inspecting plugins.")
     if action == "enable":
         manager.enable(plugin_id, workspace)
-        return f"Enabled {plugin_id} offline for this project. Start a new task to discover its tools."
+        return f"Enabled {plugin_id} offline for this project. Its tools are available on your next message."
     return json.dumps(await manager.inspect(plugin_id, workspace), indent=2)
 
 
@@ -92,12 +106,70 @@ def list_command(ctx: click.Context) -> None:
 
 
 @cordis_group.command("install")
-@click.argument("source", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("source")
 @click.pass_context
-def install_command(ctx: click.Context, source: Path) -> None:
-    """Copy a local plugin into the user store. Does not run or enable it."""
+def install_command(ctx: click.Context, source: str) -> None:
+    """Install a folder, archive, included plugin, or npm:package. New plugins stay off."""
     try:
-        _print(manager_for(_config(ctx)).install(source))
+        _print(asyncio.run(install_package(_config(ctx), _cli_package_source(source))))
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _cli_package_source(source: str) -> str:
+    if source.startswith(("builtin:", "npm:")) or "://" in source:
+        return source
+    return str(Path(source).expanduser().absolute())
+
+
+async def install_package(config: LibreClawConfig, source: str) -> dict:
+    previews = CordisPackagePreviews(manager_for(config))
+    try:
+        preview = await previews.preview(source, config.general.working_directory)
+        return previews.install(preview["token"], config.general.working_directory)
+    finally:
+        previews.close()
+
+
+@cordis_group.command("catalog")
+def catalog_command() -> None:
+    """Show included plugins without making network requests."""
+    _print(catalog())
+
+
+@cordis_group.command("preview")
+@click.argument("source")
+@click.pass_context
+def preview_command(ctx: click.Context, source: str) -> None:
+    """Check package metadata without installing or executing it."""
+    async def preview() -> dict:
+        config = _config(ctx)
+        previews = CordisPackagePreviews(manager_for(config))
+        try:
+            result = await previews.preview(_cli_package_source(source), config.general.working_directory)
+            return {key: value for key, value in result.items() if key not in {"token", "expires_at"}}
+        finally:
+            previews.close()
+    try:
+        _print(asyncio.run(preview()))
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@cordis_group.command("config")
+@click.argument("plugin_id")
+@click.option("--file", "config_file", type=click.File("r"), help="Save a JSON configuration file; use - for standard input.")
+@click.pass_context
+def config_command(ctx: click.Context, plugin_id: str, config_file: TextIO | None) -> None:
+    """Show redacted settings, or save project settings without changing grants."""
+    try:
+        config = _config(ctx)
+        manager = manager_for(config)
+        if config_file is None:
+            result = manager.details(plugin_id, config.general.working_directory)
+        else:
+            result = manager.configure(plugin_id, config.general.working_directory, json.load(config_file))
+        _print(result)
     except (ValueError, OSError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -116,7 +188,7 @@ def enable_command(ctx: click.Context, plugin_id: str, allow_network: bool, read
             raise ValueError("Cordis is disabled in configuration.")
         _print(manager_for(config).enable(plugin_id, config.general.working_directory,
             allow_network=allow_network, read_paths=read_paths, write_paths=write_paths))
-        click.echo("Start a new task to discover newly enabled tools. Tool calls still require normal approval.", err=True)
+        click.echo("Enabled tools are available on your next message. Tool calls still require normal approval.", err=True)
     except (ValueError, OSError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
 

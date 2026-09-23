@@ -92,6 +92,7 @@ from libre_claw.tools_builtin import create_builtin_registry
 from libre_claw.web import dashboard_html
 from libre_claw.core.worktrees import ManagedWorktree
 from libre_claw.web.workflow_api import WorkflowAPI, WorkspaceBusyError
+from libre_claw.web.plugins_api import PluginAPI
 from libre_claw.web.request_security import control_api_middleware
 
 
@@ -182,6 +183,7 @@ class DaemonServer:
         self._closing = False
         self._provider_cooldowns: dict[str, ProviderCooldown] = {}
         self.workflows = WorkflowAPI(self)
+        self.plugins = PluginAPI(self, _cordis_local_request)
         self._app: web.Application | None = None
         self._automation_task: asyncio.Task[None] | None = None
         self._telegram_task: asyncio.Task[None] | None = None
@@ -229,6 +231,7 @@ class DaemonServer:
             ]
         )
         app.add_routes(self.workflows.routes())
+        app.add_routes(self.plugins.routes())
         app.on_startup.append(self._on_startup)
         app.on_cleanup.append(self._on_cleanup)
         self._app = app
@@ -303,6 +306,7 @@ class DaemonServer:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._queue_wakeups.clear()
+        await self.plugins.close()
 
     def _should_start_telegram_bridge(self) -> bool:
         if not self.start_telegram_bridge:
