@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import select
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -245,3 +247,114 @@ try { server.listen(0, '127.0.0.1', () => {
     assert result["state"] == {"saved": True}
     assert secret.read_text() == "private-file-value"
     assert json.loads((state / "state.json").read_text()) == {"saved": True}
+
+
+@pytest.mark.parametrize("operation", ["fetch", "http", "tcp", "udp", "dns"])
+def test_offline_process_denies_outbound_network(tmp_path, operation):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    runtime, plugin, state = _paths(tmp_path)
+    socket_type = socket.SOCK_DGRAM if operation in {"udp", "dns"} else socket.SOCK_STREAM
+    with socket.socket(socket.AF_INET, socket_type) as sink:
+        sink.bind(("127.0.0.1", 0))
+        sink.settimeout(2)
+        if socket_type == socket.SOCK_STREAM:
+            sink.listen(1)
+        address = sink.getsockname()
+
+        source = r"""
+const operation = OPERATION;
+const port = PORT;
+function finish(error) {
+  const codes = [];
+  function collect(value) {
+    if (!value) return;
+    if (value.code) codes.push(value.code);
+    collect(value.cause);
+    for (const nested of value.errors ?? []) collect(nested);
+  }
+  collect(error);
+  process.stdout.write(JSON.stringify({ codes }));
+  process.exit(0);
+}
+// Some Node versions throw permission denials asynchronously instead of
+// delivering an error event. The assertion below still requires denial.
+process.once('uncaughtException', finish);
+setTimeout(() => finish({ code: 'TEST_TIMEOUT' }), 3000);
+try {
+  if (operation === 'fetch') {
+    fetch(`http://127.0.0.1:${port}/telemetry`).then(() => finish(), finish);
+  } else if (operation === 'http') {
+    require('node:http').get(`http://127.0.0.1:${port}/telemetry`, () => finish())
+      .once('error', finish);
+  } else if (operation === 'tcp') {
+    require('node:net').connect({ host: '127.0.0.1', port }, () => finish())
+      .once('error', finish);
+  } else if (operation === 'udp') {
+    const client = require('node:dgram').createSocket('udp4');
+    client.once('error', finish);
+    client.send('telemetry-probe', port, '127.0.0.1', finish);
+  } else if (operation === 'dns') {
+    const resolver = new (require('node:dns').Resolver)({ timeout: 500, tries: 1 });
+    resolver.setServers([`127.0.0.1:${port}`]);
+    resolver.resolve4('cordis-egress.test', finish);
+  }
+} catch (error) { finish(error); }
+"""
+        runtime.write_text(source.replace("OPERATION", json.dumps(operation))
+                           .replace("PORT", str(address[1])), encoding="utf-8")
+        try:
+            process = prepare_cordis_process(node, runtime, plugin, state)
+        except CordisSecurityError as exc:
+            if "requires" in str(exc) or "does not support" in str(exc):
+                pytest.skip(f"Local Node lacks required offline support: {exc}")
+            raise
+
+        # Run the identical probe unrestricted first, and answer its request.
+        # Every sink must be reachable; DNS also must return a valid answer.
+        # All traffic is loopback, including the explicitly configured resolver.
+        with subprocess.Popen((node, str(runtime)), env=process.env, cwd=process.cwd,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True) as control:
+            try:
+                if socket_type == socket.SOCK_STREAM:
+                    accepted, _ = sink.accept()
+                    with accepted:
+                        accepted.settimeout(2)
+                        if operation in {"fetch", "http"}:
+                            assert b"GET /telemetry " in accepted.recv(8192)
+                            accepted.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n"
+                                             b"Connection: close\r\n\r\n")
+                else:
+                    packet, sender = sink.recvfrom(4096)
+                    if operation == "dns":
+                        question = b"\x0dcordis-egress\x04test\x00\x00\x01\x00\x01"
+                        assert packet[12:].startswith(question)
+                        # A single A record for 127.0.0.1, with a compressed name.
+                        response = (packet[:2] + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00"
+                                    + question + b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x00"
+                                    b"\x00\x04\x7f\x00\x00\x01")
+                        sink.sendto(response, sender)
+                    else:
+                        assert packet == b"telemetry-probe"
+                stdout, stderr = control.communicate(timeout=5)
+                assert control.returncode == 0, stderr
+                assert json.loads(stdout) == {"codes": []}
+            finally:
+                if control.poll() is None:
+                    control.kill()
+                    control.communicate(timeout=5)
+
+        completed = subprocess.run(process.command, env=process.env, cwd=process.cwd,
+                                   capture_output=True, text=True, timeout=5, check=False)
+        assert completed.returncode == 0, completed.stderr
+        result = json.loads(completed.stdout)
+        assert not select.select([sink], [], [], 0.05)[0], f"{operation} reached the local sink"
+        denial_codes = {"ERR_ACCESS_DENIED", "EPERM", "EACCES"}
+        if operation == "dns" and process.isolation == "node-permissions-macos-network-denied":
+            # c-ares translates sandbox-exec's denial into ECONNREFUSED. The
+            # successful identical lookup and empty sink above distinguish it
+            # from a missing DNS server or an ordinary resolution failure.
+            denial_codes.add("ECONNREFUSED")
+        assert set(result["codes"]) & denial_codes, result

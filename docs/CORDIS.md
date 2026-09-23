@@ -52,6 +52,9 @@ project grants; review and enable the new version explicitly.
 
 ## Privacy boundaries
 
+The [network and privacy review](CORDIS_PRIVACY_REVIEW.md) records the bundled
+code inspection, reproducible build check, and outbound network regression tests.
+
 - Each invocation has a separate process and a private state directory scoped to
   the plugin and project. Other plugins and projects do not share its grants.
 - The child receives tool arguments, the plugin's own JSON settings, and runtime
