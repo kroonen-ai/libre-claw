@@ -27,15 +27,29 @@ same scan's unused import and mutation inside an assertion were corrected.
 
 ## Saved AI suggestions
 
-The eleven saved suggestions for CLI, daemon, Petdex, and tool tests were also
-reviewed. Nine led to clearer test names, typed helpers, named model-limit
-fixtures, explicit state-normalization coverage, SVG validation, or isolated
-page-fixture state.
+All eleven saved suggestions were rechecked individually against the current
+source on September 23. The nine applicable improvements are implemented. The
+two model-name suggestions were factually incorrect; their concern about test
+clarity is addressed with explicit local/cloud cases and persistence assertions.
 
-Two suggestions incorrectly claimed that `kimi-k2.6:cloud` was an invalid or
-inconsistent Ollama model name. [Ollama lists that exact cloud model](https://ollama.com/library/kimi-k2.6%3Acloud).
-The fallback-routing test intentionally retains it; substituting `:latest` or
-an unrelated Llama model would remove the cloud-routing example.
+| # | Saved suggestion | Resolution in current code |
+| --- | --- | --- |
+| 1 | Describe both default TUI input settings in the test name. | [CLI tests](../tests/test_cli.py) use `test_cli_tui_uses_default_mouse_and_inline_settings` and assert both mouse and inline settings. |
+| 2 | Replace eight untyped CLI helper suppressions with annotations. | All eight helpers in [CLI tests](../tests/test_cli.py) have parameter and return annotations; no `no-untyped-def` suppressions remain. |
+| 3 | Explain the large context/output limits in the runtime-model test. | [Daemon tests](../tests/test_daemon.py) use named model-limit fixture cases and derive assertions from the expected metadata. |
+| 4 | Share the different OpenRouter limit examples across tests. | A parameterized fixture in [daemon tests](../tests/test_daemon.py) covers all three context/output pairs across runtime updates, persisted automation updates, and daemon-client requests. |
+| 5 | Replace the allegedly invalid Ollama `:cloud` suffix with `:latest`. | Rejected the incorrect replacement. [Daemon tests](../tests/test_daemon.py) explicitly cover the documented cloud tag and verify that the exact tag survives persistence. |
+| 6 | Replace Kimi on Ollama with a Llama model because the providers supposedly conflict. | [Daemon tests](../tests/test_daemon.py) cover both local Llama and cloud Kimi routes, keeping the provider and model paired explicitly. Ollama supports both. |
+| 7 | Make Petdex's `working` to `running` normalization explicit. | [Petdex tests](../tests/test_petdex.py) parameterize `working-alias` and `running-canonical`, asserting the canonical payload for each. |
+| 8 | Validate the installed SVG instead of matching a comment. | [Petdex tests](../tests/test_petdex.py) compare the installed asset with the bundled SVG, parse it, and assert its SVG root and nonempty children. |
+| 9 | Rename the generic tool-context helper. | [Tool tests](../tests/test_tools.py) use `create_test_tool_context` at every call site. |
+| 10 | Spell out ripgrep in the fallback test name. | [Tool tests](../tests/test_tools.py) use `test_search_files_uses_python_fallback_when_ripgrep_is_unavailable`. |
+| 11 | Isolate the fake browser URL per instance. | [Tool tests](../tests/test_tools.py) initialize `FakePage.url` in `__init__`, with no class-level URL state. |
+
+[Ollama lists `kimi-k2.6:cloud` and shows it in its API examples](https://ollama.com/library/kimi-k2.6%3Acloud).
+Changing that fixture to an invented `:latest` tag would remove the intended
+cloud-routing coverage. The existing fixes landed in `8a55fa3`; the follow-up
+fixture consolidation and local/cloud cases strengthen those resolutions.
 
 ## Cordis engine scan — September 23, 2026
 

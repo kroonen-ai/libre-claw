@@ -30,6 +30,55 @@ from libre_claw.providers.openrouter_metadata import OpenRouterModelLimits
 from libre_claw.web.dashboard import dashboard_html
 
 
+@pytest.fixture(params=[
+    pytest.param(
+        OpenRouterModelLimits(
+            context_window_tokens=1_048_576,
+            max_completion_tokens=32_768,
+            source="models",
+        ),
+        id="1m-context-32k-output",
+    ),
+    pytest.param(
+        OpenRouterModelLimits(
+            context_window_tokens=262_144,
+            max_completion_tokens=16_384,
+            source="models",
+        ),
+        id="256k-context-16k-output",
+    ),
+    pytest.param(
+        OpenRouterModelLimits(
+            context_window_tokens=524_288,
+            max_completion_tokens=16_384,
+            source="models",
+        ),
+        id="512k-context-16k-output",
+    ),
+])
+def openrouter_limits(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+) -> OpenRouterModelLimits:
+    """Exercise distinct context/output limits without depending on a live catalog."""
+    expected: OpenRouterModelLimits = request.param
+
+    async def detected_limits(*_args: Any, **_kwargs: Any) -> OpenRouterModelLimits:
+        return expected
+
+    monkeypatch.setattr("libre_claw.daemon.detect_openrouter_model_limits", detected_limits)
+    return expected
+
+
+@pytest.fixture(params=[
+    pytest.param("llama3.1:8b", id="local-model"),
+    # This is an actual Ollama cloud tag, not a local :latest alias:
+    # https://ollama.com/library/kimi-k2.6:cloud
+    pytest.param("kimi-k2.6:cloud", id="cloud-model"),
+])
+def ollama_model(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
 class RequestStub:
     def __init__(
         self,
@@ -359,19 +408,11 @@ async def test_daemon_shutdown_endpoint_sets_shutdown_event(monkeypatch, tmp_pat
     assert server._shutdown_event.is_set()
 
 
-async def test_daemon_updates_runtime_model(monkeypatch, tmp_path: Path) -> None:
+async def test_daemon_updates_runtime_model(
+    monkeypatch, tmp_path: Path, openrouter_limits: OpenRouterModelLimits,
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    expected_limits = OpenRouterModelLimits(
-        context_window_tokens=1_048_576,
-        max_completion_tokens=32_768,
-        source="models",
-    )
-
-    async def fake_limits(*_args: Any, **_kwargs: Any) -> OpenRouterModelLimits:
-        return expected_limits
-
-    monkeypatch.setattr("libre_claw.daemon.detect_openrouter_model_limits", fake_limits)
     server = DaemonServer(
         load_config(),
         run_store=RunStore(tmp_path / "runs"),
@@ -390,10 +431,10 @@ async def test_daemon_updates_runtime_model(monkeypatch, tmp_path: Path) -> None
     assert response.status == 200
     assert after["provider"] == "openrouter"
     assert after["model"] == "deepseek/deepseek-v4-pro"
-    _assert_detected_model_limits(after, expected_limits)
+    _assert_detected_model_limits(after, openrouter_limits)
     assert server.config.general.default_provider == "openrouter"
     assert server.config.general.default_model == "deepseek/deepseek-v4-pro"
-    assert server.config.agent.context_window_tokens == expected_limits.context_window_tokens
+    assert server.config.agent.context_window_tokens == openrouter_limits.context_window_tokens
     assert server.config.providers["openrouter"]["default_model"] == "deepseek/deepseek-v4-pro"
 
 
@@ -426,19 +467,11 @@ async def test_daemon_openrouter_metadata_failure_is_nonfatal(monkeypatch, tmp_p
     assert updated.agent.context_window_tokens == config.agent.context_window_tokens
 
 
-async def test_daemon_global_model_update_updates_scheduled_automations(monkeypatch, tmp_path: Path) -> None:
+async def test_daemon_global_model_update_updates_scheduled_automations(
+    monkeypatch, tmp_path: Path, openrouter_limits: OpenRouterModelLimits,
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    expected_limits = OpenRouterModelLimits(
-        context_window_tokens=262_144,
-        max_completion_tokens=16_384,
-        source="models",
-    )
-
-    async def fake_limits(*_args: Any, **_kwargs: Any) -> OpenRouterModelLimits:
-        return expected_limits
-
-    monkeypatch.setattr("libre_claw.daemon.detect_openrouter_model_limits", fake_limits)
     server = DaemonServer(
         load_config(),
         run_store=RunStore(tmp_path / "runs"),
@@ -463,14 +496,16 @@ async def test_daemon_global_model_update_updates_scheduled_automations(monkeypa
     assert response.status == 200
     assert payload["provider"] == "openrouter"
     assert payload["model"] == "xiaomi/mimo-v2.5-pro"
-    _assert_detected_model_limits(payload, expected_limits)
+    _assert_detected_model_limits(payload, openrouter_limits)
     assert payload["automations_updated"] == 1
     assert updated is not None
     assert updated.provider == "openrouter"
     assert updated.model == "xiaomi/mimo-v2.5-pro"
 
 
-async def test_daemon_updates_runtime_fallback_and_persists_global_config(monkeypatch, tmp_path: Path) -> None:
+async def test_daemon_updates_runtime_fallback_and_persists_global_config(
+    monkeypatch, tmp_path: Path, ollama_model: str,
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     server = DaemonServer(
@@ -488,8 +523,7 @@ async def test_daemon_updates_runtime_fallback_and_persists_global_config(monkey
                 "persist_global": True,
                 "routes": [
                     {"provider": "openrouter", "model": "openrouter/auto", "api_key_env": "OPENROUTER_BACKUP_KEY"},
-                    # Ollama cloud model tags are valid fallback routes.
-                    {"provider": "ollama", "model": "kimi-k2.6:cloud"},
+                    {"provider": "ollama", "model": ollama_model},
                 ],
             }
         )
@@ -501,10 +535,13 @@ async def test_daemon_updates_runtime_fallback_and_persists_global_config(monkey
     assert payload["enabled"] is True
     assert payload["recheck_after_attempts"] == 2
     assert payload["routes"][0]["provider"] == "openrouter"
-    assert payload["routes"][1]["model"] == "kimi-k2.6:cloud"
+    assert payload["routes"][1]["model"] == ollama_model
     assert payload["persisted_path"] == str(config_path)
     assert server.config.fallback.routes[0].model == "openrouter/auto"
-    assert load_config().fallback.routes[1].provider == "ollama"
+    assert server.config.fallback.routes[1].model == ollama_model
+    persisted = load_config().fallback.routes[1]
+    assert persisted.provider == "ollama"
+    assert persisted.model == ollama_model
 
 
 async def test_daemon_serves_packaged_dashboard_lobster_icon(monkeypatch, tmp_path: Path) -> None:
@@ -705,19 +742,11 @@ async def test_daemon_automation_auto_approves_configured_tools(monkeypatch, tmp
     assert any(event["type"] == "tool_result" and event["data"]["content"] == "echo:ok" for event in events["events"])
 
 
-async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> None:
+async def test_daemon_client_builds_requests(
+    monkeypatch, tmp_path: Path, openrouter_limits: OpenRouterModelLimits,
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    expected_limits = OpenRouterModelLimits(
-        context_window_tokens=524_288,
-        max_completion_tokens=16_384,
-        source="models",
-    )
-
-    async def fake_limits(*_args: Any, **_kwargs: Any) -> OpenRouterModelLimits:
-        return expected_limits
-
-    monkeypatch.setattr("libre_claw.daemon.detect_openrouter_model_limits", fake_limits)
     provider = ScriptedProvider([[TextDelta("ok"), Done()]])
     server = DaemonServer(
         load_config(),
@@ -763,7 +792,7 @@ async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> Non
     assert model_before["model"] == "claude-opus-5"
     assert model_after["provider"] == "openrouter"
     assert model_after["model"] == "deepseek/deepseek-v4-pro"
-    _assert_detected_model_limits(model_after, expected_limits)
+    _assert_detected_model_limits(model_after, openrouter_limits)
     assert fallback_before["enabled"] is False
     assert fallback_after["enabled"] is True
     assert fallback_after["routes"][0]["model"] == "openrouter/auto"
@@ -817,7 +846,9 @@ async def test_daemon_injects_soul_files(monkeypatch, tmp_path: Path) -> None:
     assert "Be unmistakably Libre Claw." in provider.system_prompts[0]
 
 
-async def test_daemon_automation_api_crud(monkeypatch, tmp_path: Path) -> None:
+async def test_daemon_automation_api_crud(
+    monkeypatch, tmp_path: Path, ollama_model: str,
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     server = DaemonServer(
@@ -856,7 +887,7 @@ async def test_daemon_automation_api_crud(monkeypatch, tmp_path: Path) -> None:
                     "route": "telegram",
                     "status": "paused",
                     "provider": "ollama",
-                    "model": "kimi-k2.6:cloud",
+                    "model": ollama_model,
                     "telegram_chat_id": "12345",
                 },
             )
@@ -877,7 +908,7 @@ async def test_daemon_automation_api_crud(monkeypatch, tmp_path: Path) -> None:
     assert updated["automation"]["schedule"] == "every 45 minutes"
     assert updated["automation"]["route"] == "telegram"
     assert updated["automation"]["provider"] == "ollama"
-    assert updated["automation"]["model"] == "kimi-k2.6:cloud"
+    assert updated["automation"]["model"] == ollama_model
     assert updated["automation"]["telegram_chat_id"] == 12345
     assert resumed["automation"]["status"] == "active"
     assert deleted["deleted"] is True
