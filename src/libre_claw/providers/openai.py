@@ -175,6 +175,24 @@ class OpenAIProvider(LLMProvider):
                     finish_reason = _object_field(choice, "finish_reason")
                     if finish_reason:
                         stop_reason = str(finish_reason)
+                        if (
+                            stop_reason == "stop"
+                            and accumulators
+                            and self._accept_stop_with_complete_tools()
+                            and not finalized_tools
+                        ):
+                            normalized = self._finalize_tool_calls(accumulators)
+                            invalid = next(
+                                (event for event in normalized if isinstance(event, ProviderError)),
+                                None,
+                            )
+                            if invalid is not None:
+                                yield invalid
+                                return
+                            for event in normalized:
+                                yield event
+                            finalized_tools = True
+                            stop_reason = "tool_calls"
                         if error := self._response_error(stop_reason, bool(accumulators) or finalized_tools):
                             yield ProviderError(error)
                             return
@@ -291,6 +309,10 @@ class OpenAIProvider(LLMProvider):
 
     def _response_error(self, stop_reason: str | None, has_tool_calls: bool) -> str | None:
         return None
+
+    def _accept_stop_with_complete_tools(self) -> bool:
+        """Keep strict OpenAI semantics unless a gateway opts into this quirk."""
+        return False
 
     def _format_assistant_message(self, blocks: Sequence[ContentBlock]) -> dict[str, Any]:
         return _format_assistant_message(blocks)

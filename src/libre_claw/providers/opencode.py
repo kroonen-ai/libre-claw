@@ -267,6 +267,10 @@ class _OpenCodeChatProvider(OpenAIProvider):
     def _max_tokens_field(self) -> str:
         return "max_tokens"
 
+    def _accept_stop_with_complete_tools(self) -> bool:
+        """OpenCode gateways can label a complete tool payload as ``stop``."""
+        return True
+
     def _reasoning_delta(self, delta: Any) -> ReasoningDelta | None:
         text = _object_field(delta, "reasoning_content") or _object_field(delta, "reasoning")
         return ReasoningDelta(str(text), self.reasoning_scope) if isinstance(text, str) and text else None

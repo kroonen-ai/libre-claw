@@ -285,7 +285,7 @@ def call_delta(index=0, *, call_id="call-1", name="read_file", arguments='{"path
     return {"index": index, "id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
 
 
-@pytest.mark.parametrize("finish_reason", [None, "length", "stop", "content_filter"])
+@pytest.mark.parametrize("finish_reason", [None, "length", "content_filter"])
 async def test_chat_never_releases_tool_calls_without_a_valid_tool_completion(finish_reason):
     response = httpx.Response(200, headers={"Content-Type": "text/event-stream"},
                               text=streamed_chat_calls([call_delta()], finish_reason))
@@ -295,6 +295,40 @@ async def test_chat_never_releases_tool_calls_without_a_valid_tool_completion(fi
     assert not any(isinstance(event, (ToolCallReady, Done)) for event in events)
     assert isinstance(events[-1], ProviderError)
     assert "OpenCode Go" in events[-1].message
+
+
+async def test_opencode_accepts_complete_tool_payload_when_gateway_labels_stop():
+    """Some OpenCode Go responses use `stop` after a complete function payload."""
+    response = httpx.Response(
+        200,
+        headers={"Content-Type": "text/event-stream"},
+        text=streamed_chat_calls([call_delta()], "stop"),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response)) as client:
+        selected = OpenCodeProvider(
+            "test-secret", "future", 80, provider="opencode-go", api_format="chat", client=client,
+        )
+        events = [event async for event in selected.complete([])]
+    ready = [event for event in events if isinstance(event, ToolCallReady)]
+    assert len(ready) == 1
+    assert ready[0].input == {"path": "README.md"}
+    assert isinstance(events[-1], Done)
+    assert events[-1].stop_reason == "tool_calls"
+
+
+async def test_opencode_stop_with_invalid_tool_payload_still_fails_closed():
+    response = httpx.Response(
+        200,
+        headers={"Content-Type": "text/event-stream"},
+        text=streamed_chat_calls([call_delta(arguments='{"path":')], "stop"),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response)) as client:
+        selected = OpenCodeProvider(
+            "test-secret", "future", 80, provider="opencode-go", api_format="chat", client=client,
+        )
+        events = [event async for event in selected.complete([])]
+    assert isinstance(events[-1], ProviderError)
+    assert not any(isinstance(event, Done) for event in events)
 
 
 @pytest.mark.parametrize("invalid", [call_delta(1, call_id="call-2", arguments="{"),
