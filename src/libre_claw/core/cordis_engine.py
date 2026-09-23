@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from libre_claw.core.cordis_security import CordisSecurityError, prepare_cordis_process
+from libre_claw.core.cordis_process import terminate_cordis_process
 from libre_claw.core.runs import settle_finalization
 
 
@@ -459,24 +460,16 @@ class CordisEngine:
 
     async def _stop_process(self) -> None:
         process = self._process
-        if process is not None:
-            if process.stdin is not None:
-                process.stdin.close()
-            if process.returncode is None:
-                with contextlib.suppress(ProcessLookupError):
-                    process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=3)
-                except TimeoutError:
-                    with contextlib.suppress(ProcessLookupError):
-                        process.kill()
-                    await process.wait()
         tasks = [task for task in (self._reader_task, self._stderr_task) if task is not None]
         for task in tasks:
             if not task.done():
                 task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        if self._temporary is not None:
-            self._temporary.cleanup()
-            self._temporary = None
+        try:
+            if process is not None:
+                await terminate_cordis_process(process, grace=3)
+        finally:
+            if self._temporary is not None:
+                self._temporary.cleanup()
+                self._temporary = None

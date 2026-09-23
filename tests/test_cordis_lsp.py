@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from libre_claw.config import ConfigError, load_config
-from libre_claw.core.cordis_lsp import CordisLspPool, _LspChannel, normalize_lsp_servers
+from libre_claw.core.cordis_lsp import CordisLspPool, _LspChannel, _stop_process, normalize_lsp_servers
 from libre_claw.core.cordis import CordisManager
 from libre_claw.core.session import Session
 from libre_claw.core.tools import ToolContext
@@ -199,12 +199,13 @@ async def test_actual_stdio_lsp_navigation_preserves_utf16_ranges_and_workspace(
         await pool.aclose()
 
 
-@pytest.mark.parametrize("ending", ["cancel", "revoke", "close"])
+@pytest.mark.parametrize("ending", ["cancel", "revoke", "close", "startup"])
 async def test_lsp_cancellation_revocation_and_shutdown_join_owned_process(tmp_path, monkeypatch, ending, confined_lsp):
     pool, request, allowed, _ = lsp_setup(tmp_path)
     (pool.workspace / "example.test").write_text("WAIT")
     original_request, original_spawn = _LspChannel.request, asyncio.create_subprocess_exec
     entered = asyncio.Event()
+    release = asyncio.Event()
     processes = []
 
     async def tracked_request(channel, method, params):
@@ -215,6 +216,9 @@ async def test_lsp_cancellation_revocation_and_shutdown_join_owned_process(tmp_p
     async def tracked_spawn(*args, **kwargs):
         process = await original_spawn(*args, **kwargs)
         processes.append(process)
+        if ending == "startup":
+            entered.set()
+            await release.wait()
         return process
 
     monkeypatch.setattr(_LspChannel, "request", tracked_request)
@@ -222,8 +226,9 @@ async def test_lsp_cancellation_revocation_and_shutdown_join_owned_process(tmp_p
     task = asyncio.create_task(pool.dispatch("query", request))
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        if ending == "cancel":
+        if ending in {"cancel", "startup"}:
             task.cancel()
+            release.set()
         elif ending == "revoke":
             allowed[0] = False
         else:
@@ -231,10 +236,37 @@ async def test_lsp_cancellation_revocation_and_shutdown_join_owned_process(tmp_p
         with pytest.raises(PermissionError if ending == "revoke" else asyncio.CancelledError):
             await asyncio.wait_for(task, 5)
         assert len(processes) == 1 and processes[0].returncode is not None
+        process = processes[0]
+        assert process.stdout.at_eof() and process.stderr.at_eof()
+        assert process.stdin.is_closing() and process._transport.is_closing()
+        await process.stdin.wait_closed()
         assert not pool._tasks
     finally:
+        release.set()
         await pool.aclose()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_lsp_shutdown_drains_paused_pipes_before_returning():
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-I", "-S", "-c",
+        "import os,time; os.write(1,b'x'*(3*1024*1024)); time.sleep(30)",
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE, start_new_session=True, limit=1024,
+    )
+    try:
+        async with asyncio.timeout(3):
+            while not process.stdout._paused:
+                await asyncio.sleep(0.01)
+            await _stop_process(process)
+        assert process.returncode is not None
+        assert process.stdout.at_eof() and process.stderr.at_eof()
+        assert process.stdin.is_closing() and process._transport.is_closing()
+        await process.stdin.wait_closed()
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await process.communicate()
 
 
 async def test_lsp_rejects_ungranted_paths_foreign_routes_and_injected_commands_before_approval(tmp_path):

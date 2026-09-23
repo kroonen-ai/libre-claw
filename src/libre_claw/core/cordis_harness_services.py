@@ -361,11 +361,13 @@ class HarnessHostServices:
             if method == "start":
                 return {"id": record["id"], **self._process_value(record)}
             try:
-                await record["task"]
+                await asyncio.shield(record["task"])
                 return record["result"]
             finally:
                 self._kill(record)
-                await record["task"]
+                _, cancelled = await settle_finalization(record["task"])
+                if cancelled:
+                    raise asyncio.CancelledError
         return await self._effect("bash", {"command": command, "timeout": max(1, timeout // 1000)}, operation, read_only=False)
 
     async def _start_process(self, command: str, cwd: Path, spec: dict[str, Any], limit: int, timeout: int) -> dict[str, Any]:
@@ -393,9 +395,10 @@ class HarnessHostServices:
                             or key.startswith(("LD_", "DYLD_", "PYTHON", "NODE_"))):
                         raise PermissionError("The requested shell environment setting is not allowed.")
                     env[key] = _text(value, "environment value", 8192)
-            process = await asyncio.create_subprocess_exec(*argv, cwd=cwd, env=env,
+            spawning = asyncio.create_task(asyncio.create_subprocess_exec(*argv, cwd=cwd, env=env,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                start_new_session=True)
+                start_new_session=True))
+            process, cancelled = await settle_finalization(spawning)
         except BaseException:
             temporary.cleanup()
             raise
@@ -447,6 +450,12 @@ class HarnessHostServices:
                     writer.cancel()
                 await asyncio.gather(writer, return_exceptions=True)
                 await asyncio.gather(*readers)
+                if process.stdin is not None:
+                    try:
+                        await process.stdin.wait_closed()
+                    except (BrokenPipeError, ConnectionResetError):
+                        # An exited command may reject its remaining buffered input.
+                        pass
                 code = process.returncode
                 record["result"] = {"exitCode": code if code >= 0 else None,
                     "signal": signal.Signals(-code).name if code < 0 else None,
@@ -455,6 +464,10 @@ class HarnessHostServices:
                        for name in ("stdout", "stderr")}}
                 temporary.cleanup()
         record["task"] = asyncio.create_task(run())
+        if cancelled:
+            self._kill(record)
+            await settle_finalization(record["task"])
+            raise asyncio.CancelledError
         return record
 
     @staticmethod
@@ -547,17 +560,21 @@ class HarnessHostServices:
 
     async def aclose(self) -> None:
         self.closed = True
-        if self.ptc is not None:
-            await self.ptc.aclose()
-        if self.lsp is not None:
-            await self.lsp.aclose()
-        manager = getattr(self.context.shared_state.get("harness_agent"), "subagents", None)
-        if manager is not None:
-            for identifier in self.children:
-                await manager.cancel(identifier)
-        for record in self.processes.values():
-            self._kill(record)
-        await asyncio.gather(*(record["task"] for record in self.processes.values()), return_exceptions=True)
-        for monitor in self.monitors:
-            monitor.cancel()
-        await asyncio.gather(*self.monitors, return_exceptions=True)
+        async def close():
+            if self.ptc is not None:
+                await self.ptc.aclose()
+            if self.lsp is not None:
+                await self.lsp.aclose()
+            manager = getattr(self.context.shared_state.get("harness_agent"), "subagents", None)
+            if manager is not None:
+                for identifier in self.children:
+                    await manager.cancel(identifier)
+            for record in self.processes.values():
+                self._kill(record)
+            await asyncio.gather(*(record["task"] for record in self.processes.values()), return_exceptions=True)
+            for monitor in self.monitors:
+                monitor.cancel()
+            await asyncio.gather(*self.monitors, return_exceptions=True)
+        _, cancelled = await settle_finalization(asyncio.create_task(close()))
+        if cancelled:
+            raise asyncio.CancelledError

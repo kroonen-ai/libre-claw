@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from libre_claw.core.cordis_security import CordisProcess
+from libre_claw.core.cordis_process import terminate_cordis_process
+from libre_claw.core.runs import settle_finalization
 
 MAX_FRAME_BYTES = 1024 * 1024
 MAX_OPERATION_BYTES = 4 * MAX_FRAME_BYTES
@@ -102,6 +104,7 @@ class CordisWorker:
         self._request_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
+        self._stop_lock = asyncio.Lock()
         self._started = False
         self._closing = False
         self._closed = False
@@ -132,11 +135,13 @@ class CordisWorker:
             if self._started:
                 return self.startup
             try:
-                self._process = await asyncio.create_subprocess_exec(
+                self._process, cancelled = await settle_finalization(asyncio.create_task(asyncio.create_subprocess_exec(
                     *self.prepared.command, env=self.prepared.env, cwd=self.prepared.cwd,
                     stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL, limit=MAX_FRAME_BYTES + 1,
-                )
+                )))
+                if cancelled:
+                    raise asyncio.CancelledError
                 self._reader = asyncio.create_task(self._read_loop(), name="cordis-extension-reader")
                 self.startup = await self._request("initialize", self.initialize, None, 30)
                 self._started = True
@@ -359,22 +364,13 @@ class CordisWorker:
     async def _stop(self) -> None:
         self._closed = True
         await self._join_host_tasks(all_tasks=True)
-        process = self._process
-        if process is not None and process.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), 0.5)
-            except TimeoutError:
-                with contextlib.suppress(ProcessLookupError):
-                    process.kill()
-                await process.wait()
-        if self._reader is not None and self._reader is not asyncio.current_task():
-            if not self._reader.done():
-                self._reader.cancel()
-            await asyncio.gather(self._reader, return_exceptions=True)
-        if process is not None and process.stdin is not None:
-            process.stdin.close()
+        async with self._stop_lock:
+            if self._reader is not None and self._reader is not asyncio.current_task():
+                if not self._reader.done():
+                    self._reader.cancel()
+                await asyncio.gather(self._reader, return_exceptions=True)
+            if self._process is not None:
+                await terminate_cordis_process(self._process, grace=0.5)
 
     async def aclose(self) -> None:
         async with self._close_lock:

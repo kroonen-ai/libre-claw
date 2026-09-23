@@ -201,9 +201,12 @@ class CordisLspPool:
         try:
             command, env = prepare_host_process(argv, self.workspace, Path(temporary.name),
                 read_paths=reads, write_paths=(), allow_network=False, runtime_paths=[*runtime, executable])
-            process = await asyncio.create_subprocess_exec(*command, cwd=self.workspace, env=env,
+            spawning = asyncio.create_task(asyncio.create_subprocess_exec(*command, cwd=self.workspace, env=env,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                start_new_session=True, limit=MAX_FRAME + 8192)
+                start_new_session=True, limit=MAX_FRAME + 8192))
+            process, cancelled = await settle_finalization(spawning)
+            if cancelled:
+                raise asyncio.CancelledError
 
             async def discard_stderr():
                 while await process.stderr.read(8192):
@@ -243,11 +246,11 @@ class CordisLspPool:
         finally:
             async def close():
                 try:
-                    if process is not None:
-                        await _stop_process(process)
                     if stderr is not None:
                         stderr.cancel()
                         await asyncio.gather(stderr, return_exceptions=True)
+                    if process is not None:
+                        await _stop_process(process)
                 finally:
                     temporary.cleanup()
             try:
@@ -306,6 +309,17 @@ class CordisLspPool:
 
 
 async def _stop_process(process: asyncio.subprocess.Process) -> None:
+    if process.stdin is not None:
+        process.stdin.close()
+
+    async def discard(stream):
+        if stream is not None:
+            while await stream.read(64 * 1024):
+                pass
+
+    # A paused reader keeps its pipe transport alive after the leader exits.
+    # Resume both pipes while stopping the group and join their EOF callbacks.
+    readers = [asyncio.create_task(discard(stream)) for stream in (process.stdout, process.stderr)]
     # Kill the owned process group even if its leader already exited, so a
     # language server cannot leave background indexers alive after the query.
     try:
@@ -329,8 +343,14 @@ async def _stop_process(process: asyncio.subprocess.Process) -> None:
     except ProcessLookupError:
         # Neither the leader nor a background indexer remains in this group.
         pass
+    await asyncio.gather(*readers)
+    await process.wait()
     if process.stdin is not None:
-        process.stdin.close()
+        try:
+            await process.stdin.wait_closed()
+        except (BrokenPipeError, ConnectionResetError):
+            # Termination can close the server's stdin before buffered input drains.
+            pass
 
 
 class _LspChannel:

@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
+import signal
 import sys
 
 import pytest
@@ -93,6 +95,46 @@ async def test_background_shell_is_owned_and_stops_on_disposal(host, workspace):
     assert record["process"].returncode is not None and record["task"].done()
     with pytest.raises(PermissionError, match="ended"):
         await service.dispatch("shell.read", {"id": result["id"]})
+
+
+async def test_shell_cancelled_start_joins_process_and_all_pipes(host, workspace, monkeypatch):
+    shell_supported()
+    service, _, _ = host
+    original = asyncio.create_subprocess_exec
+    created, release = asyncio.Event(), asyncio.Event()
+    processes = []
+
+    async def delayed_spawn(*args, **kwargs):
+        process = await original(*args, **kwargs)
+        processes.append(process)
+        created.set()
+        await release.wait()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
+    pending = asyncio.create_task(service.dispatch("shell.run", {"spec": {
+        "command": "/bin/sleep 30", "workdir": str(workspace), "timeoutMs": 30000,
+    }}))
+    try:
+        await asyncio.wait_for(created.wait(), 3)
+        pending.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(pending, 3)
+        assert len(processes) == 1 and processes[0].returncode is not None
+        process = processes[0]
+        assert process.stdout.at_eof() and process.stderr.at_eof()
+        assert process.stdin.is_closing() and process._transport.is_closing()
+        await process.stdin.wait_closed()
+    finally:
+        release.set()
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        for process in processes:
+            if process.returncode is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            await process.communicate()
 
 
 @pytest.mark.parametrize("ending", ["timeout", "revoke"])

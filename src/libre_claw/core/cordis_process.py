@@ -5,12 +5,54 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
 import shutil
 import sys
 from pathlib import Path
 from collections.abc import Sequence
+
+from libre_claw.core.runs import settle_finalization
+
+
+async def terminate_cordis_process(process: asyncio.subprocess.Process, *, grace: float = 0) -> None:
+    """Join an owned child and every pipe after its protocol readers stop."""
+    async def discard(stream: asyncio.StreamReader | None) -> None:
+        if stream is not None:
+            while await stream.read(64 * 1024):
+                pass
+
+    async def finish() -> None:
+        if process.stdin is not None:
+            process.stdin.close()
+        readers = [asyncio.create_task(discard(stream)) for stream in (process.stdout, process.stderr)]
+        try:
+            if process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    if grace:
+                        process.terminate()
+                    else:
+                        process.kill()
+            if grace:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(process.wait(), grace)
+        finally:
+            if process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+            await process.wait()
+            # An existing returncode does not guarantee pipe closure. Draining
+            # also resumes readers paused by output backpressure before EOF.
+            await asyncio.gather(*readers)
+            if process.stdin is not None:
+                with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                    await process.stdin.wait_closed()
+
+    _, cancelled = await settle_finalization(asyncio.create_task(finish()))
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 def prepare_host_process(

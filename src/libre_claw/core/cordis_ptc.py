@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import copy
 import json
 import re
@@ -19,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from libre_claw.core.cordis_config import bounded_json
+from libre_claw.core.cordis_process import terminate_cordis_process
 from libre_claw.core.cordis_security import prepare_cordis_process
 from libre_claw.core.runs import settle_finalization
 
@@ -170,9 +170,7 @@ class CordisPtcPool:
             self._check()
         except BaseException:
             if process is not None:
-                with contextlib.suppress(ProcessLookupError):
-                    process.kill()
-                await settle_finalization(asyncio.create_task(process.wait()))
+                await settle_finalization(asyncio.create_task(terminate_cordis_process(process)))
             temporary.cleanup()
             raise
         identity = uuid.uuid4().hex
@@ -267,15 +265,11 @@ class CordisPtcPool:
         await asyncio.shield(job["cleanup"])
 
     async def _cleanup(self, job: dict[str, Any], initiator: asyncio.Task | None) -> None:
-        process = job["process"]
-        if process.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                process.kill()
-        await process.wait()
         tasks = [job[name] for name in ("reader", "stderr", "watcher") if job.get(name) is not None and job[name] is not initiator]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await terminate_cordis_process(job["process"])
         job["temporary"].cleanup()
         while not job["events"].empty():
             job["events"].get_nowait()

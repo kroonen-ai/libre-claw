@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import gc
 import json
 import threading
+import weakref
 from pathlib import Path
 
 import pytest
@@ -204,3 +206,67 @@ async def test_cancelled_start_joins_preparation_and_removes_private_files(tmp_p
     finally:
         release.set()
         await pool.aclose()
+
+
+@pytest.mark.parametrize("outcome", ["complete", "timeout", "cancel", "paused-output", "cancelled-start"])
+def test_ptc_closes_all_child_streams_before_event_loop_disposal(tmp_path, monkeypatch, outcome):
+    processes = []
+
+    async def exercise():
+        pool = CordisPtcPool(tmp_path, lambda: {"read_paths": [], "write_paths": []})
+        try:
+            if outcome == "cancelled-start":
+                spawn = asyncio.create_subprocess_exec
+                entered, release = asyncio.Event(), asyncio.Event()
+
+                async def delayed_spawn(*args, **kwargs):
+                    process = await spawn(*args, **kwargs)
+                    processes.append(process)
+                    entered.set()
+                    await release.wait()
+                    return process
+
+                monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
+                task = asyncio.create_task(pool.start({"program": "return 1", "bindings": []}))
+                await asyncio.wait_for(entered.wait(), 5)
+                task.cancel()
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 5)
+                assert not pool.jobs
+                return
+
+            program = "return 1" if outcome == "complete" else "while (true) {}"
+            if outcome == "paused-output":
+                program = "process.stdout.write('x'.repeat(2 * 1024 * 1024)); await new Promise(() => {});"
+            run = await pool.start({"program": program, "bindings": [], "timeoutMs": 400 if outcome == "timeout" else 10000})
+            job = pool.jobs[run["id"]]
+            processes.append(job["process"])
+            if outcome == "paused-output":
+                # Exercise real pipe backpressure after the protocol consumer
+                # stops: joining the exit code alone cannot release this pipe.
+                job["reader"].cancel()
+                await asyncio.gather(job["reader"], return_exceptions=True)
+                async with asyncio.timeout(5):
+                    while not job["process"].stdout._paused:
+                        await asyncio.sleep(0.01)
+            elif outcome == "cancel":
+                await pool.dispatch("cancel", run)
+            else:
+                assert (await finished(pool, run["id"]))["type"] == "done"
+        finally:
+            await asyncio.wait_for(pool.aclose(), 5)
+
+    asyncio.run(exercise())
+    for process in processes:
+        assert process.returncode is not None
+        assert process.stdin.is_closing()
+        assert process.stdout.at_eof()
+        assert process.stderr.at_eof()
+    references = [weakref.ref(process) for process in processes]
+    del process
+    processes.clear()
+    # Run deallocators after their event loop has closed, as later CI tests do.
+    # -W error and pytest's unraisable hook make any retained pipes fail here.
+    gc.collect()
+    assert all(reference() is None for reference in references)

@@ -372,3 +372,32 @@ async def test_idle_process_exit_closes_transport_automatically(tmp_path, node_e
     assert worker._reader.done()
     assert not worker._host_tasks
     await worker.aclose()
+
+
+async def test_cancelled_worker_start_joins_created_process_and_pipes(tmp_path, node_executable, monkeypatch):
+    worker, _ = worker_fixture(tmp_path, node_executable, COUNTER)
+    original = asyncio.create_subprocess_exec
+    entered, release = asyncio.Event(), asyncio.Event()
+    processes = []
+
+    async def delayed(*args, **kwargs):
+        process = await original(*args, **kwargs)
+        processes.append(process)
+        entered.set()
+        await release.wait()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed)
+    starting = asyncio.create_task(worker.start())
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        starting.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(starting, 5)
+        assert processes and processes[0].returncode is not None
+        assert processes[0].stdin.is_closing()
+        assert processes[0].stdout.at_eof()
+    finally:
+        release.set()
+        await worker.aclose()

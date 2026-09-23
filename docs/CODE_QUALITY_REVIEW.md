@@ -29,6 +29,26 @@ rebuilding. The rules remain enabled:
 Generated dependencies remain reproducible from pinned inputs with their
 licenses. They were not hand-edited to conceal analyzer findings.
 
+The `caa835d` scan also reviewed the newly bundled TypeScript 5.9.3 compiler.
+Its 237 notes were classified against the restricted `transpilePtc` export:
+
+| Findings | Disposition |
+| --- | --- |
+| 859–885 | Tracing and Node-system-host paths are disabled: the bundle's Node-host predicate is false, and transpilation supplies an in-memory source host. |
+| 928–1099 | 165 generated enum-initialization guards and seven redundant upstream conditions. The enum table writes remain necessary. |
+| 900–920 | Generated enum/namespace assignments and redundant local initializations. Emitter calls and map writes still have effects. Finding 915 identifies real redundant upstream node construction and is accepted maintenance debt. |
+| 1100 | The unexposed server text-storage helper intentionally passes an undefined final-line endpoint to `substring`, which means end-of-text. |
+| 852, 855–856, 858, 886–893, 1104–1107 | Redundant guards, an unused alias, generated CommonJS helper syntax, and extra arguments in retained compiler subsystems. |
+
+A bounded compiler check exercised 16 representative inputs: 13 compiled and
+three correctly raised syntax errors. Coverage confirmed that the flagged
+Node-host, tracing, server-storage, completion, and import-adder paths were not
+entered. No reachable defect in the exported PTC transformer was identified.
+These findings were classified as preserved generated/upstream code or
+unavailable subsystems, not indiscriminately called false positives. The eight
+rediscovered Python awaits and 19 rebuilt React notes received the same
+individual review as their earlier counterparts.
+
 ## Earlier review
 
 The standard findings were reviewed against the implementation and tests.
