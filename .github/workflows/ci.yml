@@ -54,7 +54,7 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Run pytest
-        run: python -m pytest
+        run: python -m pytest -W error
 
       - name: Verify bundled Cordis runtime
         run: node --test src/libre_claw/cordis_runtime/tests/*.test.mjs src/libre_claw/cordis_runtime/compat/tests/*.test.mjs

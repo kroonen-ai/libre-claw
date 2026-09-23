@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import os
 import shutil
+import sys
 from typing import Any
 
 import click
@@ -21,7 +22,7 @@ from libre_claw import __version__
 def terminal_color(explicit: bool | None = None) -> bool:
     if "NO_COLOR" in os.environ or os.environ.get("TERM", "").lower() == "dumb":
         return False
-    return explicit if explicit is not None else click.get_text_stream("stdout").isatty()
+    return explicit if explicit is not None else sys.stdout is not None and sys.stdout.isatty()
 
 
 def _styled(value: str, ctx: click.Context, *, accent: bool = False) -> str:

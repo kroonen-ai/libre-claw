@@ -3,14 +3,16 @@
 
 from __future__ import annotations
 
+import io
 import json
+import sys
 
 import click.testing
 import pytest
 from click.testing import CliRunner
 
 from libre_claw.cli import main
-from libre_claw.cli_ui import status_text
+from libre_claw.cli_ui import status_text, terminal_color
 
 
 def test_help_groups_every_command_and_wraps_on_narrow_terminals(monkeypatch):
@@ -43,6 +45,29 @@ def test_help_can_use_terminal_styling_without_loading_config(monkeypatch):
     result = CliRunner().invoke(main, ["--help"], color=True)
     assert result.exit_code == 0
     assert "\x1b[" in result.stdout
+
+
+@pytest.mark.parametrize("is_terminal", [False, True])
+def test_terminal_color_checks_current_stream_without_replacing_its_encoding(monkeypatch, is_terminal):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    with io.TextIOWrapper(io.BytesIO(), encoding="latin-1") as stream:
+        monkeypatch.setattr(stream, "isatty", lambda: is_terminal)
+        with monkeypatch.context() as output:
+            output.setattr(sys, "stdout", stream)
+            assert terminal_color() is is_terminal
+            assert sys.stdout is stream
+            assert stream.encoding == "latin-1"
+            click.echo("caf\u00e9")
+        assert stream.buffer.getvalue() == b"caf\xe9\n"
+
+
+def test_terminal_color_handles_a_detached_stdout(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(sys, "stdout", None)
+    assert terminal_color() is False
+    assert terminal_color(True) is True
 
 
 def test_run_without_message_rejects_interactive_stdin_instead_of_waiting(monkeypatch):

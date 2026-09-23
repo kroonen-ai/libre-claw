@@ -39,9 +39,10 @@ an unrelated Llama model would remove the cloud-routing example.
 
 ## Cordis engine scan — September 23, 2026
 
-The findings below were reviewed against commit `75360d4`. They are reviewed,
-**not dismissed** in GitHub. No rules were disabled, and no runtime or test code
-was changed to hide these findings.
+The findings below were reviewed against commit `75360d4` and rechecked against
+`5af870a`. All 31 reviewed occurrences were dismissed in GitHub on September 23;
+the API then reported zero open standard findings. No rules were disabled, and
+no runtime or test code was changed to hide these findings.
 
 All twenty `py/ineffectual-statement` reports identify effectful `await`
 expressions. Each wait either completes an operation, observes its exception,
@@ -87,3 +88,19 @@ bindings or changing upstream APIs for these reports.
 The vendor review exercised both Schema call styles, validation failures,
 reference rehydration, translation filtering, and regular-expression projection.
 These dispositions apply only to these reviewed occurrences.
+
+## Runtime warning cleanup
+
+The latest CI logs contained 49 Click deprecation warnings in the CLI tests.
+Terminal detection now uses the current standard output stream instead of
+Click's deprecated `get_text_stream` helper. Output still uses Click and Rich;
+TTY detection, redirected output, encoding, and missing stdout have regression
+coverage. The targeted tests pass with deprecations treated as errors on both
+Click 8.4 and 8.5. CI now treats all Python warnings as errors so new warnings
+cannot pass unnoticed.
+
+The AI findings page still displays the eleven June suggestions reviewed above.
+Their applicable changes were committed in `8a55fa3`. GitHub currently offers
+no dismissal action there and reports that organization AI usage is blocked
+until September 30, so it cannot refresh those saved suggestions. No billing
+settings or scan rules were changed.
