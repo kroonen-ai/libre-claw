@@ -19,6 +19,7 @@ from libre_claw.tools_builtin import http as _http  # noqa: F401
 from libre_claw.tools_builtin import image as _image  # noqa: F401
 from libre_claw.tools_builtin import mcp as _mcp
 from libre_claw.tools_builtin import process as _process  # noqa: F401
+from libre_claw.tools_builtin import questions as _questions  # noqa: F401
 from libre_claw.tools_builtin import schedule as _schedule  # noqa: F401
 from libre_claw.tools_builtin import search as _search  # noqa: F401
 from libre_claw.tools_builtin import shell as _shell  # noqa: F401
@@ -88,7 +89,7 @@ def create_builtin_registry(config: LibreClawConfig, memory_store: MemoryStore |
     )
     if config.cordis.enabled:
         tools.extend(
-            tool for tool in CordisManager(tool_timeout=config.cordis.tool_timeout).create_tools(context)
+            tool for tool in CordisManager(tool_timeout=config.cordis.tool_timeout, config=config).create_tools(context)
             if _tool_is_enabled(tool.name, allowlist, denylist, unavailable)
         )
     return ToolRegistry(tools)
@@ -102,9 +103,20 @@ def refresh_cordis_tools(config: LibreClawConfig, registry: ToolRegistry) -> Too
     tools = [tool for tool in registry.tools() if not isinstance(tool, CordisTool)]
     if config.cordis.enabled:
         allowlist, denylist = set(config.agent.tool_allowlist), set(config.agent.tool_denylist)
-        tools.extend(tool for tool in CordisManager(tool_timeout=config.cordis.tool_timeout).create_tools(context)
+        manager = context.shared_state.get("cordis_manager") or CordisManager(tool_timeout=config.cordis.tool_timeout, config=config)
+        tools.extend(tool for tool in manager.create_tools(context)
                      if _tool_is_enabled(tool.name, allowlist, denylist, set()))
     return ToolRegistry(tools)
+
+
+def bind_cordis_manager(registry: ToolRegistry, manager: CordisManager) -> ToolRegistry:
+    """Bind application-owned extension lifetimes without replacing other tools."""
+    if registry.context is not None:
+        registry.context.shared_state["cordis_manager"] = manager
+    for tool in registry.tools():
+        if isinstance(tool, CordisTool):
+            tool.manager = manager
+    return registry
 
 
 def _unavailable_tools(config: LibreClawConfig) -> set[str]:

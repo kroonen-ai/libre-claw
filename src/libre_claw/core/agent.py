@@ -9,6 +9,7 @@ import hashlib
 import inspect
 import json
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
@@ -19,7 +20,9 @@ from typing import Any
 import structlog
 
 from libre_claw.core.instructions import InstructionLoader, ProjectInstruction, render_instructions, tool_paths
+from libre_claw.core.cordis_engine import CordisEngine, CordisEngineError
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
+from libre_claw.core.questions import AgentUserQuestionRequest, validate_questions
 from libre_claw.core.session import (
     ContentBlock,
     Session,
@@ -101,6 +104,7 @@ AgentEvent = (
     | AgentError
     | AgentFallback
     | AgentSubagentUpdate
+    | AgentUserQuestionRequest
 )
 SkillProvider = Callable[[str], Sequence[str] | Awaitable[Sequence[str]]]
 SoulProvider = Callable[[], Sequence[str] | Awaitable[Sequence[str]]]
@@ -138,8 +142,10 @@ class Agent:
         deadline_reserve_seconds: float = 0.0,
         checkpoint_callback: Callable[[Session], Awaitable[None]] | None = None,
         usage_callback: Callable[[Usage], Awaitable[None]] | None = None,
+        engine: CordisEngine | None = None,
     ) -> None:
         self.session = session
+        self.engine = engine
         self.provider = provider
         self.tool_registry = tool_registry
         self.permission_manager = permission_manager
@@ -173,6 +179,7 @@ class Agent:
             )
         self.checkpoint_callback = checkpoint_callback
         self.usage_callback = usage_callback
+        self.control_events: asyncio.Queue[AgentEvent] = asyncio.Queue()
         self._checkpoint_lock = asyncio.Lock()
         context = self.tool_registry.context
         self._instruction_loader = InstructionLoader(context.working_directory) if context else None
@@ -183,6 +190,7 @@ class Agent:
         self.subagents = None
         if context is not None:
             context.shared_state["agent_session"] = session
+            context.shared_state["user_question_handler"] = self.request_user_questions
             if "subagent_spawn" in tool_registry:
                 from libre_claw.core.subagents import SubagentManager
                 self.subagents = SubagentManager(self)
@@ -201,12 +209,30 @@ class Agent:
         user_message: str,
         attachments: Sequence[UserAttachment] = (),
     ) -> AsyncIterator[AgentEvent]:
+        if self.engine is None:
+            async with aclosing(self._run_local(user_message, attachments)) as stream:
+                async for event in stream:
+                    yield event
+            return
+        try:
+            async with aclosing(self.engine.stream("agent", "run",
+                    handler=lambda: self._run_local(user_message, attachments))) as stream:
+                async for event in stream:
+                    yield event
+        except CordisEngineError as exc:
+            yield AgentError(message=str(exc))
+
+    async def _run_local(
+        self, user_message: str, attachments: Sequence[UserAttachment],
+    ) -> AsyncIterator[AgentEvent]:
         self.accepting_control = True
         if self.subagents is not None:
             self.subagents.begin_turn()
         context = self.tool_registry.context
         if context is not None:
             context.shared_state["agent_session"] = self.session
+            context.shared_state["checkpoint_callback"] = self.checkpoint_callback
+            context.shared_state["user_question_handler"] = self.request_user_questions
             if self.subagents is not None:
                 context.shared_state["subagent_manager"] = self.subagents
         interrupted = False
@@ -228,13 +254,26 @@ class Agent:
         if self.subagents is not None:
             while not self.subagents.events.empty():
                 event = self.subagents.events.get_nowait()
-                if not isinstance(event, AgentPermissionRequest) or not event.future.done():
+                if not isinstance(event, (AgentPermissionRequest, AgentUserQuestionRequest)) or not event.future.done():
                     yield event
 
     async def _checkpoint(self) -> None:
         if self.checkpoint_callback is not None:
             async with self._checkpoint_lock:
-                await self.checkpoint_callback(self.session)
+                if self.engine is None:
+                    await self.checkpoint_callback(self.session)
+                else:
+                    await self.engine.call("sessions", "checkpoint", handler=lambda: self.checkpoint_callback(self.session))
+
+    async def request_user_questions(self, questions: Any) -> dict[str, Any]:
+        request = AgentUserQuestionRequest(uuid.uuid4().hex, validate_questions(questions),
+            asyncio.get_running_loop().create_future())
+        await self.control_events.put(request)
+        try:
+            return await request.future
+        finally:
+            if not request.future.done():
+                request.future.cancel()
 
     async def _run_turn(
         self, user_message: str, attachments: Sequence[UserAttachment],
@@ -467,23 +506,19 @@ class Agent:
             queued: asyncio.Task[AgentEvent] | None = None
             try:
                 while not execution.done():
-                    if self.subagents is None:
-                        await execution
-                        break
-                    queued = asyncio.create_task(self.subagents.events.get())
+                    queued = asyncio.create_task(self.control_events.get())
                     done, _ = await asyncio.wait((execution, queued), return_when=asyncio.FIRST_COMPLETED)
                     if queued in done:
                         event = queued.result()
-                        if not isinstance(event, AgentPermissionRequest) or not event.future.done():
+                        if not isinstance(event, (AgentPermissionRequest, AgentUserQuestionRequest)) or not event.future.done():
                             yield event
                     else:
                         queued.cancel()
                         await asyncio.gather(queued, return_exceptions=True)
-                if self.subagents is not None:
-                    while not self.subagents.events.empty():
-                        event = self.subagents.events.get_nowait()
-                        if not isinstance(event, AgentPermissionRequest) or not event.future.done():
-                            yield event
+                while not self.control_events.empty():
+                    event = self.control_events.get_nowait()
+                    if not isinstance(event, (AgentPermissionRequest, AgentUserQuestionRequest)) or not event.future.done():
+                        yield event
                 executed = execution.result()
             finally:
                 if queued is not None and not queued.done():
@@ -510,6 +545,18 @@ class Agent:
 
             for call, result in ordered_results:
                 yield AgentToolResult(call=call, result=result)
+            for call, result in ordered_results:
+                if result.is_error or not call.name.startswith("cordis__"):
+                    continue
+                for deferred in result.metadata.get("additional_contexts", []):
+                    text = deferred if isinstance(deferred, str) else json.dumps(deferred, ensure_ascii=False)
+                    self.session.add_user_message(f"Additional context from plugin tool {call.name}:\n{text}")
+            if any(not result.is_error and call.name.startswith("cordis__") and result.metadata.get("concludes_turn") is True
+                   for call, result in ordered_results):
+                self.accepting_control = False
+                await self._checkpoint()
+                yield AgentDone(turn_usage)
+                return
 
     def _save_assistant_text(
         self,
@@ -669,6 +716,11 @@ class Agent:
         paths = [path for call in calls for path in tool_paths(call.arguments, context.working_directory)] if context else []
         instructions_changed = await self._refresh_instructions(paths)
 
+        async def dispatch(call: ToolCall) -> ToolResult:
+            if self.engine is None:
+                return await self.tool_registry.execute(call)
+            return await self.engine.call("tools", "execute", handler=lambda: self.tool_registry.execute(call))
+
         async def execute_one(call: ToolCall) -> ToolResult:
             if self.session.pending_steering:
                 return ToolResult(error="New user guidance is pending. Reconsider this action after reading the next user message.")
@@ -686,13 +738,13 @@ class Agent:
             if call.name in {"write_file", "edit_file", "apply_patch"}:
                 # File writes run in worker threads; cancellation cannot stop those threads.
                 # Finish the in-flight operation before releasing worker ownership.
-                operation = asyncio.create_task(self.tool_registry.execute(call))
+                operation = asyncio.create_task(dispatch(call))
                 try:
                     return await asyncio.shield(operation)
                 except asyncio.CancelledError:
                     await operation
                     raise
-            return await self.tool_registry.execute(call)
+            return await dispatch(call)
 
         async def execute_group(group: list[ToolCall]) -> list[ToolResult]:
             remaining = self._remaining_seconds()
@@ -756,6 +808,17 @@ class Agent:
         self,
         provider: LLMProvider,
     ) -> AsyncIterator[StreamEvent]:
+        if self.engine is None:
+            async with aclosing(self._stream_provider_local(provider)) as stream:
+                async for event in stream:
+                    yield event
+            return
+        async with aclosing(self.engine.stream("providers", "complete",
+                handler=lambda: self._stream_provider_local(provider))) as stream:
+            async for event in stream:
+                yield event
+
+    async def _stream_provider_local(self, provider: LLMProvider) -> AsyncIterator[StreamEvent]:
         if getattr(self.session, "mode", "default") == "plan":
             from libre_claw.providers.codex import CodexProvider
             if isinstance(provider, CodexProvider):
@@ -829,6 +892,13 @@ class Agent:
     async def _load_memory(self, user_message: str) -> list[str]:
         if self.memory_provider is None:
             return []
+        if self.engine is not None:
+            if not self.engine.is_enabled("memory"):
+                return []
+            return await self.engine.call("memory", "load", handler=lambda: self._load_memory_local(user_message))
+        return await self._load_memory_local(user_message)
+
+    async def _load_memory_local(self, user_message: str) -> list[str]:
         try:
             result = self.memory_provider(user_message)
             if inspect.isawaitable(result):

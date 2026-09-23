@@ -114,6 +114,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
       <div class="runs" id="runs" aria-label="Recent tasks"></div>
 
       <div class="side-foot">
+        <button class="side-foot-row" id="openEngine" type="button" title="Engine" aria-label="Engine">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/><path d="M10 10h4v4h-4z"/></svg>
+          <span class="grow">Engine</span>
+        </button>
         <button class="side-foot-row" id="openPlugins" type="button" title="Plugins" aria-label="Plugins">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H4v6h2a3 3 0 1 1 0 6H4v6h6v-2a3 3 0 1 1 6 0v2h5v-6h-2a3 3 0 1 1 0-6h2V3h-6v2a3 3 0 1 1-6 0z"/></svg>
           <span class="grow">Plugins</span>
@@ -190,6 +194,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
       <div class="composer-zone">
         <div id="permissions"></div>
+        <div id="questions" aria-label="Questions awaiting your answer"></div>
         <div id="notice" class="notice" role="status"></div>
         <form id="runForm" class="composer">
           <textarea id="runMessage" aria-label="Message Libre Claw" required rows="1" placeholder="Describe what you want Libre Claw to do"></textarea>
@@ -219,6 +224,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
           </div>
         </form>
         <div class="status-strip" id="statusStrip">
+          <button id="engineStrip" class="engine-strip" type="button" title="Open engine status">Cordis · checking</button>
+          <span class="sep">|</span>
           <span id="stripMeta">Ready when you are</span>
           <span class="sep">|</span>
           <span id="activeRunsLabel"><span id="activeRuns">0</span> active</span>
@@ -237,6 +244,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         <h2>Settings</h2>
         <button class="active" id="settingsTabGeneral" data-pane="general" role="tab" aria-controls="paneGeneral" aria-selected="true" type="button">General</button>
         <button id="settingsTabModels" data-pane="models" role="tab" aria-controls="paneModels" aria-selected="false" tabindex="-1" type="button">Models</button>
+        <button id="settingsTabEngine" data-pane="engine" role="tab" aria-controls="paneEngine" aria-selected="false" tabindex="-1" type="button">Engine</button>
         <button id="settingsTabPlugins" data-pane="plugins" role="tab" aria-controls="panePlugins" aria-selected="false" tabindex="-1" type="button">Plugins</button>
         <button id="settingsTabSchedules" data-pane="schedules" role="tab" aria-controls="paneSchedules" aria-selected="false" tabindex="-1" type="button">Schedules</button>
         <button id="settingsTabUsage" data-pane="usage" role="tab" aria-controls="paneUsage" aria-selected="false" tabindex="-1" type="button">Usage</button>
@@ -325,8 +333,20 @@ _DASHBOARD_HTML = r"""<!doctype html>
           </form>
           </section>
         </div>
+        <div class="settings-body" id="paneEngine" role="tabpanel" aria-labelledby="settingsTabEngine" tabindex="0" hidden>
+          <div class="panel-header"><div><h3>Cordis engine</h3><p class="panel-description">The services behind your workspace.</p></div><button id="refreshEngine" type="button">Refresh</button></div>
+          <section class="engine-overview" aria-label="Engine status">
+            <div class="engine-overview-top"><div><span class="eyebrow">Local service runtime</span><strong id="engineIdentity">Cordis</strong></div><span id="engineState" class="plugin-state">Checking</span></div>
+            <div id="enginePrivacy" class="engine-privacy"></div>
+            <p id="engineStatus" class="hint" role="status" aria-live="polite" aria-atomic="true">Connecting to the core runtime…</p>
+          </section>
+          <div class="engine-section-heading"><h4>Core services</h4><span id="engineCounts" class="tiny">Waiting for runtime</span></div>
+          <div id="engineComponents" class="engine-components" aria-label="Core services" aria-busy="true"></div>
+          <section class="engine-extensions"><div><h4>Extend your workspace</h4><p class="hint">Add tools and integrations with their own project permissions.</p></div><button id="engineOpenPlugins" type="button">Manage plugins ↗</button></section>
+          <div class="engine-recovery"><p id="engineRestartHint" class="hint">Restart is available when no work is running.</p><button id="restartEngine" type="button" aria-describedby="engineRestartHint" disabled>Restart engine</button></div>
+        </div>
         <div class="settings-body" id="panePlugins" role="tabpanel" aria-labelledby="settingsTabPlugins" tabindex="0" hidden>
-          <div class="panel-header" id="pluginsHeader"><div><h3>Plugins</h3><p class="panel-description">Install and manage tools for this project.</p></div><div class="plugin-toolbar-actions"><button id="refreshPlugins" type="button">Refresh</button><button id="addPlugin" class="primary" type="button">+ Add plugin</button></div></div>
+          <div class="panel-header" id="pluginsHeader"><div><h3>Plugins</h3><p class="panel-description">Extensions for this project. <button id="pluginsOpenEngine" class="inline-link" type="button">View core services ↗</button></p></div><div class="plugin-toolbar-actions"><button id="refreshPlugins" type="button">Refresh</button><button id="addPlugin" class="primary" type="button">+ Add plugin</button></div></div>
           <div id="pluginsScopeBlock">
             <div class="plugin-scope"><span class="eyebrow">Project scope</span><strong id="pluginsWorkspace">Current project only</strong><p class="hint">Enabled tools are available on your next message. Disabling a plugin revokes its access.</p></div>
             <p id="pluginsDisabled" class="hint" hidden>Cordis is turned off. Set <code>enabled = true</code> in your <code>[cordis]</code> configuration to enable tools.</p>
@@ -416,6 +436,13 @@ _DASHBOARD_HTML = r"""<!doctype html>
   <script>
     const state = { selectedRunId: "", runs: [], events: [], editingAutomationId: "", view: "chat", streaming: false, composing: true, sending: false };
     const $ = (id) => document.getElementById(id);
+    let dashboardUI = null, resolveDashboard, rejectDashboard;
+    const dashboardReady = new Promise((resolve, reject) => { resolveDashboard = resolve; rejectDashboard = reject; });
+    const uiBindings = Object.fromEntries(["api", "appearance", "models", "tasks", "questions", "plugins", "engine", "workflows"].map(id => [id, []]));
+    function bindUI(service, target, event, handler, options) {
+      if (dashboardUI) return dashboardUI.bind(service, target, event, handler, options);
+      uiBindings[service].push({target, event, handler, options});
+    }
     const THEME_KEY = "libre-claw-dashboard-theme";
     const RAIL_KEY = "libre-claw-dashboard-rail";
     const THEMES = new Set(__LIBRE_CLAW_THEME_IDS__);
@@ -435,13 +462,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
     async function saveTheme(value) {
       const theme = applyTheme(value);
       try {
-        const response = await fetch("/config/theme", {
+        const data = await request("/config/theme", {
           method: "PATCH",
-          headers: {"Content-Type": "application/json"},
           body: JSON.stringify({theme, persist_global: true}),
         });
-        if (!response.ok) throw new Error(await response.text());
-        const data = await response.json();
         setNotice(`Theme saved: ${data.label || theme}`);
       } catch (error) {
         setNotice(`Theme changed locally but could not be saved: ${error.message || error}`, true);
@@ -450,7 +474,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function initTheme() {
       applyTheme(document.documentElement.dataset.theme || "libre");
-      $("themeSelect").addEventListener("change", (event) => {
+      bindUI("appearance", $("themeSelect"), "change", (event) => {
         void saveTheme(event.target.value);
       });
     }
@@ -463,12 +487,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
         $("railToggle").setAttribute("aria-expanded", String(!collapsed));
       };
       updateRailLabel();
-      $("railToggle").addEventListener("click", () => {
+      bindUI("appearance", $("railToggle"), "click", () => {
         const rail = $("appFrame").classList.toggle("rail");
         localStorage.setItem(RAIL_KEY, rail ? "1" : "0");
         updateRailLabel();
       });
-      $("brandHome").addEventListener("click", () => {
+      bindUI("tasks", $("brandHome"), "click", () => {
         if (mobileSidebarQuery.matches) { newSession(); return; }
         if ($("appFrame").classList.contains("rail")) {
           $("appFrame").classList.remove("rail");
@@ -524,11 +548,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function initMobileSidebar() {
       syncMobileSidebar();
-      $("mobileTasks").addEventListener("click", openMobileSidebar);
-      $("closeMobileTasks").addEventListener("click", () => closeMobileSidebar());
-      $("sidebarBackdrop").addEventListener("click", () => closeMobileSidebar());
-      document.addEventListener("keydown", handleMobileSidebarKeydown);
-      mobileSidebarQuery.addEventListener("change", () => {
+      bindUI("appearance", $("mobileTasks"), "click", openMobileSidebar);
+      bindUI("appearance", $("closeMobileTasks"), "click", () => closeMobileSidebar());
+      bindUI("appearance", $("sidebarBackdrop"), "click", () => closeMobileSidebar());
+      bindUI("appearance", document, "keydown", handleMobileSidebarKeydown);
+      bindUI("appearance", mobileSidebarQuery, "change", () => {
         const sidebarFocused = $("taskSidebar").contains(document.activeElement);
         closeMobileSidebar(false);
         if (mobileSidebarQuery.matches && sidebarFocused) $("mobileTasks").focus();
@@ -552,13 +576,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     async function request(path, options = {}) {
-      const response = await fetch(path, {
-        ...options,
-        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || response.statusText);
-      return payload;
+      const ui = await dashboardReady;
+      return ui.request(path, options);
     }
 
     function formatTime(value) {
@@ -665,6 +684,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("activeRuns").textContent = health.active_runs ?? 0;
       $("activeRunsMetric").textContent = health.active_runs ?? 0;
       $("healthDot").className = `status-dot ${health.ok ? "online" : "offline"}`;
+      engineActiveRuns = health.ok ? Number(health.active_runs ?? 0) : null;
+      syncEngineControls();
     }
 
     async function refreshUsage() {
@@ -740,6 +761,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       state.composing = false;
       renderRuns();
       if (changed) {
+        renderQuestions([]);
         state.events = []; state.streaming = false; window.clearTimeout(streamTimer); resetStreamNode();
         $("timeline").replaceChildren(empty("Loading task…"));
       }
@@ -777,6 +799,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       state.events = [];
       renderEvents();
       renderPermissions([]);
+      renderQuestions([]);
     }
 
     async function refreshRunDetail() {
@@ -800,6 +823,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       scheduleStream(run.state);
       renderEvents();
       renderPermissions(detail.pending_permissions || []);
+      renderQuestions(detail.pending_questions || []);
       if (state.view === "plan") void loadPlan();
     }
 
@@ -907,7 +931,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         const fresh = payload.events || [];
         if (fresh.length) {
           state.events.push(...fresh);
-          if (fresh.some((event) => event.type === "run_finished" || event.type === "permission_request")) {
+          if (fresh.some((event) => ["run_finished", "permission_request", "user_question", "user_question_answered"].includes(event.type))) {
             resetStreamNode();
             await refreshRunDetail();
             await refreshRuns();
@@ -1198,7 +1222,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           node.className = "msg-error";
           node.textContent = data.message || eventText(event);
           container.append(node);
-        } else if (event.type === "permission_request" || event.type === "permission_result") {
+        } else if (["permission_request", "permission_result", "user_question", "user_question_answered"].includes(event.type)) {
           const node = document.createElement("div");
           node.className = "msg-note";
           const text = eventText(event);
@@ -1266,7 +1290,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (!filter) return true;
       if (filter === "message") return ["user_message", "assistant_delta", "assistant_message"].includes(event.type);
       if (filter === "tool") return ["tool_call", "tool_result"].includes(event.type);
-      if (filter === "permission") return event.type.startsWith("permission");
+      if (filter === "permission") return event.type.startsWith("permission") || event.type.startsWith("user_question");
       if (filter === "error") return event.type === "error" || event.data?.is_error;
       if (filter === "run") return event.type.startsWith("run_") || event.type === "usage";
       return event.type === filter;
@@ -1280,6 +1304,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (event.type === "tool_result") return `Tool ${data.is_error ? "error" : "result"}: ${data.name || "unknown"}`;
       if (event.type === "permission_request") return `Approval needed: ${data.name || data.tool_call_id || "tool"}`;
       if (event.type === "permission_result") return `Approval: ${data.resolution || "resolved"}`;
+      if (event.type === "user_question") return "Your input is needed";
+      if (event.type === "user_question_answered") return "Answer sent";
       if (event.type === "usage") return "Usage";
       if (event.type === "run_started") return "Run started";
       if (event.type === "run_continued") return "Session continued";
@@ -1295,6 +1321,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (event.type === "tool_call") return `${data.name}\n${JSON.stringify(data.arguments || {}, null, 2)}`;
       if (event.type === "tool_result") return `${data.name} ${data.is_error ? "error" : "result"}\n${truncate(data.content, 2200)}`;
       if (event.type === "permission_request") return `${data.name}\n${JSON.stringify(data.arguments || {}, null, 2)}`;
+      if (event.type === "user_question") return (data.questions || []).map(question => question.question || "").join("\n");
+      if (event.type === "user_question_answered") return "Your answer was delivered to the running task.";
       if (event.type === "usage") {
         const input = data.usage?.input_tokens ?? data.input_tokens ?? 0;
         const output = data.usage?.output_tokens ?? data.output_tokens ?? 0;
@@ -1305,6 +1333,92 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (event.type === "run_finished") return data.summary || data.state || "";
       if (event.type === "error") return data.message || "";
       return JSON.stringify(data, null, 2);
+    }
+
+    /* Structured user questions */
+    const questionForms = new Map();
+    let questionPending = new Set();
+    function questionNode(tag, className = "", text) {
+      const node = document.createElement(tag); node.className = className;
+      if (text !== undefined) node.textContent = String(text);
+      return node;
+    }
+    function collectQuestionAnswers(record) {
+      return {answers: record.fields.map(field => {
+        const selected = field.options.filter(option => option.input.checked).map(option => option.label);
+        const custom = field.custom.value.trim();
+        if (!selected.length && !custom) throw new Error("Choose an option or write an answer for every question.");
+        if (!field.multiple && selected.length > 1) throw new Error("Choose only one option for this question.");
+        if (custom.length > 16000) throw new Error("Written answers are limited to 16,000 characters.");
+        return {id: field.id, selected, ...(custom ? {custom} : {})};
+      })};
+    }
+    function questionControls(record) {
+      for (const control of record.form.querySelectorAll("input, textarea, button")) control.disabled = record.busy || record.sent;
+      record.button.textContent = record.sent ? "Answer sent" : record.busy ? "Sending…" : "Send answer";
+      record.form.setAttribute("aria-busy", String(record.busy));
+    }
+    async function submitQuestion(record) {
+      if (record.busy || record.sent) return;
+      if (!questionPending.has(record.key) || state.selectedRunId !== record.runId || !["queued", "running", "blocked"].includes(state.selectedRunState)) {
+        record.status.textContent = "This question is no longer waiting for an answer."; return;
+      }
+      let answers;
+      try { answers = collectQuestionAnswers(record); }
+      catch (error) { record.status.textContent = error.message || String(error); return; }
+      record.busy = true; record.status.textContent = "Sending your answer…"; questionControls(record);
+      try {
+        await request(`/runs/${encodeURIComponent(record.runId)}/questions/${encodeURIComponent(record.requestId)}`, {method: "POST", body: JSON.stringify(answers)});
+        record.sent = true; record.status.textContent = "Answer sent. The task can continue.";
+        if (state.selectedRunId === record.runId) {
+          try { await refreshRunDetail(); }
+          catch { record.status.textContent = "Answer sent. Refresh the task to see its progress."; }
+        }
+      } catch (error) { record.status.textContent = `Could not send answer: ${error.message || error}`; }
+      finally { record.busy = false; questionControls(record); }
+    }
+    function renderQuestions(pending) {
+      const container = $("questions"), runId = state.selectedRunId;
+      const requests = Array.isArray(pending) && ["queued", "running", "blocked"].includes(state.selectedRunState) ? pending : [];
+      questionPending = new Set(requests.map(item => JSON.stringify([runId, item.request_id])));
+      for (const key of questionForms.keys()) if (!questionPending.has(key)) questionForms.delete(key);
+      const forms = [];
+      for (const item of requests) {
+        if (!Array.isArray(item.questions) || !item.questions.length) continue;
+        const key = JSON.stringify([runId, item.request_id]), signature = JSON.stringify(item.questions);
+        let record = questionForms.get(key);
+        if (!record || record.signature !== signature) {
+          const form = questionNode("form", "user-question"); form.setAttribute("aria-label", "Answer the agent's questions");
+          record = {key, signature, runId, requestId: String(item.request_id), form, fields: [], busy: false, sent: false};
+          form.append(questionNode("h3", "event-type", "Your input is needed"));
+          for (const [index, question] of item.questions.entries()) {
+            const fieldset = questionNode("fieldset"), legend = questionNode("legend", "", question.question);
+            const field = {id: question.id, multiple: question.multiSelect === true, options: []};
+            fieldset.append(legend);
+            if (question.header) fieldset.append(questionNode("p", "question-header", question.header));
+            const options = questionNode("div", "question-options");
+            for (const choice of Array.isArray(question.options) ? question.options : []) {
+              const label = questionNode("label", "question-option"), input = questionNode("input");
+              input.type = field.multiple ? "checkbox" : "radio"; input.name = `question-${item.request_id}-${index}`; input.value = String(choice.label);
+              const copy = questionNode("span"); copy.append(questionNode("strong", "", choice.label));
+              if (choice.description) copy.append(questionNode("small", "", choice.description));
+              label.append(input, copy); options.append(label); field.options.push({label: String(choice.label), input});
+            }
+            const written = questionNode("label", "question-written", field.options.length ? "Or add a written answer" : "Your answer");
+            field.custom = questionNode("textarea"); field.custom.rows = 2; field.custom.maxLength = 16000;
+            field.custom.setAttribute("aria-label", `Written answer: ${String(question.question)}`);
+            written.append(field.custom); fieldset.append(options, written); form.append(fieldset); record.fields.push(field);
+          }
+          const actions = questionNode("div", "question-actions");
+          record.status = questionNode("p", "hint"); record.status.setAttribute("role", "status"); record.status.setAttribute("aria-live", "polite");
+          record.button = questionNode("button", "primary", "Send answer"); record.button.type = "submit";
+          actions.append(record.status, record.button); form.append(actions);
+          questionForms.set(key, record);
+        }
+        forms.push(record.form);
+      }
+      // Preserve the actual input nodes (and focus/drafts) across status polls.
+      if (forms.length !== container.children.length || forms.some((form, index) => container.children[index] !== form)) container.replaceChildren(...forms);
     }
 
     function renderPermissions(pendingIds) {
@@ -1510,10 +1624,102 @@ _DASHBOARD_HTML = r"""<!doctype html>
       node.append(actions); return node;
     }
 
+    /* Cordis engine */
+    let engineSnapshot = null, engineLoading = false, engineRestarting = false, engineActiveRuns = null;
+    let engineRendered = "";
+    function engineNode(tag, className = "", text) {
+      const node = document.createElement(tag); node.className = className;
+      if (text !== undefined) node.textContent = String(text);
+      return node;
+    }
+    function engineNumber(value) {
+      return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+    }
+    function syncEngineControls() {
+      const working = engineNumber(engineSnapshot?.active_operations) > 0 || (engineActiveRuns ?? 0) > 0;
+      $("refreshEngine").disabled = engineLoading || engineRestarting;
+      $("restartEngine").disabled = engineLoading || engineRestarting || working || engineActiveRuns === null;
+      $("restartEngine").textContent = engineRestarting ? "Restarting…" : "Restart engine";
+      $("engineRestartHint").textContent = working ? "Wait for active work to finish before restarting."
+        : engineActiveRuns === null ? "Connect to the daemon to restart the engine."
+        : "Restart the local runtime. Your saved tasks and plugin settings stay in place.";
+      $("engineComponents").setAttribute("aria-busy", String(engineLoading || engineRestarting));
+    }
+    function renderEngine(snapshot) {
+      if (snapshot.engine !== "cordis" || !Array.isArray(snapshot.components) || typeof snapshot.state !== "string") {
+        throw new Error("Invalid engine status response.");
+      }
+      engineSnapshot = snapshot;
+      const running = snapshot.state === "running", active = engineNumber(snapshot.active_operations);
+      const agentReady = snapshot.components.some(component => component.id === "agent" && component.state === "ACTIVE");
+      const ready = snapshot.components.filter(component => component.state === "ACTIVE").length;
+      $("engineIdentity").textContent = `Cordis ${snapshot.runtime_version || ""}`.trim();
+      $("engineState").textContent = running ? "Running" : snapshot.state;
+      $("engineState").className = running ? "plugin-state enabled" : "plugin-state danger";
+      $("engineStrip").textContent = `Cordis · ${running ? (active ? `${active} working` : agentReady ? "ready" : "paused") : snapshot.state}`;
+      $("engineStrip").className = running && agentReady ? "engine-strip ready" : "engine-strip danger";
+      $("engineStatus").textContent = active ? `${active} service operation${active === 1 ? "" : "s"} in progress.`
+        : running && agentReady ? "Services are ready for your next task."
+        : running ? "The agent service is unavailable. Check the core services below." : "The core runtime is not running.";
+      $("engineStatus").className = "hint";
+      $("engineCounts").textContent = `${ready} / ${snapshot.components.length} active`;
+      const privacy = $("enginePrivacy"); privacy.replaceChildren();
+      if (snapshot.privacy?.network === false) privacy.append(engineNode("span", "engine-privacy-badge", "Core network blocked"));
+      if (snapshot.privacy?.payloads === "opaque-handles") privacy.append(engineNode("span", "engine-privacy-badge", "Task content stays in Python"));
+      if (snapshot.privacy?.extensions === "separate-processes") privacy.append(engineNode("span", "engine-privacy-badge", "Extensions run separately"));
+      const signature = JSON.stringify(snapshot.components);
+      if (signature !== engineRendered) {
+        const list = $("engineComponents");
+        const expanded = new Set([...list.querySelectorAll("details")].filter(detail => detail.open).map(detail => detail.dataset.component));
+        list.replaceChildren();
+        for (const component of snapshot.components) {
+          const card = engineNode("article", "engine-component"), id = String(component.id || "service");
+          card.setAttribute("aria-label", `${component.title || id} service`);
+          const heading = engineNode("div", "engine-component-head");
+          heading.append(engineNode("h4", "", component.title || id), engineNode("span", component.state === "ACTIVE" ? "engine-service-state active" : "engine-service-state", component.state || "Unknown"));
+          const dependencies = Array.isArray(component.dependencies) ? component.dependencies.map(String) : [];
+          const count = engineNode("dl", "engine-service-counts");
+          for (const [label, value] of [["Working", component.active_operations], ["Completed", component.completed], ["Failed", component.failed], ["Cancelled", component.cancelled]]) {
+            const metric = engineNode("div"); metric.append(engineNode("dt", "", label), engineNode("dd", "", engineNumber(value))); count.append(metric);
+          }
+          card.append(heading, engineNode("p", "engine-dependencies", dependencies.length ? `Uses ${dependencies.join(" · ")}` : "Independent service"), count);
+          const details = engineNode("details", "engine-methods"); details.dataset.component = id; details.open = expanded.has(id);
+          details.append(engineNode("summary", "", "Service methods"));
+          const methods = engineNode("div", "engine-method-list");
+          for (const method of Array.isArray(component.methods) ? component.methods : []) methods.append(engineNode("code", "", `${id}.${String(method)}`));
+          details.append(methods); card.append(details); list.append(card);
+        }
+        engineRendered = signature;
+      }
+    }
+    function engineUnavailable(message) {
+      engineSnapshot = null; engineRendered = "";
+      $("engineState").textContent = "Unavailable"; $("engineState").className = "plugin-state danger";
+      $("engineStrip").textContent = "Cordis · unavailable"; $("engineStrip").className = "engine-strip danger";
+      $("engineCounts").textContent = "Status unavailable";
+      $("engineStatus").textContent = message; $("engineStatus").className = "hint danger";
+      $("engineComponents").replaceChildren(); $("enginePrivacy").replaceChildren();
+    }
+    async function refreshEngine() {
+      if (engineLoading || engineRestarting) return;
+      engineLoading = true; syncEngineControls();
+      try { renderEngine(await request("/engine")); }
+      catch (error) { engineUnavailable(`Could not load engine: ${error.message || error}`); }
+      finally { engineLoading = false; syncEngineControls(); }
+    }
+    async function restartCoreEngine() {
+      if (engineLoading || engineRestarting || engineActiveRuns === null || engineActiveRuns > 0 || engineNumber(engineSnapshot?.active_operations) > 0) return;
+      engineRestarting = true; syncEngineControls();
+      $("engineStatus").textContent = "Restarting the local runtime…";
+      try { renderEngine(await request("/engine/restart", {method: "POST", body: JSON.stringify({})})); }
+      catch (error) { engineUnavailable(`Could not restart engine: ${error.message || error}`); }
+      finally { engineRestarting = false; syncEngineControls(); }
+    }
+
     /* Cordis plugins */
     let pluginCatalog = null, pluginLoading = false, pluginPending = "", pluginPendingEnable = false;
     let pluginDetail = null, pluginView = "list", pluginRevision = 0, pluginInstall = null;
-    let pluginConfigFields = [], pluginConfigDirty = false, pluginRuntimeStatus = null;
+    let pluginConfigFields = [], pluginConfigDirty = false, pluginRuntimeStatus = null, pluginConfigDraftBase = null;
     function pluginNode(tag, className = "", text) {
       const node = document.createElement(tag);
       node.className = className;
@@ -1556,8 +1762,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
     function pluginState(plugin) {
       const changed = plugin.integrity !== "valid";
-      return pluginNode("span", changed ? "plugin-state danger" : plugin.enabled ? "plugin-state enabled" : "plugin-state",
-        changed ? "Files changed" : plugin.enabled ? (pluginCatalog?.enabled ? "Enabled" : "Paused") : "Disabled");
+      const failed = Boolean(plugin.runtime_error || plugin.service?.error);
+      return pluginNode("span", changed || failed ? "plugin-state danger" : plugin.enabled ? "plugin-state enabled" : "plugin-state",
+        changed ? "Files changed" : failed ? "Runtime failed" : plugin.enabled ? (pluginCatalog?.enabled
+          ? (plugin.service?.running || plugin.state === "ACTIVE" ? "Running" : "Enabled") : "Paused") : "Disabled");
     }
     function pluginPermissions(plugin) {
       const grants = plugin.grants || {}, node = pluginNode("dl", "plugin-grants");
@@ -1565,6 +1773,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         ["Network", grants.allow_network === true ? "Allowed" : "Denied"],
         ["Extra reads", grants.read_paths?.length ? grants.read_paths.join(", ") : "None"],
         ["Extra writes", grants.write_paths?.length ? grants.write_paths.join(", ") : "None"],
+        ["Models", grants.allow_model === true ? "Allowed through Libre Claw" : "Denied"],
       ]) node.append(pluginNode("dt", "", label), pluginNode("dd", "", value));
       return node;
     }
@@ -1639,7 +1848,21 @@ _DASHBOARD_HTML = r"""<!doctype html>
         if (pluginDetail?.id === id && pluginView === "detail") {
           pluginDetail = (await request(`/plugins/${encodeURIComponent(id)}`)).plugin; renderPluginDetail();
         }
-      } catch (error) { setPluginStatus(`Could not ${enabled ? "enable" : "disable"} ${name}: ${error.message || error}`, true); }
+      } catch (error) {
+        const message = `Could not ${enabled ? "enable" : "disable"} ${name}: ${error.message || error}`;
+        if (enabled && (plugin.format === "deepseek-harness" || pluginDetail?.id === id && pluginView === "detail")) {
+          const staged = pluginDetail?.id === id ? stagedPluginConfig() : [];
+          try {
+            const details = (await request(`/plugins/${encodeURIComponent(id)}`)).plugin;
+            if (details?.id === id) {
+              const rootDraft = staged.find(field => field.kind === "root");
+              if (rootDraft && !pluginConfigObject(JSON.parse(rootDraft.value))) throw new Error("Keep the existing JSON editor.");
+              pluginDetail = details; showPluginView("detail"); renderPluginDetail(); restoreStagedPluginConfig(staged);
+            }
+          } catch { /* Keep the original activation failure and any existing form. */ }
+        }
+        setPluginStatus(message, true);
+      }
       finally {
         pluginPending = ""; syncPluginControls();
         if (restoreFocus) {
@@ -1647,6 +1870,17 @@ _DASHBOARD_HTML = r"""<!doctype html>
           [...root.querySelectorAll("button[data-plugin-id]")].find(button => button.dataset.pluginId === id)?.focus();
         }
       }
+    }
+    async function enablePluginModels(id) {
+      if (pluginLoading || pluginPending || !pluginCatalog?.enabled) return;
+      pluginPending = "model-access"; syncPluginControls();
+      try {
+        await request(`/plugins/${encodeURIComponent(id)}`, {method: "PATCH", body: JSON.stringify({enabled: true, allow_model: true})});
+        await loadPlugins("Plugin enabled with access to configured models. Provider keys stay in Libre Claw.");
+        pluginDetail = (await request(`/plugins/${encodeURIComponent(id)}`)).plugin;
+        showPluginView("detail"); renderPluginDetail();
+      } catch (error) { setPluginStatus(`Could not enable model access: ${error.message || error}`, true); }
+      finally { pluginPending = ""; syncPluginControls(); }
     }
     function showPluginView(view) {
       pluginView = view; $("pluginsInventory").hidden = view !== "list"; $("pluginPage").hidden = view === "list";
@@ -1687,6 +1921,20 @@ _DASHBOARD_HTML = r"""<!doctype html>
       identity.append(pluginNode("h3", "", plugin.name || plugin.id), pluginNode("p", "tiny", `${plugin.id} · ${plugin.version}`));
       head.append(identity, pluginState(plugin)); page.append(head);
       if (plugin.description) page.append(pluginNode("p", "plugin-description", plugin.description));
+      if (plugin.runtime_error) page.append(pluginNode("p", "hint danger", plugin.runtime_error));
+      if (plugin.service) {
+        const service = pluginNode("section", "plugin-section"); service.append(pluginNode("h4", "", "Libre WebUI connection"));
+        service.append(pluginNode("p", "hint", plugin.service.running ? "Ready. Use this socket path in Libre WebUI’s native-provider settings." : plugin.service.error || "This service is stopped."));
+        if (plugin.service.socket_path) service.append(pluginNode("code", "plugin-digest", plugin.service.socket_path));
+        page.append(service);
+      }
+      if (plugin.format === "deepseek-harness") {
+        const components = pluginNode("section", "plugin-section");
+        components.append(pluginNode("h4", "", "Harness components"));
+        for (const component of plugin.components || []) components.append(pluginNode("p", "hint",
+          `${component.id || component.name || "Component"} · ${component.state || (component.enabled === false ? "Disabled" : "Ready to load")}`));
+        page.append(components);
+      }
       const actions = pluginNode("div", "plugin-actions plugin-detail-actions"), check = pluginButton("Check runtime", () => { void checkPluginRuntime(); });
       check.dataset.blocked = String(!plugin.enabled || !pluginCatalog?.enabled || plugin.integrity !== "valid");
       check.title = "Loads this enabled plugin in its isolated runtime, using its existing grants.";
@@ -1697,6 +1945,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
       renderPluginConfig(config, plugin); page.append(config);
       const permissions = pluginNode("section", "plugin-section"); permissions.append(pluginNode("h4", "", "Permissions"), pluginPermissions(plugin),
         pluginNode("p", "hint", "Private storage belongs to this project. Additional filesystem or network access must be granted explicitly from the CLI.")); page.append(permissions);
+      if (plugin.grants?.allow_model !== true) {
+        permissions.append(pluginNode("p", "hint", "Model access lets this plugin use your configured providers. It receives model responses, never provider keys or automatic conversation history."));
+        const models = pluginButton("Enable with model access", () => { void enablePluginModels(String(plugin.id)); });
+        models.dataset.blocked = String(!pluginCatalog?.enabled || plugin.integrity !== "valid"); permissions.append(models);
+      }
       const tools = pluginNode("section", "plugin-section"); tools.append(pluginNode("h4", "", "Tools"));
       for (const tool of plugin.tool_definitions || []) {
         const item = pluginNode("details", "plugin-tool-detail"); item.append(pluginNode("summary", "", tool.name || tool.id || "Tool"));
@@ -1710,49 +1963,93 @@ _DASHBOARD_HTML = r"""<!doctype html>
         pluginNode("p", "hint", "Uninstalls this package and deletes its grants, configuration, and private state in every project."),
         pluginButton("Remove plugin…", () => showPluginRemoval(removal), "danger")); page.append(removal); syncPluginControls();
     }
+    function pluginConfigObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
+    function pluginConfigPointer(path) { return "/" + path.map(key => key.replace(/~/g, "~0").replace(/\//g, "~1")).join("/"); }
+    function pluginConfigAt(config, path) {
+      let value = config;
+      for (const key of path) {
+        if (!pluginConfigObject(value) || !Object.hasOwn(value, key)) return {present: false, value: undefined};
+        value = value[key];
+      }
+      return {present: true, value};
+    }
+    function writePluginConfigPath(config, path, value, remove = false) {
+      let parent = config;
+      for (const key of path.slice(0, -1)) {
+        if (!Object.hasOwn(parent, key) || !pluginConfigObject(parent[key])) {
+          if (remove) return;
+          Object.defineProperty(parent, key, {value: {}, enumerable: true, writable: true, configurable: true});
+        }
+        parent = parent[key];
+      }
+      const key = path[path.length - 1];
+      if (remove) delete parent[key];
+      else Object.defineProperty(parent, key, {value, enumerable: true, writable: true, configurable: true});
+    }
     function renderPluginConfig(container, plugin) {
       const schema = plugin.config_schema || {}, properties = schema.properties || {}, config = plugin.config || {};
-      pluginConfigFields = []; pluginConfigDirty = false;
+      pluginConfigFields = []; pluginConfigDirty = false; pluginConfigDraftBase = null;
       const form = pluginNode("form", "plugin-config-form"); form.autocomplete = "off";
       const markDirty = () => { pluginConfigDirty = true; save.dataset.blocked = "false"; reset.dataset.blocked = "false"; syncPluginControls(); };
-      for (const [key, field] of Object.entries(properties)) {
-        const secret = field.writeOnly === true || field.format === "password";
-        const pointer = "/" + key.replace(/~/g, "~0").replace(/\//g, "~1");
-        const label = pluginNode("label", "plugin-config-field"), title = pluginNode("span", "", field.title || key);
-        if (schema.required?.includes(key)) title.append(pluginNode("span", "plugin-required", " *")); label.append(title);
-        let input, kind = secret ? "secret" : Array.isArray(field.enum) ? "enum" : field.type;
-        if (kind === "enum") {
-          input = pluginNode("select"); const empty = pluginNode("option", "", "Use default"); empty.value = ""; input.append(empty);
-          for (const option of field.enum) { const node = pluginNode("option", "", String(option)); node.value = JSON.stringify(option); input.append(node); }
-          input.value = Object.hasOwn(config, key) ? JSON.stringify(config[key]) : "";
-        } else if (kind === "boolean") {
-          input = pluginNode("select");
-          for (const [value, text] of [["", "Use default"], ["true", "On"], ["false", "Off"]]) { const option = pluginNode("option", "", text); option.value = value; input.append(option); }
-          input.value = Object.hasOwn(config, key) ? String(config[key]) : "";
-        } else if (["string", "number", "integer", "secret"].includes(kind)) {
-          input = pluginNode("input"); input.type = secret ? "password" : ["number", "integer"].includes(kind) ? "number" : "text";
-          input.value = !secret && Object.hasOwn(config, key) ? config[key] ?? "" : "";
-          if (kind === "integer") input.step = "1"; else if (kind === "number") input.step = "any";
-          if (field.minimum !== undefined) input.min = String(field.minimum);
-          if (field.maximum !== undefined) input.max = String(field.maximum);
-          if (secret) { input.autocomplete = "new-password"; input.placeholder = plugin.configured_secrets?.includes(pointer) ? "Saved · leave blank to keep" : "Not configured"; }
-        } else {
-          kind = "json"; input = pluginNode("textarea", "plugin-json-input"); input.rows = 5;
-          input.value = Object.hasOwn(config, key) ? JSON.stringify(config[key], null, 2) : "";
-          input.placeholder = "JSON · leave blank for default";
+      const renderFields = (target, parentSchema, prefix = [], depth = 0) => {
+        for (const [key, field] of Object.entries(parentSchema.properties || {})) {
+          const path = [...prefix, key], pointer = pluginConfigPointer(path), current = pluginConfigAt(config, path);
+          const secret = field.writeOnly === true || field.format === "password";
+          const required = parentSchema.required?.includes(key) === true;
+          const titleText = field.title || key;
+          if (!secret && !Array.isArray(field.enum) && field.type === "object" && Object.keys(field.properties || {}).length && depth < 5) {
+            const group = pluginNode("fieldset", "plugin-tool-detail plugin-config-field");
+            const legend = pluginNode("legend", "", titleText);
+            if (required) legend.append(pluginNode("span", "plugin-required", " *"));
+            group.append(legend);
+            if (field.description) group.append(pluginNode("p", "hint", field.description));
+            const fields = pluginNode("div", "plugin-config-form");
+            renderFields(fields, field, path, depth + 1); group.append(fields); target.append(group);
+            continue;
+          }
+          const label = pluginNode("label", "plugin-config-field"), title = pluginNode("span", "", titleText);
+          if (required) title.append(pluginNode("span", "plugin-required", " *")); label.append(title);
+          let input, kind = secret ? "secret" : Array.isArray(field.enum) ? "enum" : field.type;
+          if (kind === "enum") {
+            input = pluginNode("select"); const empty = pluginNode("option", "", required ? "Choose a value" : "Use default"); empty.value = ""; input.append(empty);
+            for (const option of field.enum) { const node = pluginNode("option", "", String(option)); node.value = JSON.stringify(option); input.append(node); }
+            input.value = current.present ? JSON.stringify(current.value) : "";
+          } else if (kind === "boolean") {
+            input = pluginNode("select");
+            for (const [value, text] of [["", required ? "Choose a value" : "Use default"], ["true", "On"], ["false", "Off"]]) { const option = pluginNode("option", "", text); option.value = value; input.append(option); }
+            input.value = current.present ? String(current.value) : "";
+          } else if (["string", "number", "integer", "secret"].includes(kind)) {
+            input = pluginNode("input"); input.type = secret ? "password" : ["number", "integer"].includes(kind) ? "number" : "text";
+            input.value = !secret && current.present ? String(current.value ?? "") : "";
+            if (kind === "integer") input.step = "1"; else if (kind === "number") input.step = "any";
+            if (field.minimum !== undefined) input.min = String(field.minimum);
+            if (field.maximum !== undefined) input.max = String(field.maximum);
+            if (secret) { input.autocomplete = "new-password"; input.placeholder = plugin.configured_secrets?.includes(pointer) ? "Saved · leave blank to keep" : "Not configured"; }
+          } else {
+            kind = "json"; input = pluginNode("textarea", "plugin-json-input"); input.rows = 5;
+            input.value = current.present ? JSON.stringify(current.value, null, 2) : "";
+            input.placeholder = plugin.configured_secrets?.some(saved => saved.startsWith(pointer + "/"))
+              ? "Saved secret values omitted · leave unchanged to keep" : "JSON · leave blank for default";
+          }
+          input.setAttribute("aria-label", prefix.length ? `${prefix.join(" / ")} / ${titleText}` : titleText);
+          input.setAttribute("aria-required", String(required)); input.dataset.pluginConfigPath = pointer;
+          label.append(input);
+          if (field.description) label.append(pluginNode("span", "hint", field.description));
+          if (kind === "json") label.append(pluginNode("span", "hint", field.type === "array"
+            ? "JSON array. Editing replaces the full list; leave unchanged to keep saved values."
+            : "Advanced JSON. Saved secret fields are omitted; leaving them out keeps their values."));
+          if (secret && field.type && field.type !== "string") label.append(pluginNode("span", "hint", `Enter a JSON ${field.type}. Its value stays concealed.`));
+          const entry = {key, path, pointer, kind, input, schema: field, clear: false, touched: false, present: current.present,
+            initialValue: String(input.value), secretType: secret ? field.type : null}; pluginConfigFields.push(entry);
+          const changed = () => { entry.clear = false; entry.touched = true; markDirty(); };
+          input.addEventListener("input", changed); input.addEventListener("change", changed);
+          if (secret && plugin.configured_secrets?.includes(pointer)) {
+            label.append(pluginButton("Clear saved value", () => { input.value = ""; input.placeholder = "Will be cleared on save"; entry.clear = true; entry.touched = true; markDirty(); }, "plugin-clear-secret"));
+          }
+          target.append(label);
         }
-        input.setAttribute("aria-label", field.title || key); label.append(input);
-        if (field.description) label.append(pluginNode("span", "hint", field.description));
-        if (kind === "json") label.append(pluginNode("span", "hint", "Advanced JSON. Saved secret fields are omitted; leaving them out keeps their values."));
-        if (secret && field.type && field.type !== "string") label.append(pluginNode("span", "hint", `Enter a JSON ${field.type}. Its value stays concealed.`));
-        const entry = {key, kind, input, clear: false, touched: false, present: Object.hasOwn(config, key), secretType: secret ? field.type : null}; pluginConfigFields.push(entry);
-        const changed = () => { entry.clear = false; entry.touched = true; markDirty(); };
-        input.addEventListener("input", changed); input.addEventListener("change", changed);
-        if (secret && plugin.configured_secrets?.includes(pointer)) {
-          label.append(pluginButton("Clear saved value", () => { input.value = ""; input.placeholder = "Will be cleared on save"; entry.clear = true; markDirty(); }, "plugin-clear-secret"));
-        }
-        form.append(label);
-      }
+      };
+      renderFields(form, schema);
       if (!Object.keys(properties).length) {
         const label = pluginNode("label", "plugin-config-field"); label.append(pluginNode("span", "", "Configuration JSON"));
         const input = pluginNode("textarea", "plugin-json-input"); input.rows = 6; input.value = JSON.stringify(config, null, 2);
@@ -1767,33 +2064,77 @@ _DASHBOARD_HTML = r"""<!doctype html>
       container.append(pluginNode("p", "hint", "Changes stay here until you save. Secrets are stored locally and never returned to this page."), form);
     }
     function collectPluginConfig() {
-      const config = JSON.parse(JSON.stringify(pluginDetail.config || {}));
+      const config = JSON.parse(JSON.stringify(pluginConfigDraftBase || pluginDetail.config || {}));
       for (const field of pluginConfigFields) {
         const raw = String(field.input.value);
         if (field.kind === "root") {
           const value = JSON.parse(raw);
-          if (!value || Array.isArray(value) || typeof value !== "object") throw new Error("Configuration must be a JSON object.");
+          if (!pluginConfigObject(value)) throw new Error("Configuration must be a JSON object.");
           return value;
         }
-        delete config[field.key];
-        if (field.kind === "string" && !field.present && !field.touched && raw === "") continue;
+        // Preserve exact public values and unrecognized properties unless the
+        // user edits this leaf. Password fields are always omitted when blank.
+        if (field.kind !== "secret" && !field.touched && raw === field.initialValue) continue;
+        writePluginConfigPath(config, field.path, undefined, true);
         let value;
+        const label = field.path.join(" / ");
         if (field.kind === "secret") {
           if (field.clear) value = null;
           else if (raw && field.secretType && field.secretType !== "string") {
-            try { value = JSON.parse(raw); } catch { throw new Error(`${field.key} must contain a valid JSON ${field.secretType}.`); }
+            try { value = JSON.parse(raw); } catch { throw new Error(`${label} must contain a valid JSON ${field.secretType}.`); }
           } else if (raw) value = raw;
           else continue;
         }
-        else if (!raw && field.kind !== "string") continue;
+        else if (!raw.trim() && field.kind !== "string") continue;
         else if (["number", "integer"].includes(field.kind)) {
-          value = Number(raw); if (!Number.isFinite(value) || (field.kind === "integer" && !Number.isInteger(value))) throw new Error(`${field.key} must be a valid ${field.kind}.`);
+          value = Number(raw); if (!Number.isFinite(value) || (field.kind === "integer" && !Number.isInteger(value))) throw new Error(`${label} must be a valid ${field.kind}.`);
+          if (field.schema.minimum !== undefined && value < field.schema.minimum) throw new Error(`${label} must be at least ${field.schema.minimum}.`);
+          if (field.schema.maximum !== undefined && value > field.schema.maximum) throw new Error(`${label} must be at most ${field.schema.maximum}.`);
         } else if (["json", "enum", "boolean"].includes(field.kind)) {
-          try { value = JSON.parse(raw); } catch { throw new Error(`${field.key} must contain valid JSON.`); }
+          try { value = JSON.parse(raw); } catch { throw new Error(`${label} must contain valid JSON.`); }
         } else value = raw;
-        Object.defineProperty(config, field.key, {value, enumerable: true, writable: true, configurable: true});
+        const type = field.schema.type;
+        if (!field.clear && ((type === "object" && !pluginConfigObject(value)) || (type === "array" && !Array.isArray(value))
+          || (type === "boolean" && typeof value !== "boolean") || (type === "null" && value !== null))) {
+          throw new Error(`${label} must contain a valid JSON ${type}.`);
+        }
+        if (field.kind === "enum" && !field.schema.enum.some(option => JSON.stringify(option) === JSON.stringify(value))) throw new Error(`${label} must be one of its listed choices.`);
+        writePluginConfigPath(config, field.path, value);
       }
       return config;
+    }
+    function stagedPluginConfig() {
+      if (!pluginConfigDirty) return [];
+      return pluginConfigFields.filter(field => field.touched || field.clear || String(field.input.value) !== field.initialValue)
+        .map(field => ({pointer: field.pointer, value: String(field.input.value), clear: field.clear, kind: field.kind}));
+    }
+    function restoreStagedPluginConfig(staged) {
+      let restored = false;
+      const rootDraft = staged.find(field => field.kind === "root");
+      if (rootDraft && !pluginConfigFields.some(field => field.kind === "root")) {
+        pluginConfigDraftBase = JSON.parse(rootDraft.value);
+        for (const field of pluginConfigFields) {
+          const current = pluginConfigAt(pluginConfigDraftBase, field.path);
+          const structured = field.kind === "json" || field.kind === "secret" && field.secretType !== "string";
+          field.input.value = !current.present || current.value === null ? "" : structured ? JSON.stringify(current.value, null, 2)
+            : ["enum", "boolean"].includes(field.kind) ? JSON.stringify(current.value) : String(current.value);
+          field.touched = true; field.clear = field.kind === "secret" && current.present && current.value === null;
+        }
+        restored = true;
+      }
+      for (const saved of staged) {
+        const field = pluginConfigFields.find(item => item.pointer === saved.pointer && item.kind === saved.kind);
+        if (!field) continue;
+        field.input.value = saved.value; field.touched = true; field.clear = saved.clear;
+        if (field.clear) field.input.placeholder = "Will be cleared on save";
+        restored = true;
+      }
+      if (restored) {
+        pluginConfigDirty = true;
+        for (const button of $("pluginPage").querySelectorAll("button")) {
+          if (["Save configuration", "Reset changes"].includes(button.textContent)) button.dataset.blocked = "false";
+        }
+      }
     }
     async function savePluginConfig() {
       if (pluginPending || !pluginDetail || !pluginConfigDirty) return;
@@ -1810,7 +2151,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       pluginPending = "inspect"; syncPluginControls(); const status = pluginRuntimeStatus; status.textContent = "Checking isolated runtime…";
       try {
         const result = (await request(`/plugins/${encodeURIComponent(pluginDetail.id)}/inspect`, {method: "POST", body: "{}"})).plugin;
-        status.textContent = `Runtime ${result.state || "ready"}${result.runtime_version ? ` · Cordis ${result.runtime_version}` : ""}. Checked with current permissions; the temporary runtime has stopped.`;
+        status.textContent = `Runtime ${result.state || "ready"}${result.runtime_version ? ` · Cordis ${result.runtime_version}` : ""}. ${result.runtime_lifetime === "persistent" ? "The isolated worker stays active between calls." : result.service ? "Hosted by Libre Claw over a private local socket." : "Checked with current permissions; the temporary runtime has stopped."}`;
         status.className = "hint";
       } catch (error) { status.textContent = `Runtime check failed: ${error.message || error}`; status.className = "hint danger"; }
       finally { pluginPending = ""; syncPluginControls(); }
@@ -1846,7 +2187,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         input.placeholder = "/path/to/plugin or npm:@scope/package@1.0.0"; input.autocomplete = "off"; input.spellcheck = false;
         input.addEventListener("input", () => { pluginInstall.source = input.value; }); label.append(input); form.append(label);
         const help = pluginNode("details", "plugin-source-help"); help.append(pluginNode("summary", "", "What can I install?"),
-          pluginNode("p", "hint", "A local folder, a .tgz package, or npm:package@version with a Libre Claw plugin manifest. Registry packages are downloaded only when you check them. Install scripts never run.")); form.append(help);
+          pluginNode("p", "hint", "A compiled Cordis or Harness package from a local folder, .tgz archive, public GitHub repository, or npm. Packages are downloaded only when you check them. Install scripts never run.")); form.append(help);
         const actions = pluginNode("div", "plugin-actions"), cancel = pluginButton("Cancel", () => { void leavePluginPage(); }); cancel.dataset.cancelPreview = "true";
         actions.append(cancel, pluginButton("Check package", () => { void previewPlugin(); }, "primary")); form.append(actions);
         form.addEventListener("submit", event => { event.preventDefault(); void previewPlugin(); }); page.append(form);
@@ -1855,7 +2196,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         card.append(pluginNode("h4", "", item.name || item.id), pluginNode("p", "tiny", `${item.id} · ${item.version}`));
         if (item.description) card.append(pluginNode("p", "plugin-description", item.description));
         const toolCount = item.tool_count ?? item.tools?.length ?? 0;
-        card.append(pluginNode("p", "plugin-tools", `${toolCount} tool${toolCount === 1 ? "" : "s"} · Offline by default`));
+        card.append(pluginNode("p", "plugin-tools", item.adapter ? "Hosted provider service · Private local connection" : item.format === "deepseek-harness" && !toolCount ? "Tools are discovered when you enable this package" : `${toolCount} tool${toolCount === 1 ? "" : "s"} · Offline by default`));
         const reviewTools = pluginNode("details", "plugin-tool-detail"); reviewTools.append(pluginNode("summary", "", "Review declared tools"));
         for (const tool of item.tool_definitions || (item.tools || []).map(name => ({name}))) {
           const definition = pluginNode("details", "plugin-tool-detail"); definition.append(pluginNode("summary", "", tool.name || tool.id || "Tool"));
@@ -1878,7 +2219,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
           actions.append(pluginButton("Done", () => { void leavePluginPage(); }));
           if (item.enabled) actions.append(pluginButton("Open plugin", () => { pluginInstall = null; void openPluginDetail(String(item.id)); }, "primary"));
           else {
-            const enable = pluginButton("Enable now", () => { void enableInstalledPlugin(); }, "primary"); enable.dataset.blocked = String(!pluginCatalog?.enabled); actions.append(enable);
+            const enable = item.adapter === "native-provider"
+              ? pluginButton("Enable with model access", () => { void enablePluginModels(String(item.id)); }, "primary")
+              : pluginButton("Enable now", () => { void enableInstalledPlugin(); }, "primary");
+            enable.dataset.blocked = String(!pluginCatalog?.enabled); actions.append(enable);
+            if (item.adapter === "native-provider") card.append(pluginNode("p", "hint", "Enabling lets local clients use your configured models. Provider keys remain in Libre Claw."));
           }
         } else actions.append(pluginButton("Back", () => { void backPluginInstall(); }), pluginButton("Install plugin", () => { void installPlugin(); }, "primary"));
         card.append(actions); page.append(card);
@@ -1937,7 +2282,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     /* Settings modal */
-    const PANES = ["general", "models", "plugins", "schedules", "usage", "about"];
+    const PANES = ["general", "models", "engine", "plugins", "schedules", "usage", "about"];
     let settingsReturnFocus = null;
     function openSettingsPane(pane) {
       if (!PANES.includes(pane)) return;
@@ -1965,6 +2310,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       }
       if (pane === "schedules") void refreshAutomations().catch(error => setNotice(error.message || String(error), true));
       if (pane === "plugins" && pluginView === "list") void loadPlugins();
+      if (pane === "engine") void refreshEngine();
       if (pane !== "plugins" && (!pluginPending || pluginPending === "preview")) void leavePluginPage();
       if (pane === "usage") void loadUsagePane();
     }
@@ -1992,7 +2338,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function bindTabNavigation(selector, activate) {
       const tabs = [...document.querySelectorAll(selector)];
-      tabs.forEach((tab, index) => tab.addEventListener("keydown", (event) => {
+      tabs.forEach((tab, index) => bindUI("appearance", tab, "keydown", (event) => {
         const moves = {ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1};
         if (!(event.key in moves) && !["Home", "End"].includes(event.key)) return;
         event.preventDefault();
@@ -2070,7 +2416,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("llamacppSave").textContent = pending && action === "save" ? "Saving…" : "Save endpoint";
     }
 
-    $("llamacppBaseUrl").addEventListener("input", () => {
+    bindUI("models", $("llamacppBaseUrl"), "input", () => {
       ++llamacppGeneration;
       $("llamacppDiscovered").replaceChildren();
       setLlamacppStatus("Endpoint changed. Discover models or save this connection.");
@@ -2108,7 +2454,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       }
     }
 
-    $("llamacppDiscover").addEventListener("click", async () => {
+    bindUI("models", $("llamacppDiscover"), "click", async () => {
       if (llamacppPending) return;
       const generation = ++llamacppGeneration;
       const base = $("llamacppBaseUrl").value.trim();
@@ -2134,7 +2480,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       }
     });
 
-    $("llamacppForm").addEventListener("submit", async (event) => {
+    bindUI("models", $("llamacppForm"), "submit", async (event) => {
       event.preventDefault();
       if (llamacppPending) return;
       const generation = ++llamacppGeneration;
@@ -2239,7 +2585,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       } finally { $("refreshUsagePane").disabled = false; }
     }
 
-    $("modelForm").addEventListener("submit", async (event) => {
+    bindUI("models", $("modelForm"), "submit", async (event) => {
       event.preventDefault();
       const generation = ++modelConfigGeneration;
       const button = $("modelForm").querySelector("button[type=submit]");
@@ -2384,8 +2730,8 @@ _DASHBOARD_HTML = r"""<!doctype html>
     syncModelDatalist($("runProvider"), $("runModel"));
     syncModelDatalist($("configProvider"), $("configModel"));
     syncModelDatalist($("automationProvider"), $("automationModel"));
-    $("configModel").addEventListener("input", () => { ++modelConfigGeneration; });
-    $("refreshModels").addEventListener("click", () => { void modelPickers.get("configModel").refresh(true); });
+    bindUI("models", $("configModel"), "input", () => { ++modelConfigGeneration; });
+    bindUI("models", $("refreshModels"), "click", () => { void modelPickers.get("configModel").refresh(true); });
     void loadModelConfig();
 
     const workflow = { review: null, reviewContext: {}, comments: [], reviewGeneration: 0, planGeneration: 0, planSignature: "", workerSignature: "", workers: [], workerDrafts: new Map(), workerPending: new Set(), worktrees: [], transfer: null };
@@ -2705,15 +3051,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("transferPanel").scrollIntoView({block:"nearest"});
     }
 
-    $("reviewScope").addEventListener("change", () => { $("reviewBase").hidden = $("reviewScope").value !== "branch"; void loadReview(); });
-    $("reviewBase").addEventListener("change", loadReview);
-    $("refreshReview").addEventListener("click", loadReview);
-    $("analyzeReview").addEventListener("click", analyzeReview);
-    $("refreshPlan").addEventListener("click", () => loadPlan(true));
-    $("planMode").addEventListener("change", () => sendTaskControl("plan", $("planMode").value === "plan" ? "on" : "off"));
-    $("planForm").addEventListener("submit", async (event) => { event.preventDefault(); const input = $("planNewStep"); if (await sendTaskControl("plan", `add ${input.value}`)) input.value = ""; });
-    $("refreshWorktrees").addEventListener("click", loadWorktrees);
-    $("worktreeForm").addEventListener("submit", async (event) => {
+    bindUI("workflows", $("reviewScope"), "change", () => { $("reviewBase").hidden = $("reviewScope").value !== "branch"; void loadReview(); });
+    bindUI("workflows", $("reviewBase"), "change", loadReview);
+    bindUI("workflows", $("refreshReview"), "click", loadReview);
+    bindUI("workflows", $("analyzeReview"), "click", analyzeReview);
+    bindUI("workflows", $("refreshPlan"), "click", () => loadPlan(true));
+    bindUI("workflows", $("planMode"), "change", () => sendTaskControl("plan", $("planMode").value === "plan" ? "on" : "off"));
+    bindUI("workflows", $("planForm"), "submit", async (event) => { event.preventDefault(); const input = $("planNewStep"); if (await sendTaskControl("plan", `add ${input.value}`)) input.value = ""; });
+    bindUI("workflows", $("refreshWorktrees"), "click", loadWorktrees);
+    bindUI("workflows", $("worktreeForm"), "submit", async (event) => {
       event.preventDefault(); const submit = event.submitter; submit.disabled = true;
       try {
         if ($("worktreeAssociate").checked && !state.selectedRunId) throw new Error("Select a task before moving it to a worktree.");
@@ -2727,7 +3073,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       }
       finally { submit.disabled = false; }
     });
-    $("applyTransfer").addEventListener("click", async () => {
+    bindUI("workflows", $("applyTransfer"), "click", async () => {
       const preview = workflow.transfer; if (!preview) return; $("applyTransfer").disabled = true;
       try {
         await request(`/worktrees/${preview.worktree.worktree_id}/transfer`, {method:"POST", body:JSON.stringify({revision:preview.review.revision,target_revision:preview.target_revision})});
@@ -2735,7 +3081,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       } catch (error) { setNotice(error.message || String(error), true); }
       finally { $("applyTransfer").disabled = !workflow.transfer; }
     });
-    $("closeTransfer").addEventListener("click", () => { workflow.transfer = null; $("transferPanel").hidden = true; });
+    bindUI("workflows", $("closeTransfer"), "click", () => { workflow.transfer = null; $("transferPanel").hidden = true; });
 
     /* The composer continues the selected session; New Session starts a thread. */
     function composerMode() {
@@ -2766,7 +3112,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       $("sendMessage").setAttribute("aria-label", label); $("sendMessage").title = label;
     }
 
-    $("runForm").addEventListener("submit", async (event) => {
+    bindUI("tasks", $("runForm"), "submit", async (event) => {
       event.preventDefault();
       if (state.sending || !$("runMessage").value.trim()) return;
       state.sending = true; $("sendMessage").disabled = true;
@@ -2798,7 +3144,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       } finally { state.sending = false; $("sendMessage").disabled = false; syncComposerMode(); }
     });
 
-    $("automationForm").addEventListener("submit", async (event) => {
+    bindUI("workflows", $("automationForm"), "submit", async (event) => {
       event.preventDefault();
       const submit = $("automationSubmit");
       if (submit.disabled) return;
@@ -2822,42 +3168,53 @@ _DASHBOARD_HTML = r"""<!doctype html>
       area.style.height = `${Math.min(area.scrollHeight, 160)}px`;
     }
 
-    $("runMessage").addEventListener("input", autoGrow);
-    $("runMessage").addEventListener("keydown", (event) => {
+    bindUI("tasks", $("runMessage"), "input", autoGrow);
+    bindUI("tasks", $("runMessage"), "keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         $("runForm").requestSubmit();
       }
     });
-    $("refreshAll").addEventListener("click", refreshAll);
-    $("runSearch").addEventListener("input", renderRuns);
-    $("runStateFilter").addEventListener("change", renderRuns);
-    $("eventFilter").addEventListener("change", renderEvents);
-    $("tabChat").addEventListener("click", () => setView("chat"));
-    $("tabTrajectory").addEventListener("click", () => setView("trajectory"));
-    $("tabPlan").addEventListener("click", () => setView("plan"));
-    $("tabChanges").addEventListener("click", () => setView("changes"));
-    $("tabWorktrees").addEventListener("click", () => setView("worktrees"));
-    $("focusRunInput").addEventListener("click", newSession);
-    $("openSettings").addEventListener("click", () => openSettingsPane("general"));
-    $("openPlugins").addEventListener("click", () => openSettingsPane("plugins"));
-    $("closeSettings").addEventListener("click", closeSettingsPanel);
-    $("settingsMask").addEventListener("click", closeSettingsPanel);
-    document.addEventListener("keydown", handleSettingsKeydown);
+    bindUI("tasks", $("refreshAll"), "click", refreshAll);
+    bindUI("tasks", $("runSearch"), "input", renderRuns);
+    bindUI("tasks", $("runStateFilter"), "change", renderRuns);
+    bindUI("tasks", $("eventFilter"), "change", renderEvents);
+    bindUI("tasks", $("tabChat"), "click", () => setView("chat"));
+    bindUI("tasks", $("tabTrajectory"), "click", () => setView("trajectory"));
+    bindUI("workflows", $("tabPlan"), "click", () => setView("plan"));
+    bindUI("workflows", $("tabChanges"), "click", () => setView("changes"));
+    bindUI("workflows", $("tabWorktrees"), "click", () => setView("worktrees"));
+    bindUI("tasks", $("focusRunInput"), "click", newSession);
+    bindUI("appearance", $("openSettings"), "click", () => openSettingsPane("general"));
+    bindUI("plugins", $("openPlugins"), "click", () => openSettingsPane("plugins"));
+    bindUI("engine", $("openEngine"), "click", () => openSettingsPane("engine"));
+    bindUI("engine", $("engineStrip"), "click", () => openSettingsPane("engine"));
+    bindUI("engine", $("pluginsOpenEngine"), "click", () => openSettingsPane("engine"));
+    bindUI("plugins", $("engineOpenPlugins"), "click", () => openSettingsPane("plugins"));
+    bindUI("engine", $("refreshEngine"), "click", () => { void refreshEngine(); });
+    bindUI("engine", $("restartEngine"), "click", () => { void restartCoreEngine(); });
+    bindUI("appearance", $("closeSettings"), "click", closeSettingsPanel);
+    bindUI("appearance", $("settingsMask"), "click", closeSettingsPanel);
+    bindUI("appearance", document, "keydown", handleSettingsKeydown);
     document.querySelectorAll(".settings-nav button").forEach((button) => {
-      button.addEventListener("click", () => openSettingsPane(button.dataset.pane));
+      bindUI("appearance", button, "click", () => openSettingsPane(button.dataset.pane));
     });
     bindTabNavigation(".settings-nav button", button => openSettingsPane(button.dataset.pane));
     bindTabNavigation(".view-tab", button => button.click());
-    $("messageAction").addEventListener("change", syncComposerMode);
-    $("automationRoute").addEventListener("change", syncAutomationRoute);
-    $("refreshUsagePane").addEventListener("click", loadUsagePane);
-    $("refreshPlugins").addEventListener("click", () => { void loadPlugins(); });
-    $("addPlugin").addEventListener("click", () => { void openPluginInstall(); });
-    $("pluginSearch").addEventListener("input", () => { if (pluginCatalog) renderPlugins(pluginCatalog); });
-    $("refreshSchedules").addEventListener("click", () => { void refreshAutomations().catch(error => setNotice(error.message || String(error), true)); });
-    $("cancelAutomationEdit").addEventListener("click", () => resetAutomationForm($("automationForm")));
-    $("cancelRun").addEventListener("click", async () => {
+    bindUI("tasks", $("messageAction"), "change", syncComposerMode);
+    bindUI("questions", $("questions"), "submit", event => {
+      const record = [...questionForms.values()].find(item => item.form === event.target);
+      if (!record) return;
+      event.preventDefault(); void submitQuestion(record);
+    });
+    bindUI("workflows", $("automationRoute"), "change", syncAutomationRoute);
+    bindUI("tasks", $("refreshUsagePane"), "click", loadUsagePane);
+    bindUI("plugins", $("refreshPlugins"), "click", () => { void loadPlugins(); });
+    bindUI("plugins", $("addPlugin"), "click", () => { void openPluginInstall(); });
+    bindUI("plugins", $("pluginSearch"), "input", () => { if (pluginCatalog) renderPlugins(pluginCatalog); });
+    bindUI("workflows", $("refreshSchedules"), "click", () => { void refreshAutomations().catch(error => setNotice(error.message || String(error), true)); });
+    bindUI("workflows", $("cancelAutomationEdit"), "click", () => resetAutomationForm($("automationForm")));
+    bindUI("tasks", $("cancelRun"), "click", async () => {
       if (!state.selectedRunId) return;
       $("cancelRun").disabled = true;
       try {
@@ -2870,8 +3227,9 @@ _DASHBOARD_HTML = r"""<!doctype html>
       if (state.refreshing) return;
       state.refreshing = true; $("refreshAll").disabled = true;
       try {
-        const results = await Promise.allSettled([refreshHealth(), refreshUsage(), refreshAutomations()]);
+        const results = await Promise.allSettled([refreshHealth(), refreshUsage(), refreshAutomations(), refreshEngine()]);
         if (results[0].status === "rejected") {
+          engineActiveRuns = null; syncEngineControls();
           $("healthDot").className = "status-dot offline"; $("daemonStatus").textContent = "Disconnected"; $("daemonStatusMetric").textContent = "Disconnected";
           throw results[0].reason;
         }
@@ -2888,13 +3246,28 @@ _DASHBOARD_HTML = r"""<!doctype html>
       } finally { state.refreshing = false; $("refreshAll").disabled = false; }
     }
 
-    void loadWorktrees();
-    initTheme();
-    initRail();
-    initMobileSidebar();
-    clearSelectedRun();
-    refreshAll();
-    setInterval(refreshAll, 3000);
+    async function mountDashboardServices() {
+      try {
+        const {mountDashboard} = await import("/assets/cordis-ui.mjs");
+        const features = Object.fromEntries(Object.entries(uiBindings).map(([id, bindings]) => [id, {bindings}]));
+        features.appearance.setup = () => { initTheme(); initRail(); initMobileSidebar(); };
+        features.appearance.dispose = () => { window.clearTimeout(noticeTimer); };
+        features.tasks.intervals = [{handler: refreshAll, milliseconds: 3000}];
+        features.tasks.dispose = () => { state.streaming = false; window.clearTimeout(streamTimer); resetStreamNode(); };
+        dashboardUI = await mountDashboard({scope: document, features, onError: error => setNotice(error.message || String(error), true)});
+        document.documentElement.dataset.uiEngine = "cordis";
+        document.documentElement.dataset.uiServices = String(dashboardUI.inspect().components.filter(component => component.state === "ACTIVE").length);
+        resolveDashboard(dashboardUI);
+        clearSelectedRun();
+        void loadWorktrees();
+        void refreshAll();
+      } catch (error) {
+        rejectDashboard(error);
+        $("sendMessage").disabled = true;
+        setNotice(`Dashboard services could not start: ${error.message || error}. Reload to retry.`, true);
+      }
+    }
+    void mountDashboardServices();
   </script>
 </body>
 </html>

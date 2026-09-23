@@ -1,19 +1,21 @@
 # Cordis plugins
 
-Libre Claw embeds the real Cordis framework used by DeepSeek Harness, through a
-small local JavaScript runtime. Plugins can register tools, provide services,
-declare dependencies, and use Cordis effects for lifecycle cleanup. Python keeps
-control of model requests, approvals, and task history.
+Libre Claw uses the real Cordis framework for its persistent core engine,
+browser UI, and isolated extension workers. Plugins can register tools, provide
+services, declare dependencies, and use Cordis effects for lifecycle cleanup.
+Python owns provider credentials, approval decisions, and durable task data.
+See [the engine architecture](ENGINE.md) for application and extension lifetimes.
 
-The runtime bundles `@deepseek-ai/cordis` 4.0.2 and Cosmokit under their MIT
-licenses. It does not install or run DeepSeek Harness, connect to DeepSeek
+The runtime bundles `@deepseek-ai/cordis` 4.0.2, Cosmokit, Schemastery, Zod, and
+selected upstream tool/message helpers with their license notices. It does not
+install or run the DeepSeek Harness application, connect to DeepSeek
 telemetry, or require a DeepSeek account.
 
 ## Manage plugins in the dashboard
 
 Open **Plugins** in the sidebar, or **Settings → Plugins**. The included **Text
 utilities** plugin is a ready-to-use offline example. Choose **Add plugin** to
-check a local folder, `.tgz` archive, or public `npm:package@version` package.
+check a local folder, `.tgz` archive, public GitHub repository, or npm package.
 Review its name, version, description, and declared tools before installing.
 Installation leaves a new plugin disabled; **Enable now** grants offline access
 for this project. Tools are available on the next message, including in an
@@ -21,9 +23,11 @@ existing TUI conversation. An in-progress turn keeps its existing tool catalog.
 
 Select an installed plugin for its configuration, tool descriptions, permissions,
 and **Check runtime**. Configuration edits remain staged until **Save**; **Reset**
-discards unsaved edits. A runtime check mounts and disposes the plugin under its
-existing grants; it does not run a tool or leave a service running. Disabled
-plugins must be enabled before this check.
+discards unsaved edits. A runtime check loads the plugin under its existing
+grants without calling a tool. Application-owned workers stay alive between
+calls; one-shot CLI checks stop their worker afterward. Disabled plugins must
+be enabled before this check. Nested Harness components expose their real
+configuration fields after an explicit activation attempt.
 
 **Remove** deletes the installation, configuration, and private state for all
 projects after confirmation. Disabling only revokes the current project's access
@@ -36,18 +40,24 @@ current project. Approval expires after 15 minutes; expired snapshots are remove
 on the next package operation or shutdown. Cancel discards a completed preview;
 installation cannot silently switch to a different package after review.
 
-Public npm packages must contain `libre-claw-plugin.json` and self-contained
-JavaScript, with no runtime package dependencies. Checking an `npm:` source
-contacts only the public npm registry, without inherited authentication or proxy
-settings, and verifies the archive integrity. Local and included packages work
-without a network request. Git URLs, arbitrary download URLs, and unadapted
-DeepSeek Harness bundles are rejected with compatibility guidance.
+Packages may use a Libre Claw manifest, compiled Cordis exports, or Harness's
+`package.json`/`cordis.patch.yml` bundle format. Harness tools are discovered after
+explicit activation. Runtime dependencies are resolved to bounded, pinned public
+npm packages and checked against their integrity hashes. Supplied SDK modules
+use Libre Claw's reviewed compatibility implementation.
+
+Public GitHub sources resolve a branch/tag to a commit before downloading its
+archive. Downloads use only the public npm registry and generated GitHub API /
+codeload addresses, without inherited credentials, npm configuration, proxies,
+or redirects. Included packages and dependency-free local folders remain offline.
+Private Git authentication, arbitrary download URLs, package build scripts, and
+uncompiled TypeScript are not accepted.
 
 ## Start from the terminal
 
 Use Node.js 22.19 or newer on macOS with `sandbox-exec` available. On Linux,
 offline plugins require Node.js 25 or newer with network permission
-support. Libre Claw refuses to start an offline plugin when it cannot enforce the
+support. Libre Claw refuses to start an offline runtime when it cannot enforce the
 network restriction. Windows is not supported by this integration yet. Nothing
 is downloaded when a plugin starts.
 
@@ -72,6 +82,9 @@ The TUI supports `/plugins`, `/plugins catalog`, `/plugins install <source>`,
 `/plugins disable <id>`. Quote paths containing spaces. Enabling from the TUI or
 dashboard always selects offline operation with no additional filesystem grants.
 Additional filesystem or network grants require the local CLI.
+Model access is separate: choose **Enable with model access**, or pass
+`--allow-model` to `cordis enable` / `/plugins enable`. The host performs model
+requests; the plugin never receives the provider key.
 
 ```sh
 libre-claw cordis list
@@ -82,6 +95,10 @@ libre-claw cordis remove local-word-count
 libre-claw cordis catalog
 libre-claw cordis install builtin:text-utilities
 libre-claw cordis enable text-utilities
+
+# Harness / Cordis packages with compiled entries.
+libre-claw cordis preview github:owner/plugin#v1.0.0
+libre-claw cordis install npm:@scope/plugin@1.0.0
 
 # Inspect package metadata without installing or executing it.
 libre-claw cordis preview ./my-plugin
@@ -101,18 +118,20 @@ project grants and settings; review, configure, and enable the new version expli
 The [network and privacy review](CORDIS_PRIVACY_REVIEW.md) records the bundled
 code inspection, reproducible build check, and outbound network regression tests.
 
-- Each invocation has a separate process and a private state directory scoped to
-  the plugin and project. Other plugins and projects do not share its grants.
+- Each plugin/project pair has a separate process and private state directory.
+  Persistent workers retain their own services between calls; other plugins and
+  projects do not share their grants. Applications close workers on shutdown.
 - The child receives tool arguments, the plugin's own JSON settings, and runtime
-  paths. It receives no automatic conversation history, memory, provider keys,
+  paths and opaque task identifiers. It can replay its own bounded session events,
+  but receives no automatic conversation history, memory, provider keys,
   parent environment, SSH agent sockets, or proxy settings.
 - Network access is denied by default. Filesystem access covers only the bundled
   runtime, installed plugin, its private state, and explicitly granted paths.
   Child processes, workers, native addons, WASI, and Node's SQLite API are not
   enabled. Process time, JavaScript heap, and IPC output are bounded.
 - There is no plugin telemetry, remote catalog, automatic update check, or npm
-  installation at startup. Explicit `npm:` package checks download metadata and
-  package bytes from `registry.npmjs.org`. Plugin console output is drained without being saved
+  installation at startup. Explicit package checks can download metadata and
+  package bytes from the public npm registry and GitHub. Plugin console output is drained without being saved
   to activity logs. The usual Libre Claw task history can still record tool calls
   and results.
 - A plugin cannot self-grant access in its manifest, call Libre Claw's privileged
@@ -133,6 +152,7 @@ your selected cloud model, like results from other Libre Claw tools.
 ```sh
 libre-claw cordis enable my-plugin --allow-network
 libre-claw cordis enable my-plugin --read ./docs --write ./generated
+libre-claw cordis enable my-plugin --allow-model
 ```
 
 Each enable command replaces this project's grants. Private state remains local
@@ -185,15 +205,17 @@ export default {
 dependencies, events, and cleanup inside the package. `ctx.libre.cordis` exposes
 the bundled `Context` and `Service` classes. The storage helper offers async
 `get(key)`, `set(key, jsonValue)`, and `delete(key)` with bounded JSON values.
-Use it for persistence; in-memory plugin state ends when the invocation exits.
+Use it for persistence across application restarts. In-memory state survives
+calls inside an application-owned worker and ends when that worker is stopped.
 
-DeepSeek Harness plugins that require its `llm`, `sessions`, or other harness
-services need adaptation to Libre Claw's deliberately narrower host API. This is
-Cordis framework integration, not unrestricted compatibility with every Harness
-plugin. Refer to the [Cordis tutorial](https://github.com/deepseek-ai/deepseek-harness/tree/master/docs/cordis-tutorial)
-for the underlying framework.
+Harness's tools, question service, plugin-owned session events/projections, and
+explicit model broker are supported. The reviewed Libre WebUI native-provider
+transport is adapted to a private host socket so Node can remain offline. The
+[compatibility section](ENGINE.md#harness-package-compatibility) lists the host
+API limits; unavailable services cause an explicit activation error.
 
-Set `[cordis].enabled = false` to disable Cordis tool exposure. `tool_timeout`
+Set `[cordis].enabled = false` to disable extensions and their services. The core
+engine remains available. `tool_timeout`
 defaults to 30 seconds. Project configuration cannot choose a plugin directory
 or executable: installation and grants are kept in the user's
 `~/.libre-claw/cordis` registry.

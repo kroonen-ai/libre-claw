@@ -1568,6 +1568,8 @@ async def _stream_codex_login(browser_login: bool, executable: str = "codex") ->
 
 from libre_claw.workflow_cli import workflow_group
 from libre_claw.cordis_cli import cordis_group
+from libre_claw.engine_cli import engine_group
 
 main.add_command(workflow_group)
 main.add_command(cordis_group)
+main.add_command(engine_group)

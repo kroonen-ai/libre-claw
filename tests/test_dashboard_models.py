@@ -20,7 +20,7 @@ def run_model_script(tmp_path: Path, assertions: str, *, with_endpoint: bool = F
     source = html[html.index("    let defaultModelConfig ="):html.index("    let llamacppGeneration =")]
     if with_endpoint:
         source += html[html.index("    let llamacppGeneration ="):html.index("    function usageTable(")]
-    source += html[html.index('    $("modelForm").addEventListener('):html.index("    const workflow =")]
+    source += html[html.index('    bindUI("models", $("modelForm"), '):html.index("    const workflow =")]
     script = tmp_path / "models.js"
     script.write_text(MODEL_DOM + source + assertions)
     result = subprocess.run([node, str(script)], text=True, capture_output=True)
@@ -29,6 +29,7 @@ def run_model_script(tmp_path: Path, assertions: str, *, with_endpoint: bool = F
 
 MODEL_DOM = r"""
 const assert = require('node:assert/strict');
+const bindUI = (_component, target, event, handler, options) => target.addEventListener(event, handler, options);
 class Element {
   constructor(id = '') { this.id = id; this.value = ''; this.textContent = ''; this.options = []; this.children = []; this.siblings = []; this.listeners = {}; this.dataset = {}; this.hidden = false; }
   after(child) { this.siblings.push(child); }

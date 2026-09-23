@@ -3,14 +3,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from benchmarks.coding_workflow.review_eval import prepare_review_fixture
 from libre_claw.config import load_config
-from libre_claw.core.git_review import capture_review, git_bytes
+from libre_claw.core.agent import AgentError
+from libre_claw.core.git_review import ReviewSnapshot, capture_review, git_bytes
 from libre_claw.core.reviewer import ReviewSnapshotFileTool, run_review
-from libre_claw.core.tools import ToolContext
+from libre_claw.core.tools import ToolContext, ToolRegistry
 from libre_claw.providers.base import Done, LLMProvider, TextDelta, ToolCallReady, Usage
 
 
@@ -67,3 +70,44 @@ async def test_review_uses_read_only_plan_and_complete_snapshot_manifest(tmp_pat
     assert "review_snapshot_file" in provider.system
     assert "verification_limits" in provider.system
     assert (workspace / "access.py").read_text() == original
+
+
+async def test_reviewer_error_closes_stream_before_workers_and_engine(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = load_config(working_directory=tmp_path)
+    snapshot = ReviewSnapshot(str(tmp_path), "unstaged", "revision", "base", "target", "", ())
+    order = []
+
+    class Engine:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            order.append("engine")
+
+    class Manager:
+        def __init__(self, **kwargs):
+            pass
+
+        async def aclose(self):
+            order.append("plugins")
+
+    class StreamAgent:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, prompt):
+            try:
+                yield AgentError("review stopped")
+            finally:
+                await asyncio.sleep(0)
+                order.append("agent")
+
+    monkeypatch.setattr("libre_claw.core.reviewer.CordisEngine", Engine)
+    monkeypatch.setattr("libre_claw.core.reviewer.CordisManager", Manager)
+    monkeypatch.setattr("libre_claw.core.reviewer.bind_cordis_manager", lambda *args: None)
+    monkeypatch.setattr("libre_claw.core.reviewer.create_builtin_registry", lambda *args: ToolRegistry())
+    monkeypatch.setattr("libre_claw.core.reviewer.Agent", StreamAgent)
+    with pytest.raises(ValueError, match="review stopped"):
+        await run_review(config, snapshot, provider=InspectReviewer())
+    assert order == ["agent", "plugins", "engine"]

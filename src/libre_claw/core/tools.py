@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from abc import ABC
 from collections.abc import Awaitable, Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
@@ -19,6 +20,11 @@ from libre_claw.core.session import UserAttachment
 
 
 PermissionLevel = Literal["allow", "ask", "deny"]
+_CURRENT_TOOL_CALL: ContextVar[ToolCall | None] = ContextVar("libre_claw_tool_call", default=None)
+
+
+def current_tool_call() -> ToolCall | None:
+    return _CURRENT_TOOL_CALL.get()
 
 
 @dataclass(frozen=True)
@@ -206,11 +212,14 @@ class ToolRegistry:
         return [tool.schema() for tool in self._tools.values()]
 
     async def execute(self, call: ToolCall) -> ToolResult:
+        token = _CURRENT_TOOL_CALL.set(call)
         try:
             tool = self.get(call.name)
             return await tool.invoke(call.arguments)
         except Exception as exc:
             return ToolResult(error=str(exc))
+        finally:
+            _CURRENT_TOOL_CALL.reset(token)
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools

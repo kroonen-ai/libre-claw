@@ -143,7 +143,7 @@ async def test_tui_remains_busy_until_session_and_run_finalization_finish(local_
     app = SimpleNamespace(
         config=local_config, session=Session(), agent=EmptyAgent(), run_store=store,
         _active_run_id=run.run_id, _resumed_run_id=run.run_id, _active_run_summary="",
-        _run_background_tasks=set(), _active_task=None, _pending_permission=None,
+        _run_background_tasks=set(), _active_task=None, _pending_permission=None, _user_questions={},
         _pending_key_setup=None, palette_open=False, _goal_max_turns=1,
         transcript=[SimpleNamespace(content="finished response")],
     )
@@ -198,7 +198,7 @@ async def test_tui_claimed_followup_keeps_ownership_until_next_task_is_registere
     app = SimpleNamespace(
         config=local_config, session=Session(), agent=EmptyAgent(), run_store=store,
         _active_run_id=run.run_id, _resumed_run_id=run.run_id, _active_run_summary="",
-        _run_background_tasks=set(), _active_task=None, _pending_permission=None,
+        _run_background_tasks=set(), _active_task=None, _pending_permission=None, _user_questions={},
         _pending_key_setup=None, _pending_attachments=[], palette_open=False,
         _goal_max_turns=1, daemon_client=None,
         transcript=[SimpleNamespace(content="finished response")],
@@ -316,7 +316,7 @@ async def test_stop_during_finalization_restores_unstarted_followup(local_config
             await store.save_session(run.run_id, state.session)
             return await store.finish_turn(run.run_id, "done", summary="Completed first turn", diff="keep existing diff")
 
-        app = SimpleNamespace(_active_run_id=run.run_id, run_store=store, _finish_active_run=finish)
+        app = SimpleNamespace(_active_run_id=run.run_id, run_store=store, _finish_active_run=finish, _user_questions={})
         task = asyncio.create_task(LibreClawApp._finish_local_turn(app, "done"))
     await asyncio.wait_for(entered.wait(), 5)
     assert await store.queued_messages(run.run_id) == [second]

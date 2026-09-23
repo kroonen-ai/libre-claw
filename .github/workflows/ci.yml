@@ -57,7 +57,7 @@ jobs:
         run: python -m pytest
 
       - name: Verify bundled Cordis runtime
-        run: node --test src/libre_claw/cordis_runtime/tests/*.test.mjs
+        run: node --test src/libre_claw/cordis_runtime/tests/*.test.mjs src/libre_claw/cordis_runtime/compat/tests/*.test.mjs
 
       - name: Validate fixed coding workflows without model credentials
         run: python -m benchmarks.coding_workflow.runner --offline --output artifacts/coding-workflow

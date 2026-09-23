@@ -11,6 +11,7 @@ from dataclasses import replace
 import pytest
 
 from libre_claw.config import load_config
+from libre_claw.core.agent import AgentTextDelta
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.tools import BaseTool, ToolContext, ToolRegistry, ToolResult
 from libre_claw.headless import run_headless
@@ -200,3 +201,43 @@ async def test_headless_deadline_finishes_atif_before_outer_cancellation(monkeyp
     assert payload["extra"]["completed"] is False
     assert payload["extra"]["error"] == result.error
     assert any(step.get("message") == "Keep this instruction" for step in payload["steps"])
+
+
+async def test_headless_consumer_error_closes_agent_before_plugin_and_engine_resources(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = load_config(working_directory=tmp_path)
+    config = replace(config, memory=replace(config.memory, enabled=False))
+    order = []
+
+    class Engine:
+        async def aclose(self):
+            order.append("engine")
+
+    class Manager:
+        def __init__(self, **kwargs):
+            pass
+
+        async def aclose(self):
+            order.append("plugins")
+
+    class StreamAgent:
+        def __init__(self, **kwargs):
+            self.engine = kwargs["engine"]
+
+        async def run(self, message):
+            try:
+                yield AgentTextDelta("first")
+            finally:
+                await asyncio.sleep(0)
+                order.append("agent")
+
+    def fail_consumer(text):
+        raise RuntimeError("consumer stopped")
+
+    monkeypatch.setattr("libre_claw.headless.CordisEngine", Engine)
+    monkeypatch.setattr("libre_claw.headless.CordisManager", Manager)
+    monkeypatch.setattr("libre_claw.headless.bind_cordis_manager", lambda *args: None)
+    monkeypatch.setattr("libre_claw.headless.Agent", StreamAgent)
+    with pytest.raises(RuntimeError, match="consumer stopped"):
+        await run_headless(config, "test", provider=ScriptedProvider([]), tool_registry=ToolRegistry(), on_text=fail_consumer)
+    assert order == ["agent", "plugins", "engine"]

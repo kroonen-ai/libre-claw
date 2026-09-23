@@ -24,6 +24,11 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v node >/dev/null 2>&1; then
+  info "Node.js is required for Cordis. Install Node 22.19+ on macOS or Node 25+ on Linux."
+  exit 1
+fi
+
 mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 
 case "$INSTALL_DIR" in
@@ -50,6 +55,9 @@ if [ -n "$EXTRAS" ]; then
 else
   "$INSTALL_DIR/.venv/bin/python" -m pip install -e "$INSTALL_DIR"
 fi
+
+info "Checking the offline Cordis runtime..."
+"$INSTALL_DIR/.venv/bin/libre-claw" engine check >/dev/null
 
 cat > "$BIN_DIR/libre-claw" <<EOF
 #!/usr/bin/env sh

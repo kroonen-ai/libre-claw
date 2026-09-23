@@ -3,7 +3,7 @@
 Libre Claw is a terminal-native autonomous coding agent harness built by
 [Kroonen AI](https://kroonen.ai). It gives you a serious local TUI,
 Telegram control, durable runs, persistent memory, browser tools, scheduled
-tasks, and multi-provider model routing in one Python application.
+tasks, and multi-provider model routing in one local application.
 
 It is built for developers who want an agent that can actually work in a
 project, ask before side effects, remember useful context, and keep running
@@ -22,7 +22,8 @@ Current release: Version `0.1.0`.
 | Durable runs | Every task gets a run ID, JSONL event log, summary, verification notes, and optional diff. |
 | Local dashboard | Start, inspect, cancel, and approve daemon-owned runs from a browser on localhost. |
 | Memory and skills | Local persistent memory, `SOUL.md` persona files, user/project `SKILL.md` workflows, and optional Vercel Skills discovery. |
-| Cordis plugins | Local tools and services with project-specific grants, offline defaults, and managed cleanup. [Guide](docs/CORDIS.md). |
+| Cordis engine | Persistent services coordinate agents, providers, tools, sessions, memory, and workflows. The dashboard has its own Cordis UI graph. [Architecture](docs/ENGINE.md). |
+| Cordis plugins | Import compiled Harness/Cordis packages, configure components, and run isolated tools or services with explicit project grants. [Guide](docs/CORDIS.md). |
 | Real tools | File edits, shell, code search, web search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
 | Provider routing | DeepSeek, Kimi Code/Moonshot, OpenRouter, Ollama/Ollama Cloud, llama.cpp/llama-swap, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
 | Reproducible evals | A Harbor adapter runs the real Libre Claw loop against Terminal-Bench 2.1. |
@@ -42,7 +43,9 @@ and the [implementation checklist](docs/CODING_WORKFLOW_CHECKLIST.md) for verifi
 
 ## Install
 
-Libre Claw uses Python 3.11+ and pip. Run the commands below from the app
+Libre Claw uses Python 3.11+, pip, and Node.js for its Cordis engine. Use Node
+22.19+ on macOS with `sandbox-exec`, or Node 25+ on Linux for enforced offline
+execution. Check your setup with `libre-claw engine check`. Run the commands below from the app
 repository. `npm install` is for the separate [website repository](https://github.com/kroonen-ai/libreclaw);
 running it here can select an unrelated `package.json` in a parent directory.
 

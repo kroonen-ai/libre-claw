@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
-from libre_claw.cordis_cli import manager_for
 from libre_claw.core.cordis_packages import CordisPackagePreviews
 
 if TYPE_CHECKING:
@@ -28,7 +27,7 @@ class PluginAPI:
     @property
     def previews(self) -> CordisPackagePreviews:
         if self._previews is None:
-            self._previews = CordisPackagePreviews(manager_for(self.server.config))
+            self._previews = CordisPackagePreviews(self.server.cordis_manager)
         return self._previews
 
     def routes(self) -> list[web.RouteDef]:
@@ -99,6 +98,7 @@ class PluginAPI:
                 raise ValueError("Check a package before installing it.")
             plugin = await self._write(self.previews.install, data["token"],
                                        self.server.config.general.working_directory)
+            await self.server.reconcile_plugins()
             return response({"plugin": plugin})
         except (ValueError, OSError, RuntimeError) as exc:
             return error(exc)
@@ -106,8 +106,12 @@ class PluginAPI:
     async def details(self, request: web.Request) -> web.Response:
         self._check(request)
         try:
-            plugin = await asyncio.to_thread(manager_for(self.server.config).details,
+            plugin = await asyncio.to_thread(self.server.cordis_manager.details,
                 request.match_info["plugin_id"], self.server.config.general.working_directory)
+            service = next((item for item in self.server.plugin_services.status(self.server.config.general.working_directory)
+                            if item["plugin_id"] == plugin["id"]), None)
+            if service is not None:
+                plugin["service"] = service
             return response({"plugin": plugin})
         except (ValueError, OSError, RuntimeError) as exc:
             return error(exc)
@@ -117,8 +121,10 @@ class PluginAPI:
             data = await self._body(request, {"config"})
             if not isinstance(data["config"], dict):
                 raise ValueError("Plugin configuration must be a JSON object.")
-            plugin = await self._write(manager_for(self.server.config).configure,
-                request.match_info["plugin_id"], self.server.config.general.working_directory, data["config"])
+            async with self._lock:
+                plugin = await self.server.cordis_manager.configure_async(
+                    request.match_info["plugin_id"], self.server.config.general.working_directory, data["config"])
+                await self.server.reconcile_plugins()
             return response({"plugin": plugin})
         except (ValueError, OSError, RuntimeError) as exc:
             return error(exc)
@@ -129,8 +135,14 @@ class PluginAPI:
             if not self.server.config.cordis.enabled:
                 raise ValueError("Cordis is disabled in configuration.")
             async with self._lock:
-                plugin = await manager_for(self.server.config).inspect(request.match_info["plugin_id"],
+                plugin = await self.server.cordis_manager.inspect(request.match_info["plugin_id"],
                     self.server.config.general.working_directory)
+                await self.server.reconcile_plugins()
+                service = next((item for item in self.server.plugin_services.status(self.server.config.general.working_directory)
+                                if item["plugin_id"] == request.match_info["plugin_id"]), None)
+                if service is not None:
+                    plugin["service"] = service
+                    plugin["state"] = service["state"].upper()
             return response({"plugin": plugin})
         except (ValueError, OSError, RuntimeError) as exc:
             return error(exc)
@@ -138,7 +150,9 @@ class PluginAPI:
     async def remove(self, request: web.Request) -> web.Response:
         self._check(request)
         try:
-            result = await self._write(manager_for(self.server.config).remove, request.match_info["plugin_id"])
+            async with self._lock:
+                result = await self.server.cordis_manager.remove_async(request.match_info["plugin_id"])
+                await self.server.reconcile_plugins()
             return response(result)
         except (ValueError, OSError, RuntimeError) as exc:
             return error(exc)

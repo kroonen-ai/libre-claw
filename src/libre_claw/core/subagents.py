@@ -139,7 +139,7 @@ class SubagentManager:
     def __init__(self, parent: Agent) -> None:
         self.parent = parent
         self.states: dict[str, SubagentState] = {}
-        self.events: asyncio.Queue[AgentEvent] = asyncio.Queue()
+        self.events: asyncio.Queue[AgentEvent] = parent.control_events
         self._spawn_count = 0
         self._turn_usage: dict[str, Usage | None] = {}
         self._spawn_lock = asyncio.Lock()
@@ -299,6 +299,7 @@ class SubagentManager:
 
         from libre_claw.core.agent import Agent
         return Agent(
+            engine=self.parent.engine,
             session=state.session, provider=child_provider, tool_registry=ToolRegistry(child_tools),
             permission_manager=permissions, system_prompt=self.parent.system_prompt,
             system_prompt_extra=(
@@ -367,7 +368,7 @@ class SubagentManager:
         self._save_states()
 
     async def resume_pending(self) -> AsyncIterator[AgentEvent]:
-        from libre_claw.core.agent import AgentPermissionRequest
+        from libre_claw.core.agent import AgentPermissionRequest, AgentUserQuestionRequest
 
         requests = list(self.parent.session.pending_subagent_resumes)
         if not requests:
@@ -388,7 +389,7 @@ class SubagentManager:
                     done, _ = await asyncio.wait((queued, state.task_handle), return_when=asyncio.FIRST_COMPLETED)
                     if queued in done:
                         event = queued.result()
-                        if not isinstance(event, AgentPermissionRequest) or not event.future.done():
+                        if not isinstance(event, (AgentPermissionRequest, AgentUserQuestionRequest)) or not event.future.done():
                             yield event
                 finally:
                     if not queued.done():
@@ -396,7 +397,7 @@ class SubagentManager:
                         await asyncio.gather(queued, return_exceptions=True)
             while not self.events.empty():
                 event = self.events.get_nowait()
-                if not isinstance(event, AgentPermissionRequest) or not event.future.done():
+                if not isinstance(event, (AgentPermissionRequest, AgentUserQuestionRequest)) or not event.future.done():
                     yield event
             results.append(state.snapshot())
         self.parent.session.add_user_message("Results from explicitly requested worker recovery:\n" + json.dumps(results, ensure_ascii=True))
@@ -408,11 +409,17 @@ class SubagentManager:
             await self._persist()
 
     async def _run(self, state: SubagentState, child: Agent, prompt: str) -> None:
-        from libre_claw.core.agent import AgentDone, AgentError, AgentPermissionRequest, AgentTextDelta, AgentToolCall
+        from libre_claw.core.agent import AgentDone, AgentError, AgentPermissionRequest, AgentTextDelta, AgentToolCall, AgentUserQuestionRequest
         heartbeat = asyncio.create_task(self._heartbeat(state), name=f"subagent-checkpoint-{state.id}")
         permission_futures: list[asyncio.Future[Any]] = []
         try:
             async for event in child.run(prompt):
+                if isinstance(event, AgentUserQuestionRequest):
+                    permission_futures.append(event.future)
+                    state.status = "blocked"
+                    await self._persist()
+                    self.events.put_nowait(event)
+                    continue
                 if isinstance(event, AgentPermissionRequest):
                     permission_futures.append(event.future)
                     state.status = "blocked"

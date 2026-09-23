@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import unquote, urlparse
 
+import httpx
 from pygments.token import Token as PygmentsToken
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown
@@ -135,7 +136,10 @@ from libre_claw.providers.model_catalog import ModelCatalog, cached_models, disc
 from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.release import latest_release_notes
-from libre_claw.tools_builtin import create_builtin_registry, refresh_cordis_tools
+from libre_claw.tools_builtin import create_builtin_registry, refresh_cordis_tools, bind_cordis_manager
+from libre_claw.core.cordis_engine import CordisEngine
+from libre_claw.core.cordis import CordisManager
+from libre_claw.core.questions import AgentUserQuestionRequest, text_answer, validate_questions
 from libre_claw.updater import (
     UpdateError,
     libre_claw_checkout_path,
@@ -301,6 +305,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/usage", "/usage <provider>|all|attribution|presets", "Show tokens, cache reuse, and cost"),
     SlashCommand("/plugins", "/plugins [catalog|install|details|inspect|enable|disable] [value]", "Manage Cordis plugins for this project"),
+    SlashCommand("/engine", "/engine", "Inspect Cordis services and execution state"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
     SlashCommand("/models", "/models [provider] [search] [--refresh]", "Discover provider models"),
     SlashCommand("/fallback", "/fallback list|set|clear", "Manage fallback provider/model slots"),
@@ -768,6 +773,8 @@ class LibreClawApp(App[None]):
         self._palette_selected_index = 0
         self._active_task: asyncio.Task[None] | None = None
         self._pending_permission: AgentPermissionRequest | None = None
+        self._user_questions: dict[str, tuple[list[dict[str, Any]], asyncio.Future | None, str]] = {}
+        self._answering_questions: set[str] = set()
         self._pending_key_setup: PendingProviderKeySetup | None = None
         self._pending_daemon_permission_run_id: str | None = None
         self._tool_entry_by_call_id: dict[str, int] = {}
@@ -797,6 +804,9 @@ class LibreClawApp(App[None]):
         self._global_model_config_path = global_config_path(self.config)
         self._global_model_config_mtime_ns = _path_mtime_ns(self._global_model_config_path)
         self._daemon_model_sync_task: asyncio.Task[None] | None = None
+        self.engine = CordisEngine()
+        self.cordis_manager = CordisManager(config=self.config, tool_timeout=self.config.cordis.tool_timeout, persistent=True)
+        self.cordis_manager.engine = lambda: self.engine
 
         self._rebuild_agent()
 
@@ -868,6 +878,8 @@ class LibreClawApp(App[None]):
         self._update_slash_suggestions("")
         self.set_interval(1, self._update_status)
         self.set_interval(0.75, self._update_petdex_panel)
+        if self.daemon_client is None:
+            self.set_interval(5, self._reconcile_cordis)
         self._update_petdex_panel()
         await self._initialize_memory()
         if self.daemon_client is not None:
@@ -880,18 +892,34 @@ class LibreClawApp(App[None]):
 
     async def on_unmount(self) -> None:
         self._local_queue_closed = True
-        for task in getattr(self, "_local_queue_wakeups", {}).values():
-            task.cancel()
-        if self._active_task is not None and not self._active_task.done():
-            self._active_task.cancel()
-        if self._heartbeat_task is not None and not self._heartbeat_task.done():
-            self._heartbeat_task.cancel()
-        if self._daemon_model_sync_task is not None and not self._daemon_model_sync_task.done():
-            self._daemon_model_sync_task.cancel()
-        for task in self._memory_background_tasks:
-            task.cancel()
-        for task in self._model_catalog_tasks.values():
-            task.cancel()
+        self._clear_user_questions()
+        tasks = {
+            task for task in (
+                self._active_task, self._heartbeat_task, self._daemon_model_sync_task,
+                *getattr(self, "_local_queue_wakeups", {}).values(),
+                *self._memory_background_tasks, *self._model_catalog_tasks.values(),
+            ) if task is not None and task is not asyncio.current_task()
+        }
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        # Turn finalizers can enqueue durable events while cancellation settles.
+        # Finish those writes before disposing the services they refer to.
+        if self._run_background_tasks:
+            await asyncio.gather(*tuple(self._run_background_tasks), return_exceptions=True)
+        try:
+            await self.cordis_manager.aclose()
+        finally:
+            await self.engine.aclose()
+
+    async def _reconcile_cordis(self) -> None:
+        self.cordis_manager.config = self.config
+        try:
+            await self.cordis_manager.reconcile_workers(self.config.general.working_directory)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._append_system(f"Plugin runtime: {exc}")
 
     def _register_palette_theme(self) -> None:
         palette = self._theme
@@ -1146,6 +1174,37 @@ class LibreClawApp(App[None]):
             self._handle_permission_input(text)
             return
 
+        if self._user_questions and not text.startswith("/"):
+            request_id = next(iter(self._user_questions))
+            questions, future, run_id = self._user_questions[request_id]
+            if request_id in self._answering_questions:
+                self._append_system("An answer is already being sent.")
+                return
+            if future is not None and future.done():
+                self._user_questions.pop(request_id, None)
+                self._append_system("That question is no longer waiting for an answer.")
+                self._update_shell_chrome()
+                return
+            else:
+                try:
+                    answers = text_answer(questions, text)
+                    self._answering_questions.add(request_id)
+                    if run_id and self.daemon_client is not None:
+                        await self.daemon_client.answer_question(run_id, request_id, answers)
+                    elif future is not None:
+                        future.set_result(answers)
+                        self._record_run_event_later("user_question_answered", {"request_id": request_id, **answers})
+                    self._user_questions.pop(request_id, None)
+                    if not run_id and not self._user_questions and self._pending_permission is None:
+                        self._set_run_state_later("running")
+                    self._append_system("Answer sent.")
+                    self._update_shell_chrome()
+                except (ValueError, OSError, RuntimeError, httpx.HTTPError) as exc:
+                    self._append_system(f"Could not send answer: {exc}")
+                finally:
+                    self._answering_questions.discard(request_id)
+                return
+
         parsed: ParsedTUIInput | None = None
         if text.startswith("/"):
             command_name = text.split(maxsplit=1)[0].lower()
@@ -1264,6 +1323,13 @@ class LibreClawApp(App[None]):
                 self._append_system(await plugin_command(self.config, argument))
             except (ValueError, OSError, RuntimeError) as exc:
                 self._append_system(f"Cordis: {exc}")
+            return
+        if command == "/engine":
+            try:
+                status = await self.daemon_client.engine_status() if self.daemon_client else await self.engine.inspect()
+                self._append_system(json.dumps(status, indent=2))
+            except (ValueError, OSError, RuntimeError) as exc:
+                self._append_system(f"Cordis engine: {exc}")
             return
         if command == "/model":
             tokens = argument.split(maxsplit=1)
@@ -1679,6 +1745,10 @@ class LibreClawApp(App[None]):
             self.query_one("#input", Input).focus()
 
     async def _finish_local_turn(self, state: str, *, summary: str = "") -> dict[str, Any] | None:
+        for _, future, _ in self._user_questions.values():
+            if future is not None and not future.done():
+                future.cancel()
+        self._user_questions.clear()
         run_id = self._active_run_id
         finishing = asyncio.create_task(self._finish_active_run(state, summary=summary))
         queued, cancelled = await settle_finalization(finishing)
@@ -1783,6 +1853,7 @@ class LibreClawApp(App[None]):
                 self._render_transcript()
             self._append_system(f"Daemon run failed: {exc}")
         finally:
+            self._clear_user_questions(self._active_run_id)
             self._pending_permission = None
             self._pending_daemon_permission_run_id = None
             self._hide_permission_prompt()
@@ -1807,6 +1878,7 @@ class LibreClawApp(App[None]):
             run = _object_payload(detail.get("run"))
             state = str(run.get("state", ""))
             if state in {"done", "failed", "cancelled"}:
+                self._clear_user_questions(run_id)
                 self._resumed_run_id = run_id
                 if hasattr(self.daemon_client, "get_session"):
                     snapshot = await self.daemon_client.get_session(run_id)
@@ -1814,6 +1886,8 @@ class LibreClawApp(App[None]):
                 self._active_run_id = None
                 await self._refresh_artifact_panel_for_run_id(run_id)
                 return
+            if "pending_questions" in detail:
+                self._sync_daemon_questions(run_id, detail["pending_questions"])
             await asyncio.sleep(max(0.1, self.config.daemon.poll_interval))
 
     def _handle_daemon_event(self, run_id: str, raw_event: dict[str, Any], assistant_index: int) -> None:
@@ -1827,6 +1901,19 @@ class LibreClawApp(App[None]):
             return
         if event_type == "subagent_update":
             self._append_system(f"Subagent {data.get('id')}: {data.get('status')} - {data.get('task')}" + (f"\n{str(data['output'])[:1600]}" if data.get("output") else ""))
+            return
+        if event_type == "user_question":
+            try:
+                request_id = str(data.get("request_id", ""))
+                if not request_id:
+                    raise ValueError("Missing question request ID")
+                self._show_user_question(request_id, validate_questions(data.get("questions")), None, run_id)
+            except ValueError:
+                self._append_system("The daemon sent an invalid question request.")
+            return
+        if event_type == "user_question_answered":
+            self._user_questions.pop(str(data.get("request_id", "")), None)
+            self._update_shell_chrome()
             return
         if event_type in {"run_started", "user_message"}:
             return
@@ -1889,6 +1976,7 @@ class LibreClawApp(App[None]):
             )
             return
         if event_type == "run_finished":
+            self._clear_user_questions(run_id)
             self._append_system(f"Daemon run {run_id} finished: {data.get('state', 'done')}")
             if assistant_index < len(self.transcript):
                 assistant_text = self.transcript[assistant_index].content
@@ -2031,6 +2119,12 @@ class LibreClawApp(App[None]):
         *,
         stop_on_error: bool,
     ) -> tuple[bool, bool]:
+        if isinstance(event, AgentUserQuestionRequest):
+            self._flush_stream_buffer(assistant_index, stream_buffer)
+            self._show_user_question(event.request_id, event.questions, event.future)
+            self._record_run_event_later("user_question", {"request_id": event.request_id, "questions": event.questions})
+            self._set_run_state_later("blocked")
+            return True, False
         if isinstance(event, AgentSubagentUpdate):
             item = event.snapshot
             self._record_run_event_later("subagent_update", item)
@@ -2382,6 +2476,10 @@ class LibreClawApp(App[None]):
         return queued
 
     def _cancel_active_generation(self, quiet: bool = False, *, cancel_daemon_run: bool = True) -> None:
+        for _, future, _ in self._user_questions.values():
+            if future is not None and not future.done():
+                future.cancel()
+        self._user_questions.clear()
         if self._pending_permission is not None and not self._pending_permission.future.done():
             self._pending_permission.future.set_result("deny")
             self._pending_permission = None
@@ -3421,6 +3519,9 @@ class LibreClawApp(App[None]):
         if self._pending_permission is not None:
             self._append_system("Heartbeat skipped: a permission prompt is waiting.")
             return
+        if self._user_questions:
+            self._append_system("Heartbeat skipped: a question is waiting for your answer.")
+            return
         prompt = heartbeat_prompt(self.config, surface="tui")
         self._append_system("Heartbeat check started.")
         await self.handle_user_input(prompt)
@@ -4272,12 +4373,14 @@ class LibreClawApp(App[None]):
             self.provider_error = str(exc)
             return
         try:
-            tool_registry = create_builtin_registry(self.config, memory_store=self.memory_store)
+            self.cordis_manager.config = self.config
+            tool_registry = bind_cordis_manager(create_builtin_registry(self.config, memory_store=self.memory_store), self.cordis_manager)
         except Exception as exc:
             self.provider_error = str(exc)
             return
 
         self.agent = Agent(
+            engine=self.engine,
             session=self.session,
             provider=provider,
             tool_registry=tool_registry,
@@ -4423,6 +4526,8 @@ class LibreClawApp(App[None]):
             return "API key hidden · Enter save · /cancel back"
         if self.palette_open:
             return "↑↓ choose · Enter run · Tab fill · Esc close"
+        if self._user_questions:
+            return "Enter send answer · /cancel stop task"
         if self._slash_suggestions:
             return "↑↓ choose · Tab fill · Enter select"
         if self._goal_description is not None:
@@ -5047,11 +5152,13 @@ class LibreClawApp(App[None]):
         elapsed = int(time.monotonic() - self._started_at)
         if self._pending_permission is not None:
             active = "needs approval"
+        elif self._user_questions:
+            active = "needs your answer"
         elif self._goal_description is not None and self._active_task is not None and not self._active_task.done():
             active = f"goal {self._goal_turn}/{self._goal_max_turns}"
         else:
             active = "running" if self._active_task is not None and not self._active_task.done() else "idle"
-        activity = f"{elapsed}s | {active}" if active not in {"idle", "needs approval"} else active
+        activity = f"{elapsed}s | {active}" if active not in {"idle", "needs approval", "needs your answer"} else active
         if self.is_running and 0 < self.size.width < 140:
             live_state = f"{active} {elapsed}s" if active == "running" else active
             suffix = f"{_format_usage_cost(self.usage)}  ·  {live_state}"
@@ -5155,6 +5262,52 @@ class LibreClawApp(App[None]):
             self._set_tui_theme(theme)
             self._append_system(f"Global theme changed to {THEME_PALETTES[theme].label}; TUI session updated.")
 
+    def _show_user_question(self, request_id: str, questions: list[dict[str, Any]],
+                            future: asyncio.Future | None = None, run_id: str = "") -> None:
+        if request_id in self._user_questions:
+            return
+        self._user_questions[request_id] = (questions, future, run_id)
+        lines = ["Input needed"]
+        for question in questions:
+            lines.append(f"{question['header'] + ': ' if question.get('header') else ''}{question['question']}")
+            for index, option in enumerate(question.get("options", []), 1):
+                lines.append(f"  {index}. {option['label']}" + (f" — {option['description']}" if option.get("description") else ""))
+        if len(questions) == 1 and not questions[0].get("multiSelect"):
+            lines.append("Reply with an option number or your own answer.")
+        else:
+            example = {"answers": [{"id": question["id"], "selected": [], "custom": "your answer"} for question in questions]}
+            lines.append("Reply with JSON. Put chosen option labels in selected, or write your own answer in custom:")
+            lines.append(json.dumps(example, ensure_ascii=False))
+        lines.append("Use /cancel to stop the task.")
+        self._append_system("\n".join(lines))
+        self._update_shell_chrome()
+
+    def _clear_user_questions(self, run_id: str | None = None) -> None:
+        for request_id, (_, future, source_run) in list(self._user_questions.items()):
+            if run_id is not None and source_run != run_id:
+                continue
+            if future is not None and not future.done():
+                future.cancel()
+            self._user_questions.pop(request_id, None)
+
+    def _sync_daemon_questions(self, run_id: str, pending: Any) -> None:
+        if not isinstance(pending, list):
+            return
+        valid = {}
+        for item in pending:
+            try:
+                if not isinstance(item, dict) or not isinstance(item.get("request_id"), str) or not item["request_id"]:
+                    raise ValueError("Invalid question request")
+                valid[item["request_id"]] = validate_questions(item.get("questions"))
+            except ValueError:
+                continue
+        for request_id, (_, _, source_run) in list(self._user_questions.items()):
+            if source_run == run_id and request_id not in valid:
+                self._user_questions.pop(request_id, None)
+        for request_id, questions in valid.items():
+            self._show_user_question(request_id, questions, None, run_id)
+        self._update_shell_chrome()
+
     def _input_placeholder(self) -> str:
         if self.palette_open:
             return "Command palette query..."
@@ -5162,6 +5315,11 @@ class LibreClawApp(App[None]):
             return f"Paste {self._pending_key_setup.provider} API key. It is hidden. Type /cancel to abort."
         if self._pending_permission is not None:
             return "Review above · y allow once / n deny"
+        if self._user_questions:
+            questions = next(iter(self._user_questions.values()))[0]
+            if len(questions) != 1 or questions[0].get("multiSelect"):
+                return "Answer with the JSON format shown above"
+            return "Answer the pending question · choose a number or type your response"
         if self._goal_description is not None:
             return "Goal mode active... (/goal status, /goal stop)"
         if self._active_task is not None and not self._active_task.done():

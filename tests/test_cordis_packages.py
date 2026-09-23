@@ -193,10 +193,101 @@ async def test_close_deletes_every_stage_and_rejects_future_previews(previews, w
         await previews.preview("builtin:text-utilities", workspace)
 
 
-@pytest.mark.parametrize("source", ["./local", "../local", "example-plugin", "https://example.com/plugin.tgz", "https://github.com/owner/repo", "git@github.com:owner/repo.git"])
+@pytest.mark.parametrize("source", ["./local", "../local", "not a package", "https://example.com/plugin.tgz", "git@github.com:owner/repo.git"])
 async def test_unsupported_sources_have_compatibility_guidance(previews, workspace, source):
-    with pytest.raises(CordisError, match="Harness bundles need a Libre Claw adapter"):
+    with pytest.raises(CordisError, match="compiled Cordis package"):
         await previews.preview(source, workspace)
+
+
+@pytest.mark.parametrize("source", ["https://github.com/example/plugin", "https://github.com/example/plugin.git#main", "github:example/plugin#feature/test"])
+async def test_public_github_sources_are_pinned_before_download(previews, workspace, source, monkeypatch):
+    commit = "a" * 40
+    data = archive_bytes([(f"plugin-{commit}/{name}", value) for name, value in plugin_files().items()])
+    seen = []
+    def handler(request):
+        seen.append(request)
+        assert "authorization" not in request.headers and "cookie" not in request.headers
+        if request.url.host == "api.github.com":
+            return httpx.Response(200, json={"sha": commit, "url": "https://attacker.invalid/ignored"},
+                                  headers={"Set-Cookie": "do-not-send=private; Domain=.github.com"})
+        assert request.url.host == "codeload.github.com"
+        assert request.url.path == f"/example/plugin/tar.gz/{commit}"
+        return httpx.Response(200, content=data)
+    options = npm_transport(monkeypatch, handler)
+    preview = await previews.preview(source, workspace)
+    assert preview["source_kind"] == "github" and preview["resolved_commit"] == commit
+    assert preview["source"] == f"github:example/plugin#{commit}"
+    assert previews.install(preview["token"], workspace)["enabled"] is False
+    assert len(seen) == 2
+    assert options[0]["trust_env"] is False and options[0]["follow_redirects"] is False
+
+
+@pytest.mark.parametrize("source", [
+    "https://github.com/owner/repo/tree/main", "https://user:secret@github.com/owner/repo",
+    "https://github.com/owner/repo?access_token=secret", "github:../repo", "github:owner/repo#bad\\ref",
+    "http://github.com/owner/repo", "https://github.com.attacker.invalid/owner/repo",
+])
+def test_github_source_parser_rejects_credentials_and_other_routes(source):
+    with pytest.raises(CordisError):
+        packages._github_spec(source)
+
+
+@pytest.mark.parametrize("response", [
+    httpx.Response(302, headers={"Location": "https://attacker.invalid/source.tgz"}),
+    httpx.Response(200, json={"sha": "main"}),
+    httpx.Response(200, json={"sha": "../private"}),
+    httpx.Response(404, json={"message": "Not Found"}),
+])
+async def test_github_bad_resolution_cannot_fetch_or_stage(previews, workspace, monkeypatch, response):
+    calls = []
+    def handler(request):
+        calls.append(str(request.url))
+        return response
+    npm_transport(monkeypatch, handler)
+    with pytest.raises(CordisError):
+        await previews.preview("github:owner/repo", workspace)
+    assert len(calls) == 1 and not previews._previews and not previews.manager.root.exists()
+
+
+async def test_github_archive_redirects_are_not_followed(previews, workspace, monkeypatch):
+    def handler(request):
+        if request.url.host == "api.github.com":
+            return httpx.Response(200, json={"sha": "b" * 40})
+        assert request.url.host == "codeload.github.com"
+        return httpx.Response(302, headers={"Location": "http://127.0.0.1:8766/config"})
+    npm_transport(monkeypatch, handler)
+    with pytest.raises(CordisError, match="redirect"):
+        await previews.preview("github:owner/repo", workspace)
+    assert not previews._previews
+
+
+async def test_github_exact_commit_cannot_be_silently_replaced(previews, workspace, monkeypatch):
+    calls = []
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(200, json={"sha": "b" * 40})
+    npm_transport(monkeypatch, handler)
+    with pytest.raises(CordisError, match="different commit"):
+        await previews.preview("github:owner/repo#" + "a" * 40, workspace)
+    assert len(calls) == 1
+
+
+async def test_bare_npm_is_supported_and_existing_relative_folder_wins(previews, workspace, monkeypatch):
+    data = packaged_archive()
+    calls = []
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(200, content=data) if request.url.path.endswith("tgz") else httpx.Response(200, json=npm_metadata(data))
+    npm_transport(monkeypatch, handler)
+    result = await previews.preview("example-plugin@1.0.0", workspace)
+    assert result["source"] == "npm:example-plugin@1.0.0"
+    calls.clear()
+    source = workspace / "example-plugin"
+    source.mkdir()
+    for name, content in plugin_files().items():
+        (source / name).write_bytes(content)
+    result = await previews.preview("example-plugin", workspace)
+    assert result["source_kind"] == "directory" and calls == []
 
 
 async def test_tilde_local_path_is_supported(previews, workspace, tmp_path, monkeypatch):

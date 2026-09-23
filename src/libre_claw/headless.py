@@ -7,6 +7,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import Callable, Sequence
+from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +22,9 @@ from libre_claw.core.agent import (
     AgentTextDelta,
 )
 from libre_claw.core.memory import MemoryItem, MemoryStore
+from libre_claw.core.cordis_engine import CordisEngine
+from libre_claw.core.cordis import CordisManager
+from libre_claw.core.questions import AgentUserQuestionRequest
 from libre_claw.core.permissions import PermissionManager
 from libre_claw.core.session import Session
 from libre_claw.core.skills import SkillStore
@@ -29,7 +33,7 @@ from libre_claw.core.tools import ToolRegistry
 from libre_claw.providers.base import LLMProvider, Usage
 from libre_claw.providers.factory import create_fallback_providers, create_provider
 from libre_claw.providers.moonshot_metadata import apply_moonshot_model_limits
-from libre_claw.tools_builtin import create_builtin_registry
+from libre_claw.tools_builtin import create_builtin_registry, bind_cordis_manager
 
 
 TextCallback = Callable[[str], None]
@@ -77,6 +81,8 @@ async def run_headless(
 
     store = memory_store or MemoryStore()
     registry = tool_registry or create_builtin_registry(config, store)
+    cordis = CordisManager(config=config, tool_timeout=config.cordis.tool_timeout, persistent=True)
+    bind_cordis_manager(registry, cordis)
     permissions = PermissionManager(config.permissions)
     if auto_approve:
         permissions.allow_tools_for_session(_tool_names(registry))
@@ -102,6 +108,7 @@ async def run_headless(
     )
     session = RecordingSession() if trajectory_path is not None else Session()
     agent = Agent(
+        engine=CordisEngine(),
         session=session,
         provider=provider or create_provider(config),
         tool_registry=registry,
@@ -129,6 +136,7 @@ async def run_headless(
         ),
         deadline_reserve_seconds=deadline_reserve_seconds,
     )
+    cordis.engine = lambda: agent.engine
 
     chunks: list[str] = []
     usage: Usage | None = None
@@ -170,25 +178,34 @@ async def run_headless(
         )
 
     try:
-        async for event in agent.run(user_message):
-            if isinstance(event, AgentTextDelta):
-                chunks.append(event.text)
-                if on_text is not None:
-                    on_text(event.text)
-            elif isinstance(event, AgentPermissionRequest):
-                resolution = "always_allow_tool" if auto_approve else "deny"
-                if not event.future.done():
-                    event.future.set_result(resolution)
-            elif isinstance(event, AgentDone):
-                usage = event.usage
-            elif isinstance(event, AgentError):
-                error = event.message
+        async with aclosing(agent.run(user_message)) as stream:
+            async for event in stream:
+                if isinstance(event, AgentUserQuestionRequest):
+                    if not event.future.done():
+                        event.future.set_exception(ValueError("User questions require an interactive dashboard or TUI."))
+                elif isinstance(event, AgentTextDelta):
+                    chunks.append(event.text)
+                    if on_text is not None:
+                        on_text(event.text)
+                elif isinstance(event, AgentPermissionRequest):
+                    resolution = "always_allow_tool" if auto_approve else "deny"
+                    if not event.future.done():
+                        event.future.set_result(resolution)
+                elif isinstance(event, AgentDone):
+                    usage = event.usage
+                elif isinstance(event, AgentError):
+                    error = event.message
     except asyncio.CancelledError:
         checkpoint("Run was cancelled before completion.", strict=False)
         raise
     except Exception as exc:
         checkpoint(f"Run stopped unexpectedly: {exc}", strict=False)
         raise
+    finally:
+        try:
+            await cordis.aclose()
+        finally:
+            await agent.engine.aclose()
 
     if isinstance(session, RecordingSession):
         session.set_checkpoint_callback(None)

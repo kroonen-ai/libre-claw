@@ -119,6 +119,11 @@ DASHBOARD_CSS = r"""
     .send-btn svg { width: 16px; height: 16px; }
     .status-strip { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 5px 9px; padding: 9px 0 0; font-size: 10px; color: var(--muted); }
     .status-strip .sep { color: var(--line-strong); }
+    .status-strip .engine-strip { padding: 0; min-height: 20px; border: 0; background: transparent; color: var(--muted); font: inherit; }
+    .status-strip .engine-strip::before { content: '■'; font-size: 7px; margin-inline-end: 6px; }
+    .status-strip .engine-strip.ready::before { color: var(--ok); }
+    .status-strip .engine-strip.danger { color: var(--danger); }
+    .status-strip .engine-strip:hover { color: var(--text); }
     .notice { display: none; }
     .notice.visible { display: block; margin: 0 0 10px; padding: 9px 12px; background: var(--accent-soft); border: 1px solid var(--line); border-radius: var(--radius-small); color: var(--soft); font-size: 12px; }
     .notice.error { color: var(--danger); background: var(--danger-soft); }
@@ -127,6 +132,24 @@ DASHBOARD_CSS = r"""
     .row, .workflow-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .row.end { justify-content: flex-end; }
     .approval button { font-size: 11px; }
+    #questions { max-height: min(52dvh, 520px); overflow-y: auto; overscroll-behavior: contain; }
+    .user-question { margin: 0 0 12px; padding: 18px; border: 1px solid var(--accent); background: var(--surface); }
+    .user-question h3 { margin: 0 0 18px; font-size: 11px; color: var(--accent); }
+    .user-question fieldset { min-width: 0; padding: 0; border: 0; margin: 0 0 22px; }
+    .user-question legend { width: 100%; font-size: 13px; line-height: 1.7; color: var(--text); margin-bottom: 10px; overflow-wrap: anywhere; }
+    .question-header { color: var(--muted); font-size: 10px; margin: 0 0 12px; }
+    .question-options { display: grid; gap: 8px; }
+    .question-option { display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--line); padding: 12px; cursor: pointer; background: var(--bg); }
+    .question-option:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+    .question-option input { flex: none; width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); }
+    .question-option span { display: grid; gap: 5px; min-width: 0; }
+    .question-option strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+    .question-option small { color: var(--muted); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
+    .question-written { display: grid; gap: 8px; margin-top: 14px; font-size: 10px; color: var(--muted); }
+    .question-written textarea { width: 100%; min-height: 66px; max-height: 220px; font: 12px/1.7 var(--font-mono); resize: vertical; }
+    .question-actions { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .question-actions .hint { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+    .question-actions button { flex: none; font-size: 11px; }
     button.primary { color: var(--bg); background: var(--text); border-color: var(--text); font-weight: 600; }
     button.primary:hover { opacity: .9; }
     .empty { padding: 28px 14px; color: var(--muted); font-size: 12px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius); }
@@ -262,6 +285,38 @@ DASHBOARD_CSS = r"""
     .endpoint-row input { width: 100%; }
     #llamacppStatus { margin: 0; overflow-wrap: anywhere; }
     .plugin-scope { display: grid; gap: 6px; padding: 16px; border: 1px solid var(--line); border-inline-start: 2px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); }
+    .inline-link { min-height: 24px; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-align: start; }
+    .engine-overview { padding: 22px; border: 1px solid var(--line-strong); border-inline-start: 2px solid var(--accent); background: var(--bg); }
+    .engine-overview-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .engine-overview-top > div { display: grid; gap: 8px; min-width: 0; }
+    .engine-overview .eyebrow { color: var(--muted); font-size: 10px; }
+    .engine-overview strong { font-size: 20px; font-weight: 500; }
+    .engine-overview .hint { margin: 16px 0 0; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+    .engine-privacy { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 18px; }
+    .engine-privacy-badge { font-size: 10px; color: var(--muted); line-height: 1.6; }
+    .engine-privacy-badge::before { content: '·'; color: var(--accent); margin-inline-end: 6px; }
+    .engine-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 26px 0 14px; }
+    .engine-section-heading h4, .engine-extensions h4 { margin: 0; font-size: 13px; font-weight: 500; }
+    .engine-components { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .engine-component { min-width: 0; padding: 18px; border: 1px solid var(--line); background: var(--bg); }
+    .engine-component-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+    .engine-component-head h4 { margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+    .engine-service-state { color: var(--muted); font-size: 9px; letter-spacing: .3px; }
+    .engine-service-state.active { color: var(--ok); }
+    .engine-service-state::before { content: '■'; margin-inline-end: 5px; font-size: 6px; vertical-align: 1px; }
+    .engine-dependencies { color: var(--muted); font-size: 10px; line-height: 1.8; min-height: 36px; margin: 9px 0 14px; overflow-wrap: anywhere; }
+    .engine-service-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; padding-top: 12px; border-top: 1px solid var(--line); }
+    .engine-service-counts dt { font-size: 8px; color: var(--muted); }
+    .engine-service-counts dd { font-size: 18px; margin: 6px 0 0; color: var(--soft); font-variant-numeric: tabular-nums; }
+    .engine-methods { margin-top: 16px; color: var(--muted); font-size: 10px; }
+    .engine-methods summary { cursor: pointer; }
+    .engine-method-list { display: grid; gap: 7px; padding-top: 12px; }
+    .engine-method-list code { color: var(--soft); font: inherit; overflow-wrap: anywhere; }
+    .engine-extensions { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px 0; margin-top: 18px; border-bottom: 1px solid var(--line); }
+    .engine-extensions .hint, .engine-recovery .hint { color: var(--muted); font-size: 10px; line-height: 1.7; margin: 7px 0 0; }
+    .engine-extensions button, .engine-recovery button { flex: none; font-size: 11px; }
+    .engine-recovery { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-top: 20px; }
+    .engine-recovery .hint { margin: 0; }
     .plugin-scope .eyebrow { color: var(--muted); font-size: 10px; }
     .plugin-scope strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
     .plugin-scope .hint { margin: 0; font-size: 11px; }
@@ -393,6 +448,9 @@ DASHBOARD_CSS = r"""
       .metric-grid { gap: 8px; }
     }
     @media (max-width: 600px) {
+      .engine-components { grid-template-columns: minmax(0, 1fr); }
+      .engine-overview, .engine-component { padding: 16px; }
+      .engine-extensions, .engine-recovery { align-items: flex-start; flex-direction: column; gap: 12px; }
       .plugin-card-head { flex-wrap: wrap; }
       .plugin-card, .plugin-empty { padding: 14px; }
       .plugin-actions { flex-wrap: wrap; }

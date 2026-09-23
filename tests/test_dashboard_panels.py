@@ -19,7 +19,7 @@ def run_script(tmp_path, source: str) -> None:
     if not node:
         pytest.skip("Node.js required for dashboard interactions")
     script = tmp_path / "panels.js"
-    script.write_text(source)
+    script.write_text("const bindUI = (_component, target, event, handler, options) => target.addEventListener(event, handler, options);\n" + source)
     completed = subprocess.run([node, str(script)], capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr
 
@@ -67,7 +67,7 @@ class Element {
   getClientRects() { return this.hidden ? [] : [{}]; }
   addEventListener(name, handler) { this.listeners[name] = handler; }
 }
-const names = ['general', 'models', 'plugins', 'schedules', 'usage', 'about'];
+const names = ['general', 'models', 'engine', 'plugins', 'schedules', 'usage', 'about'];
 const elements = Object.fromEntries(['appFrame', 'settingsOverlay', 'settingsNotice', 'openSettings', 'closeSettings',
   ...names.map(name => 'pane' + name[0].toUpperCase() + name.slice(1))].map(id => [id, new Element(id)]));
 elements.settingsOverlay.hidden = true;
@@ -81,6 +81,7 @@ const loadModelConfig = () => { modelLoads++; };
 const loadLlamacppConfig = () => {};
 const refreshAutomations = async () => {};
 const loadUsagePane = () => {};
+const refreshEngine = async () => {};
 let pluginLoads = 0;
 const loadPlugins = async () => { pluginLoads++; };
 let pluginView = 'list', pluginPending = '', pluginLeaves = 0, pluginStatus = '';
@@ -114,9 +115,11 @@ tabs[0].listeners.keydown(keyboard('ArrowDown'));
 assert.equal(document.activeElement, tabs[1]); assert.equal(elements.paneModels.hidden, false);
 assert.equal(elements.paneGeneral.hidden, true); assert.equal(modelLoads, 1);
 tabs[1].listeners.keydown(keyboard('ArrowDown'));
-assert.equal(document.activeElement, tabs[2]); assert.equal(elements.panePlugins.hidden, false);
+assert.equal(document.activeElement, tabs[2]); assert.equal(elements.paneEngine.hidden, false);
+tabs[2].listeners.keydown(keyboard('ArrowDown'));
+assert.equal(document.activeElement, tabs[3]); assert.equal(elements.panePlugins.hidden, false);
 assert.equal(pluginLoads, 1);
-tabs[2].listeners.keydown(keyboard('End'));
+tabs[3].listeners.keydown(keyboard('End'));
 assert.equal(document.activeElement, tabs.at(-1)); assert.equal(elements.paneAbout.hidden, false);
 tabs.at(-1).listeners.keydown(keyboard('Home')); assert.equal(document.activeElement, tabs[0]);
 const escape = keyboard('Escape'); handleSettingsKeydown(escape);
@@ -129,8 +132,8 @@ openSettingsPane('invalid'); assert.equal(elements.settingsOverlay.hidden, true)
 
 def test_composer_blocks_duplicate_requests_and_preserves_new_draft(tmp_path) -> None:
     html = dashboard_html()
-    start = html.index('    $("runForm").addEventListener("submit"')
-    end = html.index('    $("automationForm").addEventListener("submit"', start)
+    start = html.index('    bindUI("tasks", $("runForm"), "submit"')
+    end = html.index('    bindUI("workflows", $("automationForm"), "submit"', start)
     run_script(tmp_path, r"""
 const assert = require('node:assert/strict');
 let submit;
@@ -171,7 +174,7 @@ const request = (path, options) => { requests++; latestBody = JSON.parse(options
 
 def test_saved_task_shows_its_model_and_hides_new_task_overrides(tmp_path) -> None:
     html = dashboard_html()
-    source = html[html.index("    function composerMode("):html.index('    $("runForm").addEventListener("submit"')]
+    source = html[html.index("    function composerMode("):html.index('    bindUI("tasks", $("runForm"), "submit"')]
     run_script(tmp_path, r"""
 const assert = require('node:assert/strict');
 const elements = Object.fromEntries(['runProvider', 'runModel', 'runModelCapabilities', 'sessionModel', 'messageAction', 'runMode', 'runWorktree', 'runMessage', 'sendMessage'].map(id => [id, {id, textContent: '', value: 'message', options: [{}, {}, {}], setAttribute(name, value) { this[name] = value; }, dispatchEvent() {}}]));

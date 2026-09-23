@@ -1,0 +1,62 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "revision": "9291d7f66e87c5b89d4dbe63104734461f4d18a9",
+  "license": "MIT",
+  "files": [
+    {
+      "source": "packages/core/tools/src/schema.ts",
+      "file": "upstream/schema.ts",
+      "sha256": "be6e4b3fa18fe633c6c83ed4f9072da5a2a203f64bf0b70c9066fd58b0e2c897"
+    },
+    {
+      "source": "packages/core/tools/src/json-schema.ts",
+      "file": "upstream/json-schema.ts",
+      "sha256": "13deffdfd34539e23706b0fde235991da45b2f07c5c18dbbf3ca734c1da0c788"
+    },
+    {
+      "source": "packages/util/values/src/index.ts",
+      "file": "upstream/values.ts",
+      "sha256": "6968960415feba883163314f4eb6e71497a18131d571bc300070fd16c2c359b1"
+    },
+    {
+      "source": "packages/llm/llm/src/error.ts",
+      "file": "upstream/error.ts",
+      "sha256": "6e8bb15cef604210f678ea962a125d0e3b4b5872a947252ee5a66fbc7a06dbd9"
+    },
+    {
+      "source": "packages/interaction/tool-ask-user/lib/index.js",
+      "file": "tests/fixtures/harness-ask-user.mjs",
+      "sha256": "0b5e9506b3545ebdd389018a366859ad21bb4f534e3511cdb18b45943168c569"
+    },
+    {
+      "source": "packages/todo/tool-todo/lib/index.js",
+      "file": "tests/fixtures/harness-todo.mjs",
+      "sha256": "224f6d14a6dbdc9c8705dcff8dd43bf5e19c002c052c7d93b576f9810a3d053b"
+    },
+    {
+      "source": "packages/core/tools/tests/fixtures/literal-sdk.ts",
+      "file": "tests/fixtures/literal-sdk.ts",
+      "sha256": "1c6ce9e4586b8002c6b0885e7c95666930d4b7c972f844e4816d8c3baa9b3851"
+    },
+    {
+      "source": "packages/llm/llm/src/message.ts",
+      "file": "upstream/message.ts",
+      "sha256": "0e19944d71cce8172c640c801da6e9256c8940dff5906ec0e28aaf8a9c4ef130"
+    },
+    {
+      "source": "packages/llm/llm/src/assembler.ts",
+      "file": "upstream/assembler.ts",
+      "sha256": "ff30f5ca346015bfffeffb5ee3398901d03eb3429fda5d0d4e0c40e8638dfe58"
+    },
+    {
+      "source": "packages/util/brand/src/index.ts",
+      "file": "upstream/brand.ts",
+      "sha256": "f9d6da858d7308117227dcc2306ce7246b7309b2ae22d413d289cbae51e83e98"
+    },
+    {
+      "source": "packages/util/crypto/src/index.ts",
+      "file": "upstream/crypto.ts",
+      "sha256": "6d314b677a163808a732c53fc509eebea1f8b8cc34b67031644dcfa4a97e28f0"
+    }
+  ]
+}

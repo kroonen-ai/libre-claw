@@ -266,7 +266,7 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert response.content_type == "text/html"
     assert response.headers["Cache-Control"] == "no-store"
     assert "Libre Claw Dashboard" in response.text
-    assert "fetch(path" in response.text
+    assert "/assets/cordis-ui.mjs" in response.text
     assert "/runs" in response.text
     assert "/automations" in response.text
     assert "/automations/${id}/run" in response.text

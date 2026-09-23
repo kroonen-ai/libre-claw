@@ -17,10 +17,10 @@ def test_cordis_enable_keeps_stdout_json_and_sends_guidance_to_stderr(monkeypatc
     }
 
     class Manager:
-        def enable(self, plugin_id, workspace, **grants):
+        async def enable_async(self, plugin_id, workspace, **grants):
             assert plugin_id == "example"
             assert workspace == tmp_path.resolve()
-            assert grants == {"allow_network": False, "read_paths": (), "write_paths": ()}
+            assert grants == {"allow_network": False, "allow_model": False, "read_paths": (), "write_paths": ()}
             return payload
 
     monkeypatch.setattr("libre_claw.cordis_cli.manager_for", lambda config: Manager())

@@ -79,3 +79,42 @@ The source validation, archive limits, preview cancellation, and project-bound
 installation tokens are covered by `tests/test_cordis_packages.py` and
 `tests/test_plugin_manager_api.py`. The offline execution restrictions and
 outbound regression probes remain in place.
+
+## Persistent engine and Harness adaptation
+
+The core engine now runs persistently. Its service calls carry opaque operation
+identifiers and lifecycle events; model messages, Python permission futures,
+results, and credentials stay in the host. The browser uses the same reviewed
+Cordis bundle for first-party UI services, with same-origin API requests and
+redirects rejected. Extension JavaScript is not injected into that page.
+
+Extension workers are separate per plugin/project. A worker receives tool
+arguments, its own settings, and its own bounded session-event history, never an
+automatic conversation or memory dump. Model access is a separate grant, checked
+again at the host on requests and streamed responses. Configuration changes,
+revocation, and replacement cannot reuse a previous workspace authorization.
+
+The added Schemastery, Zod, tool-schema, and message-helper bundles were inspected
+for network clients and telemetry endpoints and rebuilt from pinned inputs.
+The URL strings in Zod are URL parsing inputs and schema identifiers; they do
+not initiate requests. No Harness application, telemetry service, provider
+adapter, or credential service is booted.
+
+Public GitHub installation resolves the requested repository ref to a commit
+and downloads only its pinned codeload archive. Dependencies use the public npm
+registry with integrity checks. No inherited Git/npm authentication, proxy
+settings, package scripts, or arbitrary YAML JavaScript execute during review.
+
+The reviewed Libre WebUI native-provider protocol is hosted by Python over an
+owner-only Unix socket. This deliberately avoids granting Node's broad network
+permission just to create a local listener. Real Node 22/macOS and Node 26 probes
+confirmed that the offline policy also denies Unix binding. The host adapter
+requires model access and checks source identity, grants, and configuration on
+each operation; it exposes no TCP listener and no provider keys.
+
+Coverage includes the real Cordis engine, persistent workers, unchanged Harness
+question/todo plugins, activation/revocation races, secret redaction, archive
+safety, and the unchanged native-provider protocol parser. See
+`test_cordis_engine.py`, `test_cordis_worker.py`,
+`test_cordis_harness_integration.py`, `test_cordis_ipc.py`,
+`test_cordis_services.py`, and `test_cordis_ui.py`.

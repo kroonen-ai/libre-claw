@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 
@@ -161,8 +162,9 @@ async def test_cli_and_tui_offer_install_catalog_and_configuration(tmp_path, mon
     assert "remains enabled" in reinstalled
     details = json.loads(await plugin_command(config, "details text-utilities"))
     assert details["config"] == {"include_characters": True}
-    result = runner.invoke(main, ["--working-directory", str(tmp_path), "cordis", "config", "text-utilities", "--file", "-"],
-                           input='{"include_characters":false}')
+    result = await asyncio.to_thread(runner.invoke, main,
+        ["--working-directory", str(tmp_path), "cordis", "config", "text-utilities", "--file", "-"],
+        input='{"include_characters":false}')
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["config"] == {"include_characters": False}
 

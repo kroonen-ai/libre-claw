@@ -1,0 +1,57 @@
+{
+  "name": "@libre-webui/dsh-native-provider",
+  "version": "0.1.1",
+  "description": "Use DeepSeek Harness providers in Libre WebUI over a private local connection.",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./runtime/native-provider-plugin.js",
+  "types": "./runtime/native-provider-plugin.d.ts",
+  "files": [
+    "runtime/",
+    "assets/",
+    "screenshots.json",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "docs/"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/libre-webui/dsh-native-provider.git"
+  },
+  "homepage": "https://github.com/libre-webui/dsh-native-provider#readme",
+  "bugs": {
+    "url": "https://github.com/libre-webui/dsh-native-provider/issues"
+  },
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:runtime": "npm run build && node scripts/runtime-files.mjs --write",
+    "check:runtime": "node scripts/runtime-files.mjs --check",
+    "type-check": "tsc --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "bundle": "node scripts/prepare-bundle.mjs",
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
+    "sync:lwui": "node scripts/sync-from-lwui.mjs",
+    "check": "npm run format:check && npm run type-check && npm test && npm run check:runtime"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-credentials": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-llm": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-settings": "0.1.6-alpha.2",
+    "@types/node": "26.5.1",
+    "prettier": "3.9.6",
+    "typescript": "6.0.2"
+  }
+}

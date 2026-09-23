@@ -6,15 +6,19 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping
+from contextlib import aclosing
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from libre_claw.config import LibreClawConfig
 from libre_claw.core.agent import Agent, AgentDone, AgentError, AgentPermissionRequest, AgentTextDelta
+from libre_claw.core.cordis_engine import CordisEngine
+from libre_claw.core.cordis import CordisManager
+from libre_claw.core.questions import AgentUserQuestionRequest
 from libre_claw.core.git_review import ReviewSnapshot, git_bytes
 from libre_claw.core.permissions import PermissionManager
 from libre_claw.core.session import Session
-from libre_claw.tools_builtin import create_builtin_registry
+from libre_claw.tools_builtin import create_builtin_registry, bind_cordis_manager
 from libre_claw.providers.factory import create_provider
 from libre_claw.providers.base import LLMProvider, Usage
 from libre_claw.core.tools import BaseTool, ToolContext, ToolResult
@@ -81,9 +85,14 @@ async def run_review(
     if structured:
         system_prompt += '\nReturn only a JSON object with "findings" (an array) and "verification_limits" (a string). Each finding must contain "priority" (P0, P1, P2, or P3), "file" (repository-relative path), "line" (one-based integer), "title", and "body". Include the triggering condition, consequence, and suggested fix in body. Use an empty findings array when there are no actionable findings.'
     registry = create_builtin_registry(config)
+    cordis = CordisManager(config=config, tool_timeout=config.cordis.tool_timeout, persistent=True)
+    bind_cordis_manager(registry, cordis)
     registry.register(ReviewSnapshotFileTool(ToolContext(working_directory=Path(snapshot.repository)), snapshot))
     system_prompt += "\nReview the immutable base/target snapshots, not unrelated checkout edits. Use review_snapshot_file to read exact versions and omitted patches. Native CLI tools may use git show <base-or-target>:<path> and git diff <base> <target> -- <path>. Report verification limits for any uninspected or truncated content."
+    engine = CordisEngine()
+    cordis.engine = engine
     agent = Agent(
+        engine=engine,
         session=Session(mode="plan"), provider=provider or create_provider(config),
         tool_registry=registry,
         permission_manager=PermissionManager(config.permissions),
@@ -97,9 +106,12 @@ async def run_review(
     prompt = f"Review scope: {snapshot.scope}\nRevision: {snapshot.revision}\nBase object: {snapshot.base_oid}\nTarget object: {snapshot.target_oid}\nComplete changed-file manifest: {manifest}\n\nDiff:\n{snapshot.patch[:160000]}\n\nUser review comments:\n{feedback[:16000]}"
     if len(snapshot.patch) > 160000:
         prompt += "\nThe pasted diff is truncated; inspect the remaining changed files with read-only tools before concluding."
-    async with asyncio.timeout(timeout):
-        async for event in agent.run(prompt):
-            if isinstance(event, AgentTextDelta):
+    async with engine, aclosing(cordis), asyncio.timeout(timeout), aclosing(agent.run(prompt)) as stream:
+        async for event in stream:
+            if isinstance(event, AgentUserQuestionRequest):
+                if not event.future.done():
+                    event.future.set_exception(ValueError("The independent reviewer cannot ask interactive questions."))
+            elif isinstance(event, AgentTextDelta):
                 chunks.append(event.text)
             elif isinstance(event, AgentPermissionRequest):
                 if not event.future.done():
